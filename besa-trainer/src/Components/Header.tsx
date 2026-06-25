@@ -69,7 +69,7 @@ export default function Header({sticky}:{sticky:boolean}): JSX.Element {
     }
 
     return (
-        <header className={"flex h-16 w-screen items-center justify-around border-b-2 border-double border-gray-500 bg-white text-blue-900 top-0 " + (sticky ? "sticky" : "absolute")}>
+        <header className={"flex h-16 w-screen items-center justify-around border-b-2 border-double border-gray-500 bg-white text-blue-900 top-0 z-50 " + (sticky ? "sticky" : "absolute")}>
         <div className="flex items-center justify-center gap-5 font-sans text-3xl font-semibold tracking-wide">
             <img src={Logo} className="w-10" alt="" width={40} height={40} />
             <span>BESA-Trainer</span>

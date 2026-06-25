@@ -2,7 +2,7 @@ import { getAuth, onAuthStateChanged, type Auth } from "firebase/auth"
 import { v4 as uuid4 } from "uuid" 
 import { useEffect, useState, type ChangeEvent, type Dispatch, type DragEvent, type SetStateAction, type SubmitEvent } from "react"
 import { useSearchParams } from "react-router-dom"
-import { db } from "../firestore"
+import { db, setCurrentFloorDraft } from "../firestore"
 import { collection, doc, getDoc, getDocs, limit, query, setDoc, where } from "firebase/firestore"
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage"
 import type { Floor, FloorCode } from "../types"
@@ -54,12 +54,12 @@ export default function Edit() {
 
     return (
         <div className="w-full">
-            {uploaded ? <ManageVideo otherVideos={otherVideos} setUploaded={setUploaded}/> : <UploadVideo setUploaded={setUploaded} hasMoreVideos={otherVideos.length > 0}/>}
+            {uploaded ? <ManageVideo otherVideos={otherVideos} setUploaded={setUploaded}/> : <UploadVideo setUploaded={setUploaded} hasMoreVideos={otherVideos.length > 0} setOtherVideos={setOtherVideos}/>}
         </div>
     )
 }
 
-function UploadVideo({setUploaded, hasMoreVideos}: {setUploaded: Dispatch<SetStateAction<boolean>>, hasMoreVideos: boolean}) {
+function UploadVideo({setUploaded, hasMoreVideos, setOtherVideos}: {setUploaded: Dispatch<SetStateAction<boolean>>, hasMoreVideos: boolean, setOtherVideos: Dispatch<SetStateAction<Floor[]>>}) {
     const [vid, setVideo] = useState<File | null>(null)
     const [vidsrc, setVidSrc] = useState("")
     const [uploading, setUploading] = useState(false)
@@ -148,7 +148,11 @@ function UploadVideo({setUploaded, hasMoreVideos}: {setUploaded: Dispatch<SetSta
                         markers: [],
                         sections: [],
                     }
+                    setOtherVideos(prev => [...prev, floor])
                     await setDoc(docRef, floor, {merge: true})
+                    if (current) {
+                        await setCurrentFloorDraft(floor)
+                    }
                     setUploading(false)
                 }
                 

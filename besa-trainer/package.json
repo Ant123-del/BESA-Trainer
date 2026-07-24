@@ -13,9 +13,15 @@
     "@material-tailwind/react": "^2.1.10",
     "@videojs/react": "^10.0.0-beta.24",
     "firebase": "^12.13.0",
+<<<<<<< HEAD
     "react": "^18.3.1",
     "react-content-loader": "^7.1.2",
     "react-dom": "^18.3.1",
+=======
+    "placeholder-loading": "^0.7.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+>>>>>>> 0e2f316100aecfed54d1717f6c9d2f5af4bc50c6
     "react-icons": "^5.6.0",
     "react-router-dom": "^7.15.0",
     "react-spinners": "^0.17.0",

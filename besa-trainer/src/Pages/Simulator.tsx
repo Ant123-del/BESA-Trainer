@@ -1,4 +1,4 @@
-import { useSearchParams, useParams, useNavigate, Link } from "react-router-dom";
+import { useSearchParams, useParams, Link } from "react-router-dom";
 import Header from "../Components/Header";
 import { IoMdArrowRoundBack } from "react-icons/io";
 import { IoMdSettings } from "react-icons/io";
@@ -9,9 +9,9 @@ import { Video } from "@videojs/react/video";
 import { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } from "firebase/firestore";
 import { db } from "../Tools/firestore";
 import { type CosScript, type User, type Floor, type Marker, type Script, type Progress, type PracticeTypes, type Fill, type FloorCode } from "../Tools/types";
-import { FaArrowRight, FaPause, FaLock } from "react-icons/fa";
+import { FaArrowRight, FaPause } from "react-icons/fa";
 import { FaPlay } from "react-icons/fa";
-import { MoonLoader, ClipLoader } from "react-spinners";
+import { MoonLoader } from "react-spinners";
 import { AiFillMuted } from "react-icons/ai";
 import { HiMiniSpeakerWave } from "react-icons/hi2";
 import { formatTime } from "../Components/VideoEditor";
@@ -23,18 +23,6 @@ import { getVtt, type Line } from "../Tools/ScriptDecoder";
 import MicrophoneTest from "../Components/MicrophoneTest";
 
 const Player = createPlayer({features: videoFeatures})
-
-//the order floors are worked through in - matches the carousel on the Home page. "b" (Slugworks) is the
-//last stop; anything else (eg. "e") isn't part of the guided progression.
-export const FLOOR_SEQUENCE: FloorCode[] = ["f1", "f2", "f3", "b"]
-
-export function getNextFloorCode(current: string): FloorCode | null {
-    const idx = FLOOR_SEQUENCE.indexOf(current as FloorCode)
-    if (idx === -1 || idx === FLOOR_SEQUENCE.length - 1) {
-        return null
-    }
-    return FLOOR_SEQUENCE[idx + 1]
-}
 
 //Firestore stores Date fields as Timestamps and hands them back as such when a doc is read - not as
 //plain Dates - so anything coming straight off a snapshot needs normalizing before calling .getTime() etc.
@@ -81,10 +69,6 @@ export default function Simulator() {
     const [settingsPopup, setSettingsPopup] = useState(false)
     const [pendingPracticeType, setPendingPracticeType] = useState<PracticeTypes>(practiceType)
     const [settingsSaving, setSettingsSaving] = useState(false)
-    //non-null whenever the user's custom script for this floor was copied from a draft that's no longer
-    //the current one - holds what's needed to refresh it in place if they choose to update.
-    const [staleScriptPopup, setStaleScriptPopup] = useState<{cosScript: CosScript, defaultScriptSrc: string} | null>(null)
-    const [updatingStaleScript, setUpdatingStaleScript] = useState(false)
 
     //retrives user data and tries to implement custom script
     useEffect(() => {
@@ -149,11 +133,6 @@ export default function Simulator() {
                         console.log("ran")
                         setCosScript(path)
                         setScript(await getScript(path.src) || "")
-                        //the draft that's "current" for this floor may have changed since this custom
-                        //script was copied - flag it every time that's the case, not just the first time.
-                        if (Draft && path.scriptDeviationId !== Draft.defScriptId && scriptDoc?.src) {
-                            setStaleScriptPopup({cosScript: path, defaultScriptSrc: scriptDoc.src})
-                        }
                     } else if (path) {
                         console.error("Custom script path found with no src, leaving default script in place")
                     } else {
@@ -211,23 +190,8 @@ export default function Simulator() {
         }
     }, [f])
 
-    //moving to a different floor (via the script panel's nav button) needs to land on that floor's
-    //welcome screen fresh, not whatever locked/paused state the previous floor was left in.
-    useEffect(() => {
-        setInitalCheck(true)
-        setSectionLocked(false)
-        setCurrentSection(null)
-        setPauseState(false)
-    }, [f])
 
-    //jumps playback to a marker and locks straight into its test - same behavior as clicking a marker
-    //dot on the timeline. Used by the script panel's "go to next section" button.
-    function goToMarker(marker: Marker) {
-        playBack?.seek(marker.markTime)
-        playerActions.pause()
-        setCurrentSection(marker)
-        setSectionLocked(true)
-    }
+
 
     function toTitleCase(str: string): string {
         return str.toLowerCase().split(" ").map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
@@ -313,35 +277,6 @@ export default function Simulator() {
         setSettingsPopup(false)
     }
 
-    async function handleUpdateStaleScript() {
-        if (!staleScriptPopup || !userInfo) {
-            return
-        }
-
-        setUpdatingStaleScript(true)
-        try {
-            const newText = await getScript(staleScriptPopup.defaultScriptSrc) || ""
-            const storage = getStorage()
-            await uploadBytes(ref(storage, staleScriptPopup.cosScript.path), new Blob([newText], {type: "text/vtt"}))
-
-            const updatedEntry: CosScript = {...staleScriptPopup.cosScript, scriptDeviationId: Draft?.defScriptId || staleScriptPopup.cosScript.scriptDeviationId}
-            const newScriptPaths = userInfo.scriptPaths.map(s => s.id === updatedEntry.id ? updatedEntry : s)
-
-            setUserInfo({...userInfo, scriptPaths: newScriptPaths})
-            setCosScript(updatedEntry)
-            setScript(newText)
-
-            const userD = doc(db, "training_data/data_root/users/" + userInfo.uid)
-            await updateDoc(userD, {scriptPaths: newScriptPaths})
-
-            setStaleScriptPopup(null)
-        } catch (e) {
-            console.error(e)
-        } finally {
-            setUpdatingStaleScript(false)
-        }
-    }
-
     return (
         <div className="bg-gray-900 w-full min-h-screen text-white">
             {/* custom header for the simulator */}
@@ -371,13 +306,13 @@ export default function Simulator() {
                             onMouseOver={handleVideoHover} onMouseMove={handleVideoHover} onMouseOut={() => setPauseState(false)}
                             onClick={handleToggle}>
                             </Video>
-                            <VideoControls sections={Draft.markers} progress={progress} sectionLocked={sectionLocked} currentSection={currentSection} setSectionLocked={setSectionLocked} setCurrentSection={setCurrentSection}/>
+                            <VideoControls sections={Draft.markers} progress={progress} sectionLocked={sectionLocked} setSectionLocked={setSectionLocked} setCurrentSection={setCurrentSection}/>
                             {pauseState && <div className="transition-all absolute top-0 left-0 rounded-tl-2xl bg-black/40 w-full h-96 z-30" style={{pointerEvents: "none"}}>
                                 {/* This is where the pause button will show when hovered over the video */}
                             </div>}
                         </div>
                         {/* Container for script / other  */}
-                        <ScriptHandler vttText={script || ""} sections={Draft.markers} sectionLocked={sectionLocked} currentSection={currentSection} progress={progress} onGoToMarker={goToMarker}/>
+                        <ScriptHandler vttText={script || ""} sections={Draft.markers} sectionLocked={sectionLocked}/>
                         
                     </Player.Container>
                     {/* Below the video */}
@@ -433,7 +368,7 @@ export default function Simulator() {
                             className={"p-2 rounded-full" + (initialLoading ? " bg-blue-gray-400" : " bg-blue-800 hover:bg-blue-900")}
                             disabled={initialLoading}
                             onClick={handleContinue}>
-                                {initialLoading ? <ClipLoader color="white" size={20}/> : <span>Lets Go!</span>}
+                                {initialLoading ? <MoonLoader color="white" size={20}/> : <span>Lets Go!</span>}
                             </button>
                         </div>
                     </div>}
@@ -501,52 +436,12 @@ export default function Simulator() {
                         </button>
                     </div>
                 </Loading>}
-
-              {/* Popup warning that the custom script for this floor is out of date with the current draft */}
-              {staleScriptPopup &&
-                <Loading onClose={updatingStaleScript ? undefined : () => setStaleScriptPopup(null)}>
-                    <div className="bg-gray-900 w-1/3 min-w-96 p-5 rounded-2xl text-center">
-                        <h3 className="text-2xl mb-1 text-amber-500">Your Script Is Out Of Date</h3>
-                        <p className="text-sm text-gray-400">
-                            The video for this floor has changed since your personalized script was made, so it may no longer line up with the sections shown. Want to update it to match the current draft?
-                        </p>
-                        <p className="text-xs text-gray-500 mt-2">Updating replaces your custom script's text - any edits you've made will be lost.</p>
-                        <button onClick={handleUpdateStaleScript} disabled={updatingStaleScript}
-                        className="rounded-full w-full mt-5 p-2 bg-amber-800 hover:bg-amber-900 disabled:opacity-50 flex items-center justify-center gap-2">
-                            {updatingStaleScript && <MoonLoader color="white" size={16}/>}
-                            {updatingStaleScript ? "Updating..." : "Update My Script"}
-                        </button>
-                        <button onClick={() => setStaleScriptPopup(null)} disabled={updatingStaleScript}
-                        className="rounded-full w-full mt-3 border-solid border-2 border-gray-400 hover:bg-gray-800 p-2 disabled:opacity-50">
-                            Keep My Version
-                        </button>
-                    </div>
-                </Loading>}
         </div>
     )
 }
 
 
-//the single source of truth for "how far is this user actually allowed to go": the earliest section
-//that hasn't been completed yet under the given progress record. Nothing at or beyond this marker can
-//be watched, tested, or jumped to (via the scrubber, a marker click, or the script panel's goto button)
-//until it's cleared - every one of those controls has to agree on this same boundary, or a bypass opens.
-function getIncompleteBoundary(sections: Marker[], progress: Progress | null): Marker | undefined {
-    if (sections.length === 0) {
-        return undefined
-    }
-
-    //exact-match against each marker's own current markTime (same check ShowSections/handleMarkerClick
-    //already use), rather than "the highest sectionTime reached so far" - that comparison silently breaks
-    //the moment a marker's time is edited (eg. in the Section Editor): an old completed entry can end up
-    //numerically past every current marker, which used to make the whole floor look finished when it
-    //wasn't, letting playback and the goto button sail straight through with no test ever shown.
-    const completedTimes = new Set(progress?.progress.map(p => p.sectionTime) ?? [])
-    const sortedSections = [...sections].sort((a, b) => a.markTime - b.markTime)
-    return sortedSections.find(m => !completedTimes.has(m.markTime))
-}
-
-function VideoControls({sections, progress, sectionLocked, currentSection, setSectionLocked, setCurrentSection}:{sections: Marker[], progress: Progress | null, sectionLocked: boolean, currentSection: Marker | null, setSectionLocked: (locked: boolean) => void, setCurrentSection: (section: Marker | null) => void}) {
+function VideoControls({sections, progress, sectionLocked, setSectionLocked, setCurrentSection}:{sections: Marker[], progress: Progress | null, sectionLocked: boolean, setSectionLocked: (locked: boolean) => void, setCurrentSection: (section: Marker | null) => void}) {
     const playerActions = Player.usePlayer()
     const isPaused = Player.usePlayer((state) => state.paused)
     const isMuted = Player.usePlayer((state) => state.muted)
@@ -571,8 +466,34 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
         }
     }
 
+    function getLastProgress() {
+        if (progress) {
+            return [...progress.progress].sort((a, b) => b.sectionTime - a.sectionTime)[0]
+        } 
+        return undefined
+    }
+
     function getNextMarker(): Marker | undefined {
-        return getIncompleteBoundary(sections, progress)
+        if (sections.length === 0) {
+            return undefined
+        }
+
+        const sortedSections = [...sections].sort((a, b) => a.markTime - b.markTime)
+        const lastProgress = getLastProgress()
+
+        //no progress made yet, so the next marker is the very first one
+        if (!lastProgress) {
+            return sortedSections[0]
+        }
+
+        const nextMarker = sortedSections.find(m => m.markTime > lastProgress.sectionTime)
+
+        //already on the last marker, so return the one associated with the last progress
+        if (!nextMarker) {
+            return undefined
+        }
+
+        return nextMarker
     }
 
     //clicking a completed marker (to review it) or the next marker (to jump straight into it) locks the
@@ -595,14 +516,10 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
     function handleScub( e: React.ChangeEvent<HTMLInputElement>) {
         const newTime = parseFloat(e.target.value)
         const nextMarker = getNextMarker()
-        const target = (!nextMarker || nextMarker.markTime >= newTime) ? newTime : nextMarker.markTime
-        playBack?.seek(target)
-
-        //dragging away from whatever's currently locked (the mandatory boundary, or a reactivated review)
-        //closes the overlay so the user can freely browse - currentSection doesn't track the scrubber on
-        //its own, so this has to be handled explicitly rather than left to the currentTime effect.
-        if (sectionLocked && currentSection && target !== currentSection.markTime) {
-            setSectionLocked(false)
+        if (!nextMarker || nextMarker.markTime >= newTime) {
+            playBack?.seek(newTime)
+        } else {
+            playBack?.seek(nextMarker.markTime)
         }
     }
 
@@ -616,18 +533,10 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
             playerActions.pause()
             setSectionLocked(true)
             setCurrentSection(nextMarker)
-            return
-        }
-
-        //don't auto-unlock a deliberate review of an already-completed section (eg. reactivated via the
-        //script panel's goto button) just because it isn't the mandatory next-up boundary - only currentTime
-        //drifting below the boundary for some other reason (a manual backward scrub, a stale lock left over
-        //from before a practice-type switch, etc) should clear it.
-        const isDeliberateReview = !!currentSection && (progress?.progress.some(p => p.sectionTime === currentSection.markTime) ?? false)
-        if (!isDeliberateReview) {
+        } else {
             setSectionLocked(false)
         }
-    }, [currentTime, progress, currentSection])
+    }, [currentTime, progress])
 
     return (
         <>
@@ -909,17 +818,17 @@ function GradingControls({onTryAgain, onConfidence, canExit, onExit}: {
     return (
         <div>
             <p className="text-gray-500 text-center">How did you feel about answering these questions? Choose one to move on!</p>
-            <div className="flex justify-center gap-4 mt-4 w-full">
-                <button onClick={() => onConfidence(0)} className="p-2.5 px-6 w-3/12 rounded-full bg-red-700 hover:bg-red-800">Hard</button>
-                <button onClick={() => onConfidence(1)} className="p-2.5 px-6 w-3/12 rounded-full bg-yellow-600 hover:bg-yellow-700">Good</button>
-                <button onClick={() => onConfidence(2)} className="p-2.5 px-6 w-3/12 rounded-full bg-green-700 hover:bg-green-800">Easy</button>
+            <div className="flex justify-center gap-3 mt-4 w-full">
+                <button onClick={() => onConfidence(0)} className="p-2 px-6 w-3/12 rounded-full bg-red-700 hover:bg-red-800">Hard</button>
+                <button onClick={() => onConfidence(1)} className="p-2 px-6 w-3/12 rounded-full bg-yellow-600 hover:bg-yellow-700">Good</button>
+                <button onClick={() => onConfidence(2)} className="p-2 px-6 w-3/12 rounded-full bg-green-700 hover:bg-green-800">Easy</button>
             </div>
-            <div className="flex justify-center mt-4">
-                <button onClick={onTryAgain} className="p-2.5 px-6 rounded-full border border-gray-400 hover:bg-gray-800">Try Again</button>
+            <div className="flex justify-center mt-3">
+                <button onClick={onTryAgain} className="p-2 px-6 rounded-full border border-gray-400 hover:bg-gray-800">Try Again</button>
             </div>
             {canExit &&
-                <div className="flex justify-center mt-4">
-                    <button onClick={onExit} className="p-2.5 px-6 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
+                <div className="flex justify-center mt-3">
+                    <button onClick={onExit} className="p-2 px-6 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
                 </div>
             }
         </div>
@@ -1000,39 +909,39 @@ function FillTest({floorId, section, progress, setProgress, userInfo, setUserInf
 
     return (
         <div className="p-5 bg-gray-900 rounded-2xl">
-            <h3 className="text-xl mb-4 text-center">Fill In The Blank</h3>
+            <h3 className="text-xl mb-3 text-center">Fill In The Blank</h3>
             {!submitted ?
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-3">
                     {sectionFillings.map((f, i) => (
-                        <div key={i} className="flex flex-col gap-1.5">
+                        <div key={i} className="flex flex-col gap-1">
                             <label className="text-sm text-gray-400">{f.vttSectionSentenceBlank}</label>
                             <div className="flex gap-2">
                                 <input
-                                    className={"w-full p-3 rounded-lg " + (skipped[i] ? "bg-gray-800 text-gray-500 cursor-not-allowed" : "bg-gray-700 text-white")}
+                                    className={"w-full p-2 rounded-lg " + (skipped[i] ? "bg-gray-800 text-gray-500 cursor-not-allowed" : "bg-gray-700 text-white")}
                                     value={answers[i] || ""}
                                     disabled={skipped[i]}
                                     onChange={(e) => handleAnswerChange(i, e.target.value)}
                                     placeholder="Type your answer..."
                                 />
                                 <button type="button" onClick={() => handleSkipToggle(i)}
-                                    className={"px-4 rounded-lg text-sm shrink-0 " + (skipped[i] ? "bg-amber-700 hover:bg-amber-800" : "bg-gray-700 hover:bg-gray-600")}>
+                                    className={"px-3 rounded-lg text-sm shrink-0 " + (skipped[i] ? "bg-amber-700 hover:bg-amber-800" : "bg-gray-700 hover:bg-gray-600")}>
                                     {skipped[i] ? "Skipped" : "Skip"}
                                 </button>
                             </div>
                         </div>
                     ))}
-                    <button onClick={() => setSubmitted(true)} className="p-2.5 rounded-full bg-blue-800 hover:bg-blue-900 mt-2">Submit</button>
+                    <button onClick={() => setSubmitted(true)} className="p-2 rounded-full bg-blue-800 hover:bg-blue-900 mt-2">Submit</button>
                     {canExit &&
-                        <button onClick={onExit} className="p-2.5 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
+                        <button onClick={onExit} className="p-2 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
                     }
                 </div>
                 :
                 <div>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 gap-3">
                         <div>
                             <h4 className="text-sm text-gray-400 mb-2 text-center">Your Answer</h4>
                             {sectionFillings.map((f, i) => (
-                                <p key={i} className={"p-3 rounded-lg mb-2 " + (skipped[i] ? "bg-gray-800" : isCloseMatch(answers[i] || "", f.vttSectionSentenceFilled) ? "bg-green-900/60" : "bg-red-900/60")}>
+                                <p key={i} className={"p-2 rounded-lg mb-2 " + (skipped[i] ? "bg-gray-800" : isCloseMatch(answers[i] || "", f.vttSectionSentenceFilled) ? "bg-green-900/60" : "bg-red-900/60")}>
                                     {skipped[i]
                                         ? <span className="text-gray-500 italic">Skipped</span>
                                         : answers[i] || <span className="text-gray-500 italic">No answer</span>}
@@ -1042,13 +951,11 @@ function FillTest({floorId, section, progress, setProgress, userInfo, setUserInf
                         <div>
                             <h4 className="text-sm text-gray-400 mb-2 text-center">Correct Answer</h4>
                             {sectionFillings.map((f, i) => (
-                                <p key={i} className="p-3 rounded-lg mb-2 bg-gray-700">{renderCorrectAnswer(f)}</p>
+                                <p key={i} className="p-2 rounded-lg mb-2 bg-gray-700">{renderCorrectAnswer(f)}</p>
                             ))}
                         </div>
                     </div>
-                    <div className="mt-5">
-                        <GradingControls onTryAgain={handleTryAgain} onConfidence={handleConfidence} canExit={canExit} onExit={onExit}/>
-                    </div>
+                    <GradingControls onTryAgain={handleTryAgain} onConfidence={handleConfidence} canExit={canExit} onExit={onExit}/>
                 </div>
             }
         </div>
@@ -1108,18 +1015,18 @@ function TextTest({floorId, section, sections, scriptText, cosScript, onScriptUp
     return (
         <div className="p-5 bg-gray-900 rounded-2xl">
             {!submitted ?
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-3">
                     <h3 className="text-xl mb-1 text-center">Retype The Script</h3>
                     <textarea
-                        className="w-full h-48 p-4 rounded-lg bg-gray-700 text-white resize-none"
+                        className="w-full h-48 p-3 rounded-lg bg-gray-700 text-white resize-none"
                         value={answer}
                         onChange={(e) => setAnswer(e.target.value)}
                         placeholder="Type out this section of the tour script from memory. Don't worry about matching it word-for-word - just get the key points down, then hit Submit to see how close you were."
                     />
                     <div className="flex justify-center gap-3">
-                        <button onClick={() => setSubmitted(true)} className="p-2.5 px-6 rounded-full bg-blue-800 hover:bg-blue-900">Submit</button>
+                        <button onClick={() => setSubmitted(true)} className="p-2 rounded-full bg-blue-800 hover:bg-blue-900">Submit</button>
                         {canExit &&
-                            <button onClick={onExit} className="p-2.5 px-6 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
+                            <button onClick={onExit} className="p-2 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
                         }
                     </div>
                 </div>
@@ -1190,13 +1097,13 @@ export function AnswerReview({answer, correctText, section, sections, scriptText
 
     return (
         <div>
-            <div className="flex justify-between items-start mb-5 gap-3">
+            <div className="flex justify-between items-start mb-3 gap-3">
                 <div className="relative group inline-block">
                     <button onClick={handleSetAsScript} disabled={settingScript || scriptSet}
-                        className={"text-sm px-4 py-2 rounded-full border shrink-0 " + (scriptSet ? "border-green-600 text-green-500 cursor-default" : "border-amber-500 text-amber-400 hover:bg-amber-500/10")}>
+                        className={"text-sm px-3 py-1.5 rounded-full border shrink-0 " + (scriptSet ? "border-green-600 text-green-500 cursor-default" : "border-amber-500 text-amber-400 hover:bg-amber-500/10")}>
                         {scriptSet ? "Script Updated" : "Set as Script"}
                     </button>
-                    <div className="absolute left-0 top-full mt-2 w-72 p-4 rounded-lg bg-black text-xs text-gray-200 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
+                    <div className="absolute left-0 top-full mt-2 w-72 p-3 rounded-lg bg-black text-xs text-gray-200 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
                         Replaces this section of the tour script with what you just said/typed, so it's what shows for next time.
                         <span className="block mt-1 text-amber-400 font-semibold">Warning: this action cannot be undone.</span>
                         To go back to the default script, that has to be done from Settings.
@@ -1207,19 +1114,17 @@ export function AnswerReview({answer, correctText, section, sections, scriptText
                     <span className="block text-xs text-gray-400">Match Score</span>
                 </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-3">
                 <div>
                     <h4 className="text-sm text-gray-400 mb-2 text-center">Your Answer</h4>
-                    <p className="p-3 rounded-lg bg-gray-700 whitespace-pre-wrap">{answer || <span className="text-gray-500 italic">No answer</span>}</p>
+                    <p className="p-2 rounded-lg bg-gray-700 whitespace-pre-wrap">{answer || <span className="text-gray-500 italic">No answer</span>}</p>
                 </div>
                 <div>
                     <h4 className="text-sm text-gray-400 mb-2 text-center">Script</h4>
-                    <p className="p-3 rounded-lg bg-gray-700 whitespace-pre-wrap">{correctText}</p>
+                    <p className="p-2 rounded-lg bg-gray-700 whitespace-pre-wrap">{correctText}</p>
                 </div>
             </div>
-            <div className="mt-5">
-                <GradingControls onTryAgain={handleTryAgain} onConfidence={onConfidence} canExit={canExit} onExit={onExit}/>
-            </div>
+            <GradingControls onTryAgain={handleTryAgain} onConfidence={onConfidence} canExit={canExit} onExit={onExit}/>
             {settingScript && <Loading text="Updating script..."/>}
         </div>
     )
@@ -1332,10 +1237,8 @@ function computeMatchScore(userAnswer: string, correct: string): number {
     return Math.round((dp[userWords.length][correctWords.length] / correctWords.length) * 100)
 }
 
-function ScriptHandler({vttText, sections, sectionLocked, currentSection, progress, onGoToMarker}: {vttText: string, sections: Marker[], sectionLocked: boolean, currentSection: Marker | null, progress: Progress | null, onGoToMarker: (marker: Marker) => void}) {
-    const [searchParams, setSearchParams] = useSearchParams()
-    const {tour} = useParams()
-    const navigate = useNavigate()
+function ScriptHandler({vttText, sections, sectionLocked}: {vttText: string, sections: Marker[], sectionLocked: boolean}) {
+    const [searchParams, setSearchpParams] = useSearchParams()
     const f = searchParams.get("f")
 
     const currentTime = Player.usePlayer((state) => state.currentTime) || 0
@@ -1350,62 +1253,19 @@ function ScriptHandler({vttText, sections, sectionLocked, currentSection, progre
     const {lower, upper} = getSectionBounds(sections, currentTime)
     const visibleLines = lines.filter(line => isLineInSection(line, lower, upper))
 
-    //the button's target normally tracks wherever playback currently is - the next marker chronologically
-    //ahead of currentTime, whether that section's already been completed (reviewing) or not (the real next
-    //test). But it can never point past the mandatory boundary (the earliest not-yet-completed section) -
-    //without that cap, a momentary desync between sectionLocked and currentTime (eg. from scrubbing) would
-    //let this button jump straight over a required, unfinished section.
-    const boundary = getIncompleteBoundary(sections, progress)
-    const rawNext = [...sections].sort((a, b) => a.markTime - b.markTime).find(m => m.markTime > currentTime)
-    const nextMarker = boundary && (!rawNext || rawNext.markTime > boundary.markTime) ? boundary : rawNext
-    const nextFloorCode = f ? getNextFloorCode(f) : null
-
-    //locked on the mandatory boundary itself, which hasn't been completed - there's nothing left for this
-    //button to legitimately do until that test is finished (it's disabled rather than exiting/skipping it).
-    const disabled = sectionLocked && !!currentSection && !!boundary && currentSection.markTime === boundary.markTime
-
-    function handleNavClick() {
-        if (disabled) {
-            return
-        }
-        if (nextMarker) {
-            onGoToMarker(nextMarker)
-        } else if (nextFloorCode) {
-            setSearchParams({f: nextFloorCode})
-        } else {
-            navigate(`/progress/${tour}`)
-        }
-    }
-
-    const navLabel = disabled
-        ? "Finish This Section First"
-        : nextMarker
-            ? `Go To: ${nextMarker.markerName}`
-            : nextFloorCode
-                ? `Finish & Continue to ${floorNameDecoder(nextFloorCode)}`
-                : "Finish & View My Progress"
-
     return (
-        <div style={{background: "linear-gradient(180deg, #C65B11 0%, var(--t-orange, #F97316) 50%, #93440D 100%)"}} className="w-2/6 h-96 rounded-tr-2xl p-5 relative flex flex-col">
-            <div className="relative flex-1 min-h-0 flex flex-col">
-                <h1 className="tracking-wider text-3xl font-bold shrink-0">{floorNameDecoder(f || "")}</h1>
-                <div className="overflow-y-scroll flex-1 min-h-0 w-full my-2">
-                    {lines ? visibleLines.map((line, i) => {
-                        return <ScriptLine currentTime={currentTime} key={i} line={line}/>
-                    }) : <div className="h-full animate-pulse bg-gray-500/50 rounded-lg"/>}
-                </div>
-                {sectionLocked &&
-                    <div className="absolute inset-0 rounded-tr-2xl bg-gray-950/95 backdrop-blur-sm flex items-center justify-center text-center p-5 z-40">
-                        <p className="text-xl font-semibold tracking-wide">Answer this section down below to reveal the next part of the script</p>
-                    </div>
-                }
+        <div style={{background: "linear-gradient(180deg, #C65B11 0%, var(--t-orange, #F97316) 50%, #93440D 100%)"}} className="w-2/6 h-96 rounded-tr-2xl p-5 relative">
+            <h1 className="tracking-wider text-3xl font-bold">{floorNameDecoder(f || "")}</h1>
+            <div className="overflow-y-scroll h-64 w-full">
+                {lines ? visibleLines.map((line, i) => {
+                    return <ScriptLine currentTime={currentTime} key={i} line={line}/>
+                }) : <div className="h-64 animate-pulse bg-gray-500/50 rounded-lg"/>}
             </div>
-            <button onClick={handleNavClick} disabled={disabled} title={disabled ? "Complete this section's test below before moving on" : undefined}
-                className={"shrink-0 w-full mt-2 p-2.5 rounded-full text-sm font-semibold tracking-wide transition-colors flex items-center justify-center gap-2 " +
-                    (disabled ? "bg-gray-700 text-gray-400 cursor-not-allowed" : "bg-amber-900 hover:bg-amber-950")}>
-                {disabled && <FaLock className="text-xs"/>}
-                {navLabel}
-            </button>
+            {sectionLocked &&
+                <div className="absolute inset-0 rounded-tr-2xl bg-gray-950/95 backdrop-blur-sm flex items-center justify-center text-center p-5 z-40">
+                    <p className="text-xl font-semibold tracking-wide">Answer this section down below to reveal the next part of the script</p>
+                </div>
+            }
         </div>
     )
 }
@@ -1445,3 +1305,4 @@ function ScriptLine({line, currentTime, key}: {line: Line, currentTime: number, 
         </h2>
     )
 }
+export const FLOOR_SEQUENCE: FloorCode[] = ["f1", "f2", "f3", "b"]

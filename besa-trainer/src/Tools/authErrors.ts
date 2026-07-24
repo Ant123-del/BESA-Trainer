@@ -18,6 +18,8 @@ export function mapFirebaseAuthError(err: unknown): string {
         return "Too many attempts. Try again later."
       case "auth/operation-not-allowed":
         return "Email/password sign-in is not enabled in Firebase (enable it in the console)."
+      case "auth/requires-recent-login":
+        return "This action is sensitive and requires a recent sign in. Please sign out and back in, then try again."
       default:
         return err.message
     }

@@ -3,10 +3,10 @@ import { useState } from "react"
 import { signInWithPopup, type Auth, type UserCredential } from "firebase/auth"
 import { useNavigate } from "react-router-dom"
 import Image from "../imgs/Google.png"
-import { mapFirebaseAuthError } from "../authErrors"
-import { getFirebaseAuth, googleAuthProvider, isFirebaseConfigured } from "../firebase"
-import type { User as CustomUser } from "../types"
-import { createUserDoc, db, getUserDataById } from "../firestore"
+import { mapFirebaseAuthError } from "../Tools/authErrors"
+import { getFirebaseAuth, googleAuthProvider, isFirebaseConfigured } from "../Tools/firebase"
+import type { User as CustomUser } from "../Tools/types"
+import { createUserDoc, db, getUserDataById } from "../Tools/firestore"
 import { doc, getDoc } from "firebase/firestore"
 
 
@@ -33,8 +33,8 @@ export default function GoogleSignInButton(): JSX.Element {
         const user: CustomUser = {
           uid: userCredential.user.uid,
           progress: [],
-          sections: [],
-          admin: false
+          admin: false,
+          scriptPaths: []
         }
         //Adds custom user data to database.
         await createUserDoc(user)

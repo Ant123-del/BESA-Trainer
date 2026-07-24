@@ -1,22 +1,22 @@
 import type { JSX } from "react"
 import { useEffect, useRef, useState } from "react"
 import type { User } from "firebase/auth"
-import type { User as CustomUser } from "../types"
+import type { User as CustomUser } from "../Tools/types"
 import { onAuthStateChanged, signOut } from "firebase/auth"
 import { NavLink } from "react-router-dom"
 import Logo from "../imgs/BE_logo.png"
 import DefaultProfile from '../imgs/default.jpg'
-import { getFirebaseAuth, isFirebaseConfigured } from "../firebase"
+import { getFirebaseAuth, isFirebaseConfigured } from "../Tools/firebase"
 
 import { doc, getDoc } from "firebase/firestore"
-import { db } from "../firestore"
+import { db } from "../Tools/firestore"
 
 import { CiLogout } from "react-icons/ci";
 import { MdEdit } from "react-icons/md";
 
 const navClass = "h-fit text-sm"
 
-export default function Header({sticky}:{sticky:boolean}): JSX.Element {
+export default function Header(): JSX.Element {
     //The User type is defined by firebase auth, it contains the user's email, display name
     const [user, setUser] = useState<User | null>(null)
     const [popup, setPopup] = useState(false)
@@ -69,7 +69,7 @@ export default function Header({sticky}:{sticky:boolean}): JSX.Element {
     }
 
     return (
-        <header className={"flex h-16 w-screen items-center justify-around border-b-2 border-double border-gray-500 bg-white text-blue-900 top-0 " + (sticky ? "sticky" : "absolute")}>
+        <header className={"flex h-16 w-screen items-center justify-around border-b-2 border-double border-gray-500 bg-white text-blue-900 top-0 z-50 fixed"}>
         <div className="flex items-center justify-center gap-5 font-sans text-3xl font-semibold tracking-wide">
             <img src={Logo} className="w-10" alt="" width={40} height={40} />
             <span>BESA-Trainer</span>

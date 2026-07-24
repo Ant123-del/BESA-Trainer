@@ -1,6 +1,6 @@
 import type { SyntheticEvent, JSX } from "react"
 import React, { useEffect, useState } from "react"
-import type { User as CustomUser } from "../types"
+import type { User as CustomUser } from "../Tools/types"
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
@@ -11,9 +11,9 @@ import {
 import { Link, useNavigate } from "react-router-dom"
 import Header from "../Components/Header"
 import GoogleSignInButton from "../Components/GoogleSignInButton"
-import { mapFirebaseAuthError } from "../authErrors"
-import { getFirebaseAuth, isFirebaseConfigured } from "../firebase"
-import { createUserDoc } from "../firestore"
+import { mapFirebaseAuthError } from "../Tools/authErrors"
+import { getFirebaseAuth, isFirebaseConfigured } from "../Tools/firebase"
+import { createUserDoc } from "../Tools/firestore"
 
 //login prop comes from the router, switches between sign in vs sign up form (see App.tsx)
 export default function Login({ login }: { login: boolean }): JSX.Element {
@@ -32,7 +32,7 @@ export default function Login({ login }: { login: boolean }): JSX.Element {
 
     return (
         <>
-        <Header sticky={false}/>
+        <Header/>
         {/*I know code a little wobby sobby but bare with me*/}
         {login ? <EmailPasswordSignUp /> : <EmailPasswordSignIn />}
         </>
@@ -139,7 +139,7 @@ function EmailPasswordSignUp(): JSX.Element {
             //after getting UID, create user account
         const user: CustomUser = {
             uid: userCredential.user.uid,
-            sections: [],
+            scriptPaths: [],
             admin: false,
             progress: []
         }

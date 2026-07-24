@@ -2,10 +2,10 @@ import { NavLink, Outlet, useNavigate, useSearchParams } from "react-router-dom"
 import Header from "../Components/Header";
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import type { User as CustomUser } from "../types";
-import { getFirebaseAuth } from "../firebase";
+import type { User as CustomUser } from "../Tools/types";
+import { getFirebaseAuth } from "../Tools/firebase";
 import { doc, getDoc } from "firebase/firestore";
-import { db } from "../firestore";
+import { db } from "../Tools/firestore";
 
 import { IoMdExit } from "react-icons/io";
 import { LuNewspaper } from "react-icons/lu";
@@ -50,12 +50,15 @@ export default function SectionEditor() {
 
     return (
         <>
-            <Header sticky={true}/>
-            <div className="bg-gray-900 w-full h-screen flex justify-start">
-                <SideBar expand={expand} setExpand={setExpand}/>
-                {/* OtherSide */}
-                <div className={"h-full" + (expand ? " w-3/4" : " w-full")}>
-                    <Outlet/>
+            <Header/>
+            <div className="h-16"></div>
+            <div className="h-[calc(100vh-4rem)] ">
+                <div className="bg-gray-900 w-full flex justify-start relative">
+                    <SideBar expand={expand} setExpand={setExpand}/>
+                    {/* OtherSide */}
+                    <div className={"h-[calc(100vh-4rem)] overflow-y-scroll" + (expand ? " w-3/4" : " w-full")}>
+                        <Outlet/>
+                    </div>
                 </div>
             </div>
         </>
@@ -115,7 +118,7 @@ export function SideBar({expand, setExpand}: {expand: boolean, setExpand: Dispat
         }
     }, [f])
     return (
-        <div className={"h-full bg-gray-700 box-border p-3 text-gray-200 border-r-2 border-solid border-r-gray-500 " + (expand ? "w-1/4 " : "")}>
+        <div className={"h-[calc(100vh-4rem)] top-0 bg-gray-700 box-border p-3 text-gray-200 border-r-2 border-solid border-r-gray-500 sticky " + (expand ? "w-1/4 " : "")}>
             {/* Title / closing button */}
             <div className={"flex items-center hover:bg-gray-800 p-3 rounded-full " + (expand ? "justify-between " : "justify-center ")} onClick={() => setExpand((e:boolean) => !e)}>
                 <h2 className={"text-3xl " + (expand ? "" : "hidden")}>Section Editor</h2>

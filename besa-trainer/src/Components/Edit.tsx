@@ -2,11 +2,7 @@ import { getAuth, onAuthStateChanged, type Auth } from "firebase/auth"
 import { v4 as uuid4 } from "uuid" 
 import { useEffect, useState, type ChangeEvent, type Dispatch, type DragEvent, type JSX, type SetStateAction, type SubmitEvent } from "react"
 import { useSearchParams } from "react-router-dom"
-<<<<<<< HEAD
 import { db, deleteDraftFloor, setCurrentFloorDraft } from "../Tools/firestore"
-=======
-import { db, setCurrentFloorDraft } from "../firestore"
->>>>>>> 0e2f316100aecfed54d1717f6c9d2f5af4bc50c6
 import { collection, doc, getDoc, getDocs, limit, query, setDoc, where } from "firebase/firestore"
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage"
 import type { Floor, FloorCode, Script } from "../Tools/types"
@@ -62,21 +58,13 @@ export default function Edit() {
 
     return (
         <div className="w-full">
-<<<<<<< HEAD
             {uploaded || uploading ? <ManageVideo otherVideos={otherVideos} setUploaded={setUploaded} setOtherVideos={setOtherVideos}/> : <UploadVideo setUploaded={setUploaded} hasMoreVideos={otherVideos?.length > 0} setOtherVideos={setOtherVideos} setUploading={setUploading}/>}
             {uploading && <Loading text="Uploading..."/>}
-=======
-            {uploaded ? <ManageVideo otherVideos={otherVideos} setUploaded={setUploaded}/> : <UploadVideo setUploaded={setUploaded} hasMoreVideos={otherVideos.length > 0} setOtherVideos={setOtherVideos}/>}
->>>>>>> 0e2f316100aecfed54d1717f6c9d2f5af4bc50c6
         </div>
     )
 }
 
-<<<<<<< HEAD
 function UploadVideo({setUploaded, hasMoreVideos, setOtherVideos, setUploading}: {setUploaded: Dispatch<SetStateAction<boolean>>, hasMoreVideos: boolean, setOtherVideos: Dispatch<SetStateAction<Floor[]>>, setUploading: Dispatch<SetStateAction<boolean>>}) {
-=======
-function UploadVideo({setUploaded, hasMoreVideos, setOtherVideos}: {setUploaded: Dispatch<SetStateAction<boolean>>, hasMoreVideos: boolean, setOtherVideos: Dispatch<SetStateAction<Floor[]>>}) {
->>>>>>> 0e2f316100aecfed54d1717f6c9d2f5af4bc50c6
     const [vid, setVideo] = useState<File | null>(null)
     const [vidsrc, setVidSrc] = useState("")
     const [isDragging, setIsDragging] = useState(false)
@@ -166,7 +154,6 @@ function UploadVideo({setUploaded, hasMoreVideos, setOtherVideos}: {setUploaded:
                         path: "scripts/" + scriptId,
                         draftId: id
                     }
-<<<<<<< HEAD
                     await setDoc(scriptRef, newScript, {merge:true})
                 })
                 // for video uploading
@@ -207,19 +194,6 @@ function UploadVideo({setUploaded, hasMoreVideos, setOtherVideos}: {setUploaded:
                 setUploading(false)    
     
                 })
-=======
-                    setOtherVideos(prev => [...prev, floor])
-                    await setDoc(docRef, floor, {merge: true})
-                    if (current) {
-                        await setCurrentFloorDraft(floor)
-                    }
-                    setUploading(false)
-                }
-                
-                
-
-            })
->>>>>>> 0e2f316100aecfed54d1717f6c9d2f5af4bc50c6
         } catch (e) {
             console.error(e)
         }

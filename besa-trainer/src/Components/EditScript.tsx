@@ -4,10 +4,8 @@ import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { db } from "../Tools/firestore";
 import { CreateScript, getScript } from "../Tools/Fetch";
 import { getStorage, ref, uploadBytes } from "firebase/storage";
-import { PulseLoader } from "react-spinners";
-import { getVtt, type Line } from "../Tools/ScriptDecoder";
-
-const BLANK_PLACEHOLDER = "_____"
+import { getVtt, type Line, BLANK_PLACEHOLDER, locateBlankRanges } from "../Tools/ScriptDecoder";
+import { Loading } from "./Edit";
 
 type Filling = Fill["fillings"][number]
 
@@ -30,32 +28,32 @@ function locateLines(text: string, lines: Line[]): {line: Line, start: number, e
     return located
 }
 
-//the highlighted word(s) are whatever differs between the filled sentence and its blanked version.
-function locateHighlight(text: string, filling: Filling): {start: number, end: number} | null {
+//a filling's highlighted range(s) are wherever its blank(s) land, once its sentence is found within the
+//full text. A sentence can hold several blanks, so this returns one range per blank, in order.
+function locateHighlightRanges(text: string, filling: Filling): {start: number, end: number}[] {
     const idx = text.indexOf(filling.vttSectionSentenceFilled)
     if (idx === -1) {
-        return null
+        return []
     }
 
-    const filled = filling.vttSectionSentenceFilled
-    const blank = filling.vttSectionSentenceBlank
-
-    let prefixLen = 0
-    while (prefixLen < blank.length && prefixLen < filled.length && blank[prefixLen] === filled[prefixLen]) {
-        prefixLen++
+    const ranges = locateBlankRanges(filling)
+    if (!ranges) {
+        return []
     }
 
-    let suffixLen = 0
-    const blankRest = blank.length - prefixLen
-    const filledRest = filled.length - prefixLen
-    while (
-        suffixLen < Math.min(blankRest, filledRest) &&
-        blank[blank.length - 1 - suffixLen] === filled[filled.length - 1 - suffixLen]
-    ) {
-        suffixLen++
-    }
+    return ranges.map(r => ({start: idx + r.start, end: idx + r.end}))
+}
 
-    return {start: idx + prefixLen, end: idx + (filled.length - suffixLen)}
+//rebuilds a blanked sentence from a full sentence and a set of (already sorted) blank ranges within it.
+function buildBlankedSentence(sentence: string, ranges: {start: number, end: number}[]): string {
+    let result = ""
+    let cursor = 0
+    for (const r of ranges) {
+        result += sentence.slice(cursor, r.start) + BLANK_PLACEHOLDER
+        cursor = r.end
+    }
+    result += sentence.slice(cursor)
+    return result
 }
 
 //the section a fill belongs to is the next marker after the sentence starts - that's when the
@@ -89,7 +87,6 @@ export default function EditScript ({selected} : {selected:Floor}) {
         const scriptRef = doc(db, "training_data", "data_root", "scripts", selected.defScriptId)
         getDoc(scriptRef).then((data) => {
             if (data.exists()) {
-                //TODO: Develop after inserting file to see what data we are using
                 const e = data.data() as Script
                 setScript(e)
                 getScript(e.src).then(text => {
@@ -109,6 +106,21 @@ export default function EditScript ({selected} : {selected:Floor}) {
             setFill(data.exists() ? data.data() as Fill : null)
         })
     }, [selected])
+
+    //if the script text is edited such that a fill's sentence no longer matches, that fill is stale -
+    //its highlight is already gone visually, so it (and any other blanks it held) gets dropped from the database too.
+    useEffect(() => {
+        if (!fill || fill.fillings.length === 0) {
+            return
+        }
+        const stillValid = fill.fillings.filter(f => locateHighlightRanges(textArea, f).length > 0)
+        if (stillValid.length !== fill.fillings.length) {
+            const fillRef = doc(db, "training_data", "data_root", "fills", selected.id)
+            updateDoc(fillRef, {fillings: stillValid})
+            setFill({...fill, fillings: stillValid})
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [textArea])
 
     //figures out where each floor marker falls in the raw text - right on the blank line that sits
     //above the next cue's timestamp - then measures that offset's pixel position with a hidden mirror
@@ -175,7 +187,7 @@ export default function EditScript ({selected} : {selected:Floor}) {
         }
     }
 
-    //creates a fill entry out of the current selection, or deletes one if the caret lands on an existing highlight.
+    //creates a fill entry out of the current selection, or deletes a blank if the caret lands on an existing highlight.
     async function handleTextAreaMouseUp() {
         if (!fillMode || !textAreaRef.current) {
             return
@@ -185,12 +197,13 @@ export default function EditScript ({selected} : {selected:Floor}) {
         setFillMessage("")
 
         if (selectionStart === selectionEnd) {
-            const hit = fill?.fillings.find(filling => {
-                const range = locateHighlight(textArea, filling)
-                return range && selectionStart >= range.start && selectionStart < range.end
-            })
-            if (hit) {
-                await handleDeleteFill(hit)
+            for (const filling of fill?.fillings || []) {
+                const ranges = locateHighlightRanges(textArea, filling)
+                const blankIndex = ranges.findIndex(r => selectionStart >= r.start && selectionStart < r.end)
+                if (blankIndex !== -1) {
+                    await handleDeleteBlank(filling, blankIndex)
+                    return
+                }
             }
             return
         }
@@ -215,6 +228,30 @@ export default function EditScript ({selected} : {selected:Floor}) {
         const sentence = target.line.text.trim()
         const relStart = selStart - target.start
         const relEnd = selEnd - target.start
+
+        //if this sentence already has blank(s), the new selection becomes another blank in the same
+        //filling instead of a separate one - that's what lets a single fill question hold multiple blanks.
+        const existing = fill?.fillings.find(f => f.vttSectionSentenceFilled === sentence && f.section.markTime === section.markTime)
+
+        if (existing) {
+            const existingRanges = locateBlankRanges(existing) || []
+            const overlaps = existingRanges.some(r => relStart < r.end && relEnd > r.start)
+            if (overlaps) {
+                setFillMessage("That overlaps an existing blank.")
+                return
+            }
+
+            const allRanges = [...existingRanges, {start: relStart, end: relEnd}].sort((a, b) => a.start - b.start)
+            const vttSectionSentenceBlank = buildBlankedSentence(sentence, allRanges)
+
+            const updatedFilling: Filling = {...existing, vttSectionSentenceBlank}
+            const fillings = fill!.fillings.map(f => f === existing ? updatedFilling : f)
+            const fillRef = doc(db, "training_data", "data_root", "fills", selected.id)
+            await updateDoc(fillRef, {fillings})
+            setFill({...fill!, fillings})
+            return
+        }
+
         const newFilling: Filling = {
             vttSectionSentenceFilled: sentence,
             vttSectionSentenceBlank: sentence.slice(0, relStart) + BLANK_PLACEHOLDER + sentence.slice(relEnd),
@@ -243,6 +280,28 @@ export default function EditScript ({selected} : {selected:Floor}) {
         setFill({...fill, fillings})
     }
 
+    //removes a single blank from a filling; if it was the only blank left, the whole filling goes with it.
+    async function handleDeleteBlank(filling: Filling, blankIndex: number) {
+        if (!fill) {
+            return
+        }
+
+        const ranges = locateBlankRanges(filling) || []
+        if (ranges.length <= 1) {
+            await handleDeleteFill(filling)
+            return
+        }
+
+        const remainingRanges = ranges.filter((_, i) => i !== blankIndex)
+        const vttSectionSentenceBlank = buildBlankedSentence(filling.vttSectionSentenceFilled, remainingRanges)
+
+        const updatedFilling: Filling = {...filling, vttSectionSentenceBlank}
+        const fillings = fill.fillings.map(f => f === filling ? updatedFilling : f)
+        const fillRef = doc(db, "training_data", "data_root", "fills", selected.id)
+        await updateDoc(fillRef, {fillings})
+        setFill({...fill, fillings})
+    }
+
     function handleTextAreaScroll() {
         if (highlightRef.current && textAreaRef.current) {
             highlightRef.current.scrollTop = textAreaRef.current.scrollTop
@@ -260,8 +319,7 @@ export default function EditScript ({selected} : {selected:Floor}) {
         }
 
         const ranges = fill.fillings
-            .map(f => locateHighlight(textArea, f))
-            .filter((r): r is {start: number, end: number} => r !== null)
+            .flatMap(f => locateHighlightRanges(textArea, f))
             .sort((a, b) => a.start - b.start)
 
         const nodes: React.ReactNode[] = []
@@ -349,18 +407,6 @@ export default function EditScript ({selected} : {selected:Floor}) {
             </div>
             {aiLoading && <Loading text="Script is forming..."/>}
             {changeLoading && <Loading text="Changes are being made..."/>}
-        </div>
-    )
-}
-
-
-function Loading({text}:{text:string}) {
-    return (
-        <div className="z-[100] fixed w-screen h-screen bg-gray-600/50 top-0 right-0 flex justify-center items-center">
-            <div>
-                <h2 className="text-amber-600 text-3xl text-center mb-3">{text}</h2>
-                <PulseLoader color="#F59E0B" size={30} className="m-auto block text-center"/>
-            </div>
         </div>
     )
 }

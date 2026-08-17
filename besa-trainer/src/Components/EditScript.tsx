@@ -157,10 +157,10 @@ export default function EditScript ({selected} : {selected:Floor}) {
         setSectionDividers(positions)
     }, [textArea, selected.markers])
 
-    async function handleGenerate() {
+    async function handleGenerate(aiModel: "chirp" | "gemini") {
         if (script) {
             setAILoading(true)
-            const response: SuccessResponse | void = await CreateScript(selected.id, script?.id)
+            const response: SuccessResponse | void = await CreateScript(selected.id, script?.id, aiModel)
             if (response) {
                 const newText = await getScript(script.src) || ""
                 setTextArea(newText)
@@ -355,8 +355,11 @@ export default function EditScript ({selected} : {selected:Floor}) {
                     >
                         {fillMode ? "Highlighter: On" : "Highlighter: Off"}
                     </button>
-                    <button disabled={setScript == null} className="p-2 bg-blue-800 rounded-full shadow-lg hover:bg-blue-900" onClick={handleGenerate}>
-                        Generate Script with AI
+                    <button disabled={setScript == null} className="p-2 bg-blue-800 rounded-full shadow-lg hover:bg-blue-900" onClick={() => handleGenerate("chirp")}>
+                        Generate Script with Chirp (Quality but slow)
+                    </button>
+                    <button disabled={setScript == null} className="p-2 bg-blue-800 rounded-full shadow-lg hover:bg-blue-900" onClick={() => handleGenerate("gemini")}>
+                        Generate Script with Gemini (Fast but sometimes inaccurate)
                     </button>
                     <span className="block text-center text-sm">Warning! Will reset file</span>
                 </div>

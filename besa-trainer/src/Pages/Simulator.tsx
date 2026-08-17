@@ -10,8 +10,9 @@ import { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } from
 import { db } from "../Tools/firestore";
 import { type CosScript, type User, type Floor, type Marker, type Script, type Progress, type PracticeTypes, type Fill, type FloorCode } from "../Tools/types";
 import { FaArrowRight, FaPause, FaLock } from "react-icons/fa";
-import { FaPlay } from "react-icons/fa";
+import { FaPlay, FaKeyboard, FaMicrophone, FaHeadphones, FaHandshake, FaHeart } from "react-icons/fa";
 import { MoonLoader, ClipLoader } from "react-spinners";
+import ContentLoader from "react-content-loader";
 import { AiFillMuted } from "react-icons/ai";
 import { HiMiniSpeakerWave } from "react-icons/hi2";
 import { formatTime } from "../Components/VideoEditor";
@@ -23,6 +24,7 @@ import { AnswerReview, buildUpdatedScript, computeMatchScore, getPrecedingSectio
 import MicrophoneTest from "../Components/SimulatorTests/MicrophoneTest";
 import { FillTest } from "../Components/SimulatorTests/FillTest";
 import { TextTest } from "../Components/SimulatorTests/TextTest";
+import SimulatorInfo from "../Components/SimulatorInfo";
 
 const Player = createPlayer({features: videoFeatures})
 
@@ -57,6 +59,7 @@ export default function Simulator() {
     const [BackWarning, setBackWarning] = useState(false)
     const [Draft, setDraft] = useState<null | Floor>(null)
     const [pauseState, setPauseState] = useState(false)
+    const [videoLoaded, setVideoLoaded] = useState(false)
     //video controls
     const playerActions = Player.usePlayer()
     const isPaused = Player.usePlayer((state) => state.paused)
@@ -222,6 +225,12 @@ export default function Simulator() {
         setPauseState(false)
     }, [f])
 
+    //a new video source needs its own loading placeholder shown again, rather than reusing whatever
+    //loaded state the previous draft left behind.
+    useEffect(() => {
+        setVideoLoaded(false)
+    }, [Draft?.src])
+
     //jumps playback to a marker and locks straight into its test - same behavior as clicking a marker
     //dot on the timeline. Used by the script panel's "go to next section" button.
     function goToMarker(marker: Marker) {
@@ -367,11 +376,18 @@ export default function Simulator() {
               <div className="w-11/12 box-border mx-auto my-3 rounded-2xl bg-gray-800">
                 {!(initalCheck || initialLoading) ? 
                     Draft ? 
-                    (<><Player.Container className="flex justify-center items-center relative">
+                    (<><Player.Container className="flex justify-center items-center relative w-full">
                         <div className="relative w-4/6">
-                            <Video src={Draft.src}  className="w-full h-96 object-cover rounded-tl-2xl z-10" 
+                            {!videoLoaded &&
+                                <div className="absolute top-0 left-0 w-full h-96 rounded-tl-2xl bg-gray-800 z-20 overflow-hidden flex items-center justify-center">
+                                    <ContentLoader className="w-full h-full" backgroundColor="#374151" foregroundColor="#F59E0B">
+                                        <rect x="0" y="0" className="w-full h-full"/>
+                                    </ContentLoader>
+                                </div>
+                            }
+                            <Video src={Draft.src}  className="w-full h-96 object-cover rounded-tl-2xl z-10"
                             onMouseOver={handleVideoHover} onMouseMove={handleVideoHover} onMouseOut={() => setPauseState(false)}
-                            onClick={handleToggle}>
+                            onClick={handleToggle} onLoadedData={() => setVideoLoaded(true)}>
                             </Video>
                             <VideoControls sections={Draft.markers} progress={progress} sectionLocked={sectionLocked} currentSection={currentSection} setSectionLocked={setSectionLocked} setCurrentSection={setCurrentSection}/>
                             {pauseState && <div className="transition-all absolute top-0 left-0 rounded-tl-2xl bg-black/40 w-full h-96 z-30" style={{pointerEvents: "none"}}>
@@ -409,27 +425,8 @@ export default function Simulator() {
                     <div className="w-full bg-gray-900">
                         <h2 className="text-light-blue-300 text-6xl tracking-wider my-10">Welcome to {floorNameDecoder(f || " the Simulation")}</h2>
                         <hr></hr>
-                        <section className="p-5">
-                            <h3 className="text-amber-500 text-3xl tracking-wide my-5">Using The Simulation</h3>
-                            <p className="p-2 w-3/4">
-                                You will be going through a walk through. There are many settings to configure to your liking of studying.
-                                The different types of options include
-                            </p>
-                            <ul className="list-disc mx-10">
-                                <li>Fill in the blank</li>
-                                <li>Retype script</li>
-                                <li>Speak script</li>
-                            </ul>
-                            <h3 className="text-amber-500 text-3xl tracking-wide my-5">Mindset When Touring</h3>
-                            <p className="p-2">
-                                You can think of a tour as a proper one-sided conversation, where you will do most of the talking :).
-                                Within conversations, you want to actively engage with three things: active listening, respect, and empathy.  
-                                <b> Active Listning/engaging</b> is mentioned even though you will do most of the talking because it is important to
-                                remember that you are there to serve them. To understand their needs and questions. So when talking keep in mind
-                                are you talking to get a response, or are you talking to help them understand the school.
-                            </p>
-                        </section>
-                        <div className="fixed bottom-0 right-0 p-3 flex justify-end items-center gap-3 text-2xl">
+                        <SimulatorInfo/>
+                        <div className="fixed bottom-0 right-0 p-3 flex justify-end items-center gap-3 text-2xl bg-gray-900 w-full">
                             <span className="flex justify-center gap-2 items-center">Continue to Training <FaArrowRight/></span>
                             <button
                             className={"p-2 rounded-full" + (initialLoading ? " bg-blue-gray-400" : " bg-blue-800 hover:bg-blue-900")}

@@ -3,6 +3,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from mangum import Mangum
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from typing import Literal
 import time
 from google import genai
 import os
@@ -11,15 +12,30 @@ import base64
 import firebase_admin
 from firebase_admin import credentials, storage, auth, firestore
 
+from google.cloud.speech_v2 import SpeechClient
+from google.cloud.speech_v2.types import cloud_speech
+from google.api_core.client_options import ClientOptions
+from google.oauth2 import service_account as gcp_service_account
+
 from dotenv import load_dotenv
 load_dotenv()
 client = genai.Client()
 
+FIREBASE_CRED_PATH = "./besa-trainer-api-firebase-adminsdk-fbsvc-f685a6ef51.json"
+
 # Firebase SDK
-cred = credentials.Certificate("./besa-trainer-api-firebase-adminsdk-fbsvc-f685a6ef51.json")
+cred = credentials.Certificate(FIREBASE_CRED_PATH)
 firebase_admin.initialize_app(cred, {
     "storageBucket": "besa-trainer-api.firebasestorage.app"
 })
+
+# Chirp 3 (Speech-to-Text v2) lives only in specific multi-regions today.
+SPEECH_LOCATION = "us"
+GCP_PROJECT_ID = cred.project_id
+speech_client = SpeechClient(
+    credentials=gcp_service_account.Credentials.from_service_account_file(FIREBASE_CRED_PATH),
+    client_options=ClientOptions(api_endpoint=f"{SPEECH_LOCATION}-speech.googleapis.com"),
+)
 
 app = FastAPI()
 security = HTTPBearer()
@@ -66,78 +82,128 @@ class ScriptRequest(BaseModel):
     floorId: str
     scriptId: str
     videoExtension: str = "mp4"
+    aiModel: Literal["chirp", "gemini"] = "chirp"
 
 from moviepy.video.io.VideoFileClip import VideoFileClip
 from google.genai import types
+
+def _generate_vtt_with_chirp(bucket, temp_local_audio: str, floor_id: str) -> str:
+    #Chirp 3 (Speech-to-Text v2) only accepts audio via a Cloud Storage URI,
+    #so stage the extracted mp3 there temporarily.
+    audio_gcs_path = f"temp-audio/{floor_id}.mp3"
+    audio_blob = bucket.blob(audio_gcs_path)
+    print("Uploading audio to Cloud Storage for Chirp 3 transcription...")
+    audio_blob.upload_from_filename(temp_local_audio, content_type="audio/mp3")
+    audio_uri = f"gs://{bucket.name}/{audio_gcs_path}"
+
+    try:
+        recognition_config = cloud_speech.RecognitionConfig(
+            auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
+            language_codes=["en-US"],
+            model="chirp_3",
+            features=cloud_speech.RecognitionFeatures(
+                enable_word_time_offsets=True,
+                enable_automatic_punctuation=True,
+            ),
+        )
+
+        print("Generating script content via Chirp 3...")
+        operation = speech_client.batch_recognize(
+            request=cloud_speech.BatchRecognizeRequest(
+                recognizer=f"projects/{GCP_PROJECT_ID}/locations/{SPEECH_LOCATION}/recognizers/_",
+                config=recognition_config,
+                files=[cloud_speech.BatchRecognizeFileMetadata(uri=audio_uri)],
+                recognition_output_config=cloud_speech.RecognitionOutputConfig(
+                    inline_response_config=cloud_speech.InlineOutputConfig(),
+                    output_format_config=cloud_speech.OutputFormatConfig(
+                        vtt=cloud_speech.VttOutputFileFormatConfig(),
+                    ),
+                ),
+            )
+        )
+        #Long-running operation: Chirp 3 processes the full audio track before returning.
+        batch_response = operation.result(timeout=600)
+        vtt_content = batch_response.results[audio_uri].inline_result.vtt_captions
+
+        if not vtt_content:
+            raise HTTPException(status_code=500, detail="Chirp 3 returned no captions for this audio.")
+        return vtt_content
+    finally:
+        #Clean up the temporary audio copy from Cloud Storage
+        audio_blob.delete()
+
+def _generate_vtt_with_gemini(temp_local_audio: str) -> str:
+    print("Uploading audio to Gemini Files API...")
+    gemini_file = client.files.upload(
+        file=temp_local_audio,
+        config=types.UploadFileConfig(mime_type="audio/mp3") # Explicitly set audio mime-type
+    )
+
+    #Wait for Gemini to process the audio track
+    while gemini_file.state.name == "PROCESSING":
+        print("Gemini is processing audio tracks...")
+        time.sleep(2) # Added a small sleep to avoid spamming rate limits
+        gemini_file = client.files.get(name=gemini_file.name)
+
+    if gemini_file.state.name == "FAILED":
+        raise HTTPException(status_code=500, detail="Gemini audio processing failed.")
+
+    prompt = (
+        "Analyze this audio track and generate a precise transcript. "
+        "The output MUST be formatted strictly in valid WebVTT (.vtt) file format. "
+        "Include the 'WEBVTT' header, appropriate blank lines, and accurate timestamps (HH:MM:SS.mmm). "
+        "Do not wrap the response in markdown blocks like ```vtt or ```text. Return ONLY raw VTT contents."
+    )
+
+    print("Generating script content via Gemini...")
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=[gemini_file, prompt]
+    )
+
+    #Clean up Gemini's File API space
+    client.files.delete(name=gemini_file.name)
+
+    return response.text
 
 @app.post("/make-script")
 def makeScript(request_data: ScriptRequest, admin_user: dict = Depends(require_admin)):
     temp_local_video = f"temp_{request_data.floorId}.{request_data.videoExtension}"
     temp_local_audio = f"temp_{request_data.floorId}.mp3"
-    
-    try: 
+
+    try:
         bucket = storage.bucket()
-        
+
         script_path = f"scripts/{request_data.scriptId}"
-        video_path = f"videos/{request_data.floorId}" 
-        
+        video_path = f"videos/{request_data.floorId}"
+
         script_blob = bucket.blob(script_path)
         video_blob = bucket.blob(video_path)
-        
+
         #Check if training video exists
         if not video_blob.exists():
             raise HTTPException(status_code=404, detail="Source training video not found in storage.")
-        
+
         #Download the video from Firebase Storage locally
         print(f"Downloading video from Firebase Storage...")
         video_blob.download_to_filename(temp_local_video)
-        
+
         #EXTRACT AUDIO: Convert video to MP3
         print("Extracting audio from video to optimize token usage...")
         with VideoFileClip(temp_local_video) as video:
             if video.audio is None:
                 raise HTTPException(status_code=400, detail="The provided video file has no audio track.")
             # write_audiofile extracts the track and saves it locally
-            video.audio.write_audiofile(temp_local_audio, logger=None) 
-        
-        #Upload the lightweight MP3 file to Gemini instead of the video
-        print(f"Uploading audio to Gemini Files API...")
-        gemini_file = client.files.upload(
-            file=temp_local_audio,
-            config=types.UploadFileConfig(mime_type="audio/mp3") # Explicitly set audio mime-type
-        )
-        
-        #Wait for Gemini to process the audio track
-        while gemini_file.state.name == "PROCESSING":
-            print("Gemini is processing audio tracks...")
-            time.sleep(2) # Added a small sleep to avoid spamming rate limits
-            gemini_file = client.files.get(name=gemini_file.name)
+            video.audio.write_audiofile(temp_local_audio, logger=None)
 
-        if gemini_file.state.name == "FAILED":
-            raise HTTPException(status_code=500, detail="Gemini audio processing failed.")
-
-        #Update prompt context slightly since it's just audio now
-        prompt = (
-            "Analyze this audio track and generate a precise transcript. "
-            "The output MUST be formatted strictly in valid WebVTT (.vtt) file format. "
-            "Include the 'WEBVTT' header, appropriate blank lines, and accurate timestamps (HH:MM:SS.mmm). "
-            "Do not wrap the response in markdown blocks like ```vtt or ```text. Return ONLY raw VTT contents."
-        )
-
-        print("Generating script content via gemini-2.5-flash...")
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[gemini_file, prompt]
-        )
-        
-        vtt_content = response.text
+        if request_data.aiModel == "gemini":
+            vtt_content = _generate_vtt_with_gemini(temp_local_audio)
+        else:
+            vtt_content = _generate_vtt_with_chirp(bucket, temp_local_audio, request_data.floorId)
 
         #Upload the script back to Firebase
         print(f"Uploading script back to Firebase Storage at {script_path}...")
         script_blob.upload_from_string(vtt_content, content_type="text/vtt")
-
-        #Clean up Gemini's File API space
-        client.files.delete(name=gemini_file.name)
 
         return {
             "success": True, 
@@ -190,7 +256,7 @@ def transcribeAudio(request_data: TranscribeRequest, user: dict = Depends(get_cu
             "Return ONLY the raw transcript text - no labels, timestamps, speaker names, or extra commentary."
         )
 
-        print("Transcribing recording via gemini-2.5-flash...")
+        print("Transcribing recording via chirp")
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=[gemini_file, prompt]

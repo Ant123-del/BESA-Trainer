@@ -2,6 +2,9 @@ import { Link, useLocation } from "react-router-dom";
 import Header from "../Components/Header";
 import type { JSX } from "react";
 import Background from "../imgs/background.jpg"
+import Background2 from "../imgs/background-2.jpg"
+import Background3 from "../imgs/background-3.jpeg"
+import Background4 from "../imgs/background-4.jpeg"
 import { FaPlay } from "react-icons/fa";
 import {Carousel, IconButton} from "@material-tailwind/react"
 import { FaChevronLeft } from "react-icons/fa";
@@ -72,10 +75,11 @@ export default function Home() {
                             ))}
                         </div>
                         )}>
+                        {/* Backgrounds */}
                         <Tour src={Background} to="/simulator/general?f=f1" name="First Floor"/>
-                        <Tour src={Background} to="/simulator/general?f=f2" name="Second Floor"/>
-                        <Tour src={Background} to="/simulator/general?f=f3" name="Third Floor"/>
-                        <Tour src={Background} to="/simulator/general?f=b" name="Slugworks"/>
+                        <Tour src={Background2} to="/simulator/general?f=f2" name="Second Floor"/>
+                        <Tour src={Background3} to="/simulator/general?f=f3" name="Third Floor"/>
+                        <Tour src={Background4} to="/simulator/general?f=b" name="Slugworks"/>
                     </Carousel>
                 </div>
             </div>

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react"
 import { FaMicrophone, FaStop } from "react-icons/fa"
 import { MoonLoader } from "react-spinners"
-import { getVtt } from "../Tools/ScriptDecoder"
-import { transcribeAudio } from "../Tools/Fetch"
-import { Loading } from "./Edit"
-import { AnswerReview, getPrecedingSectionBounds, isLineInSection, saveConfidence } from "../Pages/Simulator"
-import type { CosScript, Marker, Progress, User } from "../Tools/types"
+import { AnswerReview, getPrecedingSectionBounds, getVtt, isLineInSection } from "../../Tools/ScriptDecoder"
+import { transcribeAudio } from "../../Tools/Fetch"
+import { Loading } from "../Edit"
+import { saveConfidence } from "../../Pages/Simulator"
+
+import type { CosScript, Marker, Progress, User } from "../../Tools/types"
 
 type Stage = "idle" | "recording" | "transcribing" | "reviewing"
 

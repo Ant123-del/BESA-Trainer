@@ -3,7 +3,7 @@ import type { SuccessResponse } from "./types"
 
 const url = "http://127.0.0.1:8000/"
 
-export async function CreateScript(floorId: string, scriptId: string) {
+export async function CreateScript(floorId: string, scriptId: string, aiModel: "chirp" | "gemini" = "chirp") {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -18,7 +18,7 @@ export async function CreateScript(floorId: string, scriptId: string) {
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${idToken}`
             },
-            body: JSON.stringify({floorId, scriptId})
+            body: JSON.stringify({floorId, scriptId, aiModel})
         })
         if (!response.ok) {
             console.error(response.status)

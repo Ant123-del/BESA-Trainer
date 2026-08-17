@@ -9,6 +9,7 @@ import Simulator from './Pages/Simulator'
 import MyProgress from './Pages/Progress'
 import DebugLoader from './Pages/__DebugLoader'
 import { createPlayer, videoFeatures } from '@videojs/react'
+import GettingStarted from './Components/GettingStarted'
 
 //Router for naviation
 const Player = createPlayer({features: videoFeatures})
@@ -18,7 +19,7 @@ const router = createBrowserRouter(createRoutesFromChildren(
     <Route path='/signin' element={<Login login={false}/>}/>,
     <Route path='/profile' element={<Profile/>}/>,
     <Route path='/section-editor' element={<SectionEditor/>}>
-      <Route path='getting-started' element={<div className='text-white'>Coming soon...</div>}/>
+      <Route path='getting-started' element={<GettingStarted/>}/>
       <Route path='edit' element={<Edit/>}/>
     </Route>,
     <Route path='/simulator/:tour' element={<Player.Provider><Simulator/></Player.Provider>}>

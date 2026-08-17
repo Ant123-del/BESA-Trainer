@@ -1,5 +1,4 @@
-import { useSearchParams, useParams, Link } from "react-router-dom";
-import Header from "../Components/Header";
+import { useSearchParams, useParams, useNavigate, Link } from "react-router-dom";
 import { IoMdArrowRoundBack } from "react-icons/io";
 import { IoMdSettings } from "react-icons/io";
 import { floorNameDecoder, Loading } from "../Components/Edit";
@@ -8,10 +7,11 @@ import { createPlayer, selectTime, selectVolume, videoFeatures } from "@videojs/
 import { Video } from "@videojs/react/video";
 import { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } from "firebase/firestore";
 import { db } from "../Tools/firestore";
-import { type CosScript, type User, type Floor, type Marker, type Script, type Progress, type PracticeTypes, type Fill, type FloorCode } from "../Tools/types";
-import { FaArrowRight, FaPause } from "react-icons/fa";
+import { type CosScript, type User, type Floor, type Marker, type Script, type Progress, type PracticeTypes, type FloorCode } from "../Tools/types";
+import { FaArrowRight, FaPause, FaLock } from "react-icons/fa";
 import { FaPlay } from "react-icons/fa";
 import { MoonLoader } from "react-spinners";
+import ContentLoader from "react-content-loader";
 import { AiFillMuted } from "react-icons/ai";
 import { HiMiniSpeakerWave } from "react-icons/hi2";
 import { formatTime } from "../Components/VideoEditor";
@@ -19,8 +19,11 @@ import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { v4 } from "uuid";
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
 import { getScript } from "../Tools/Fetch";
-import { getVtt, type Line } from "../Tools/ScriptDecoder";
-import MicrophoneTest from "../Components/MicrophoneTest";
+import { getSectionBounds, getVtt, isLineInSection, type Line } from "../Tools/ScriptDecoder";
+import MicrophoneTest from "../Components/SimulatorTests/MicrophoneTest";
+import { FillTest } from "../Components/SimulatorTests/FillTest";
+import { TextTest } from "../Components/SimulatorTests/TextTest";
+import SimulatorInfo from "../Components/SimulatorInfo";
 
 const Player = createPlayer({features: videoFeatures})
 
@@ -38,19 +41,16 @@ export function toDate(value: unknown): Date {
 
 export default function Simulator() {
     const {tour} = useParams()
-    const [searchParams, setSearchParams] = useSearchParams()
+    const [searchParams] = useSearchParams()
     const f = searchParams.get("f")
     const [BackWarning, setBackWarning] = useState(false)
     const [Draft, setDraft] = useState<null | Floor>(null)
     const [pauseState, setPauseState] = useState(false)
+    const [videoLoaded, setVideoLoaded] = useState(false)
     //video controls
     const playerActions = Player.usePlayer()
     const isPaused = Player.usePlayer((state) => state.paused)
-    const isMuted = Player.usePlayer((state) => state.muted)
-    const duration = Player.usePlayer((state) => state.duration) || 1
-    const currentTime = Player.usePlayer((state) => state.currentTime) || 0
     const playBack = Player.usePlayer(selectTime)
-    const vol = Player.usePlayer(selectVolume)
 
     //for loading
     const [initialLoading, setInitalLoading] = useState(false)
@@ -191,7 +191,29 @@ export default function Simulator() {
     }, [f])
 
 
+    //moving to a different floor (via the script panel's nav button) needs to land on that floor's
+    //welcome screen fresh, not whatever locked/paused state the previous floor was left in.
+    useEffect(() => {
+        setInitalCheck(true)
+        setSectionLocked(false)
+        setCurrentSection(null)
+        setPauseState(false)
+    }, [f])
 
+    //a new video source needs its own loading placeholder shown again, rather than reusing whatever
+    //loaded state the previous draft left behind.
+    useEffect(() => {
+        setVideoLoaded(false)
+    }, [Draft?.src])
+
+    //jumps playback to a marker and locks straight into its test - same behavior as clicking a marker
+    //dot on the timeline. Used by the script panel's "go to next section" button.
+    function goToMarker(marker: Marker) {
+        playBack?.seek(marker.markTime)
+        playerActions.pause()
+        setCurrentSection(marker)
+        setSectionLocked(true)
+    }
 
     function toTitleCase(str: string): string {
         return str.toLowerCase().split(" ").map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
@@ -300,19 +322,26 @@ export default function Simulator() {
               <div className="w-11/12 box-border mx-auto my-3 rounded-2xl bg-gray-800">
                 {!(initalCheck || initialLoading) ? 
                     Draft ? 
-                    (<><Player.Container className="flex justify-center items-center relative">
+                    (<><Player.Container className="flex justify-center items-center relative w-full">
                         <div className="relative w-4/6">
-                            <Video src={Draft.src}  className="w-full h-96 object-cover rounded-tl-2xl z-10" 
+                            {!videoLoaded &&
+                                <div className="absolute top-0 left-0 w-full h-96 rounded-tl-2xl bg-gray-800 z-20 overflow-hidden flex items-center justify-center">
+                                    <ContentLoader className="w-full h-full" backgroundColor="#374151" foregroundColor="#F59E0B">
+                                        <rect x="0" y="0" className="w-full h-full"/>
+                                    </ContentLoader>
+                                </div>
+                            }
+                            <Video src={Draft.src}  className="w-full h-96 object-cover rounded-tl-2xl z-10"
                             onMouseOver={handleVideoHover} onMouseMove={handleVideoHover} onMouseOut={() => setPauseState(false)}
-                            onClick={handleToggle}>
+                            onClick={handleToggle} onLoadedData={() => setVideoLoaded(true)}>
                             </Video>
-                            <VideoControls sections={Draft.markers} progress={progress} sectionLocked={sectionLocked} setSectionLocked={setSectionLocked} setCurrentSection={setCurrentSection}/>
+                            <VideoControls sections={Draft.markers} progress={progress} sectionLocked={sectionLocked} currentSection={currentSection} setSectionLocked={setSectionLocked} setCurrentSection={setCurrentSection}/>
                             {pauseState && <div className="transition-all absolute top-0 left-0 rounded-tl-2xl bg-black/40 w-full h-96 z-30" style={{pointerEvents: "none"}}>
                                 {/* This is where the pause button will show when hovered over the video */}
                             </div>}
                         </div>
                         {/* Container for script / other  */}
-                        <ScriptHandler vttText={script || ""} sections={Draft.markers} sectionLocked={sectionLocked}/>
+                        <ScriptHandler vttText={script || ""} sections={Draft.markers} sectionLocked={sectionLocked} currentSection={currentSection} progress={progress} onGoToMarker={goToMarker}/>
                         
                     </Player.Container>
                     {/* Below the video */}
@@ -342,27 +371,8 @@ export default function Simulator() {
                     <div className="w-full bg-gray-900">
                         <h2 className="text-light-blue-300 text-6xl tracking-wider my-10">Welcome to {floorNameDecoder(f || " the Simulation")}</h2>
                         <hr></hr>
-                        <section className="p-5">
-                            <h3 className="text-amber-500 text-3xl tracking-wide my-5">Using The Simulation</h3>
-                            <p className="p-2 w-3/4">
-                                You will be going through a walk through. There are many settings to configure to your liking of studying.
-                                The different types of options include
-                            </p>
-                            <ul className="list-disc mx-10">
-                                <li>Fill in the blank</li>
-                                <li>Retype script</li>
-                                <li>Speak script</li>
-                            </ul>
-                            <h3 className="text-amber-500 text-3xl tracking-wide my-5">Mindset When Touring</h3>
-                            <p className="p-2">
-                                You can think of a tour as a proper one-sided conversation, where you will do most of the talking :).
-                                Within conversations, you want to actively engage with three things: active listening, respect, and empathy.  
-                                <b> Active Listning/engaging</b> is mentioned even though you will do most of the talking because it is important to
-                                remember that you are there to serve them. To understand their needs and questions. So when talking keep in mind
-                                are you talking to get a response, or are you talking to help them understand the school.
-                            </p>
-                        </section>
-                        <div className="fixed bottom-0 right-0 p-3 flex justify-end items-center gap-3 text-2xl">
+                        <SimulatorInfo/>
+                        <div className="fixed bottom-0 right-0 p-3 flex justify-end items-center gap-3 text-2xl bg-gray-900 w-full">
                             <span className="flex justify-center gap-2 items-center">Continue to Training <FaArrowRight/></span>
                             <button
                             className={"p-2 rounded-full" + (initialLoading ? " bg-blue-gray-400" : " bg-blue-800 hover:bg-blue-900")}
@@ -441,7 +451,22 @@ export default function Simulator() {
 }
 
 
-function VideoControls({sections, progress, sectionLocked, setSectionLocked, setCurrentSection}:{sections: Marker[], progress: Progress | null, sectionLocked: boolean, setSectionLocked: (locked: boolean) => void, setCurrentSection: (section: Marker | null) => void}) {
+//the single source of truth for "how far is this user actually allowed to go": the earliest section
+//that hasn't been completed yet under the given progress record. Nothing at or beyond this marker can
+//be watched, tested, or jumped to (via the scrubber, a marker click, or the script panel's goto button)
+//until it's cleared - every one of those controls has to agree on this same boundary, or a bypass opens.
+function getIncompleteBoundary(sections: Marker[], progress: Progress | null): Marker | undefined {
+    if (sections.length === 0) {
+        return undefined
+    }
+
+    //exact-match against each marker's own current markTime (same check ShowSections/handleMarkerClick
+    const completedTimes = new Set(progress?.progress.map(p => p.sectionTime) ?? [])
+    const sortedSections = [...sections].sort((a, b) => a.markTime - b.markTime)
+    return sortedSections.find(m => !completedTimes.has(m.markTime))
+}
+
+function VideoControls({sections, progress, sectionLocked, currentSection, setSectionLocked, setCurrentSection}:{sections: Marker[], progress: Progress | null, sectionLocked: boolean, currentSection: Marker | null, setSectionLocked: (locked: boolean) => void, setCurrentSection: (section: Marker | null) => void}) {
     const playerActions = Player.usePlayer()
     const isPaused = Player.usePlayer((state) => state.paused)
     const isMuted = Player.usePlayer((state) => state.muted)
@@ -466,34 +491,8 @@ function VideoControls({sections, progress, sectionLocked, setSectionLocked, set
         }
     }
 
-    function getLastProgress() {
-        if (progress) {
-            return [...progress.progress].sort((a, b) => b.sectionTime - a.sectionTime)[0]
-        } 
-        return undefined
-    }
-
     function getNextMarker(): Marker | undefined {
-        if (sections.length === 0) {
-            return undefined
-        }
-
-        const sortedSections = [...sections].sort((a, b) => a.markTime - b.markTime)
-        const lastProgress = getLastProgress()
-
-        //no progress made yet, so the next marker is the very first one
-        if (!lastProgress) {
-            return sortedSections[0]
-        }
-
-        const nextMarker = sortedSections.find(m => m.markTime > lastProgress.sectionTime)
-
-        //already on the last marker, so return the one associated with the last progress
-        if (!nextMarker) {
-            return undefined
-        }
-
-        return nextMarker
+        return getIncompleteBoundary(sections, progress)
     }
 
     //clicking a completed marker (to review it) or the next marker (to jump straight into it) locks the
@@ -516,10 +515,14 @@ function VideoControls({sections, progress, sectionLocked, setSectionLocked, set
     function handleScub( e: React.ChangeEvent<HTMLInputElement>) {
         const newTime = parseFloat(e.target.value)
         const nextMarker = getNextMarker()
-        if (!nextMarker || nextMarker.markTime >= newTime) {
-            playBack?.seek(newTime)
-        } else {
-            playBack?.seek(nextMarker.markTime)
+        const target = (!nextMarker || nextMarker.markTime >= newTime) ? newTime : nextMarker.markTime
+        playBack?.seek(target)
+
+        //dragging away from whatever's currently locked (the mandatory boundary, or a reactivated review)
+        //closes the overlay so the user can freely browse - currentSection doesn't track the scrubber on
+        //its own, so this has to be handled explicitly rather than left to the currentTime effect.
+        if (sectionLocked && currentSection && target !== currentSection.markTime) {
+            setSectionLocked(false)
         }
     }
 
@@ -533,10 +536,18 @@ function VideoControls({sections, progress, sectionLocked, setSectionLocked, set
             playerActions.pause()
             setSectionLocked(true)
             setCurrentSection(nextMarker)
-        } else {
+            return
+        }
+
+        //don't auto-unlock a deliberate review of an already-completed section (eg. reactivated via the
+        //script panel's goto button) just because it isn't the mandatory next-up boundary - only currentTime
+        //drifting below the boundary for some other reason (a manual backward scrub, a stale lock left over
+        //from before a practice-type switch, etc) should clear it.
+        const isDeliberateReview = !!currentSection && (progress?.progress.some(p => p.sectionTime === currentSection.markTime) ?? false)
+        if (!isDeliberateReview) {
             setSectionLocked(false)
         }
-    }, [currentTime, progress])
+    }, [currentTime, progress, currentSection])
 
     return (
         <>
@@ -738,47 +749,6 @@ function SectionTest({floorId, section, sections, scriptText, cosScript, onScrip
     )
 }
 
-//normalized equality just to give a rough auto-check hint - the actual grading is the user's own Hard/Good/Easy call.
-function isCloseMatch(userAnswer: string, correct: string): boolean {
-    const normalize = (s: string) => s.trim().toLowerCase().replace(/[^\w\s]/g, "")
-    return userAnswer.trim().length > 0 && normalize(userAnswer) === normalize(correct)
-}
-
-//marks the part of the full sentence that was blanked out, by diffing it against the blanked version.
-function renderCorrectAnswer(filling: {vttSectionSentenceBlank: string, vttSectionSentenceFilled: string}) {
-    const filled = filling.vttSectionSentenceFilled
-    const blank = filling.vttSectionSentenceBlank
-
-    let prefixLen = 0
-    while (prefixLen < blank.length && prefixLen < filled.length && blank[prefixLen] === filled[prefixLen]) {
-        prefixLen++
-    }
-
-    let suffixLen = 0
-    const blankRest = blank.length - prefixLen
-    const filledRest = filled.length - prefixLen
-    while (
-        suffixLen < Math.min(blankRest, filledRest) &&
-        blank[blank.length - 1 - suffixLen] === filled[filled.length - 1 - suffixLen]
-    ) {
-        suffixLen++
-    }
-
-    const highlightStart = prefixLen
-    const highlightEnd = filled.length - suffixLen
-
-    if (highlightStart >= highlightEnd) {
-        return filled
-    }
-
-    return (
-        <>
-            {filled.slice(0, highlightStart)}
-            <mark className="bg-amber-400/70 text-black rounded px-0.5">{filled.slice(highlightStart, highlightEnd)}</mark>
-            {filled.slice(highlightEnd)}
-        </>
-    )
-}
 
 //shared by every practice type - records a confidence rating for the section, keyed under whichever
 //practiceType is currently active, so switching types keeps separate progress histories.
@@ -808,437 +778,11 @@ export async function saveConfidence({confidence, section, floorId, practiceType
     await updateDoc(userD, {progress: newProgressList})
 }
 
-//shared grading footer - reused by every practice type once an answer has been submitted.
-function GradingControls({onTryAgain, onConfidence, canExit, onExit}: {
-    onTryAgain: () => void,
-    onConfidence: (confidence: number) => void,
-    canExit: boolean,
-    onExit: () => void
-}) {
-    return (
-        <div>
-            <p className="text-gray-500 text-center">How did you feel about answering these questions? Choose one to move on!</p>
-            <div className="flex justify-center gap-3 mt-4 w-full">
-                <button onClick={() => onConfidence(0)} className="p-2 px-6 w-3/12 rounded-full bg-red-700 hover:bg-red-800">Hard</button>
-                <button onClick={() => onConfidence(1)} className="p-2 px-6 w-3/12 rounded-full bg-yellow-600 hover:bg-yellow-700">Good</button>
-                <button onClick={() => onConfidence(2)} className="p-2 px-6 w-3/12 rounded-full bg-green-700 hover:bg-green-800">Easy</button>
-            </div>
-            <div className="flex justify-center mt-3">
-                <button onClick={onTryAgain} className="p-2 px-6 rounded-full border border-gray-400 hover:bg-gray-800">Try Again</button>
-            </div>
-            {canExit &&
-                <div className="flex justify-center mt-3">
-                    <button onClick={onExit} className="p-2 px-6 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
-                </div>
-            }
-        </div>
-    )
-}
 
-function FillTest({floorId, section, progress, setProgress, userInfo, setUserInfo, onContinue, canExit, onExit}: {
-    floorId: string,
-    section: Marker,
-    progress: Progress | null,
-    setProgress: (p: Progress) => void,
-    userInfo: User | null,
-    setUserInfo: (u: User) => void,
-    onContinue: () => void,
-    canExit: boolean,
-    onExit: () => void
-}) {
-    const [fill, setFill] = useState<Fill | null>(null)
-    const [loading, setLoading] = useState(true)
-    const [answers, setAnswers] = useState<string[]>([])
-    const [skipped, setSkipped] = useState<boolean[]>([])
-    const [submitted, setSubmitted] = useState(false)
-
-    useEffect(() => {
-        setLoading(true)
-        const fillRef = doc(db, "training_data", "data_root", "fills", floorId)
-        getDoc(fillRef).then((data) => {
-            setFill(data.exists() ? data.data() as Fill : null)
-            setLoading(false)
-        })
-    }, [floorId])
-
-    const sectionFillings = (fill?.fillings || []).filter(f => f.section.markTime === section.markTime)
-
-    //fresh form whenever a new section comes up (or the fills finish loading)
-    useEffect(() => {
-        setAnswers(sectionFillings.map(() => ""))
-        setSkipped(sectionFillings.map(() => false))
-        setSubmitted(false)
-    }, [section.markTime, fill])
-
-    function handleAnswerChange(i: number, value: string) {
-        setAnswers(prev => prev.map((a, idx) => idx === i ? value : a))
-    }
-
-    function handleSkipToggle(i: number) {
-        setSkipped(prev => prev.map((s, idx) => idx === i ? !s : s))
-        setAnswers(prev => prev.map((a, idx) => idx === i ? "" : a))
-    }
-
-    function handleTryAgain() {
-        setAnswers(sectionFillings.map(() => ""))
-        setSkipped(sectionFillings.map(() => false))
-        setSubmitted(false)
-    }
-
-    async function handleConfidence(confidence: number) {
-        if (!userInfo) {
-            return
-        }
-
-        await saveConfidence({confidence, section, floorId, practiceType: "fill", progress, setProgress, userInfo, setUserInfo})
-        onContinue()
-    }
-
-    if (loading) {
-        return <div className="p-5 bg-gray-900 rounded-2xl text-center text-gray-400 animate-pulse">Loading section...</div>
-    }
-
-    if (sectionFillings.length === 0) {
-        return (
-            <div className="p-5 bg-gray-900 rounded-2xl text-center">
-                <p className="text-gray-400 mb-3">No fills for this section.</p>
-                <button onClick={onContinue} className="p-2 px-6 rounded-full bg-blue-800 hover:bg-blue-900">Continue</button>
-            </div>
-        )
-    }
-
-    return (
-        <div className="p-5 bg-gray-900 rounded-2xl">
-            <h3 className="text-xl mb-3 text-center">Fill In The Blank</h3>
-            {!submitted ?
-                <div className="flex flex-col gap-3">
-                    {sectionFillings.map((f, i) => (
-                        <div key={i} className="flex flex-col gap-1">
-                            <label className="text-sm text-gray-400">{f.vttSectionSentenceBlank}</label>
-                            <div className="flex gap-2">
-                                <input
-                                    className={"w-full p-2 rounded-lg " + (skipped[i] ? "bg-gray-800 text-gray-500 cursor-not-allowed" : "bg-gray-700 text-white")}
-                                    value={answers[i] || ""}
-                                    disabled={skipped[i]}
-                                    onChange={(e) => handleAnswerChange(i, e.target.value)}
-                                    placeholder="Type your answer..."
-                                />
-                                <button type="button" onClick={() => handleSkipToggle(i)}
-                                    className={"px-3 rounded-lg text-sm shrink-0 " + (skipped[i] ? "bg-amber-700 hover:bg-amber-800" : "bg-gray-700 hover:bg-gray-600")}>
-                                    {skipped[i] ? "Skipped" : "Skip"}
-                                </button>
-                            </div>
-                        </div>
-                    ))}
-                    <button onClick={() => setSubmitted(true)} className="p-2 rounded-full bg-blue-800 hover:bg-blue-900 mt-2">Submit</button>
-                    {canExit &&
-                        <button onClick={onExit} className="p-2 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
-                    }
-                </div>
-                :
-                <div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <h4 className="text-sm text-gray-400 mb-2 text-center">Your Answer</h4>
-                            {sectionFillings.map((f, i) => (
-                                <p key={i} className={"p-2 rounded-lg mb-2 " + (skipped[i] ? "bg-gray-800" : isCloseMatch(answers[i] || "", f.vttSectionSentenceFilled) ? "bg-green-900/60" : "bg-red-900/60")}>
-                                    {skipped[i]
-                                        ? <span className="text-gray-500 italic">Skipped</span>
-                                        : answers[i] || <span className="text-gray-500 italic">No answer</span>}
-                                </p>
-                            ))}
-                        </div>
-                        <div>
-                            <h4 className="text-sm text-gray-400 mb-2 text-center">Correct Answer</h4>
-                            {sectionFillings.map((f, i) => (
-                                <p key={i} className="p-2 rounded-lg mb-2 bg-gray-700">{renderCorrectAnswer(f)}</p>
-                            ))}
-                        </div>
-                    </div>
-                    <GradingControls onTryAgain={handleTryAgain} onConfidence={handleConfidence} canExit={canExit} onExit={onExit}/>
-                </div>
-            }
-        </div>
-    )
-}
-
-function TextTest({floorId, section, sections, scriptText, cosScript, onScriptUpdated, progress, setProgress, userInfo, setUserInfo, onContinue, canExit, onExit}: {
-    floorId: string,
-    section: Marker,
-    sections: Marker[],
-    scriptText: string,
-    cosScript: CosScript | null,
-    onScriptUpdated: (newScriptText: string) => void,
-    progress: Progress | null,
-    setProgress: (p: Progress) => void,
-    userInfo: User | null,
-    setUserInfo: (u: User) => void,
-    onContinue: () => void,
-    canExit: boolean,
-    onExit: () => void
-}) {
-    const [answer, setAnswer] = useState("")
-    const [submitted, setSubmitted] = useState(false)
-
-    const {lower, upper} = getPrecedingSectionBounds(sections, section)
-    const correctText = getVtt(scriptText).filter(l => isLineInSection(l, lower, upper)).map(l => l.text).join(" ")
-
-    //fresh form whenever a new section comes up
-    useEffect(() => {
-        setAnswer("")
-        setSubmitted(false)
-    }, [section.markTime])
-
-    function handleTryAgain() {
-        setAnswer("")
-        setSubmitted(false)
-    }
-
-    async function handleConfidence(confidence: number) {
-        if (!userInfo) {
-            return
-        }
-
-        await saveConfidence({confidence, section, floorId, practiceType: "text", progress, setProgress, userInfo, setUserInfo})
-        onContinue()
-    }
-
-    if (correctText.trim().length === 0) {
-        return (
-            <div className="p-5 bg-gray-900 rounded-2xl text-center">
-                <p className="text-gray-400 mb-3">No script text for this section.</p>
-                <button onClick={onContinue} className="p-2 px-6 rounded-full bg-blue-800 hover:bg-blue-900">Continue</button>
-            </div>
-        )
-    }
-
-    return (
-        <div className="p-5 bg-gray-900 rounded-2xl">
-            {!submitted ?
-                <div className="flex flex-col gap-3">
-                    <h3 className="text-xl mb-1 text-center">Retype The Script</h3>
-                    <textarea
-                        className="w-full h-48 p-3 rounded-lg bg-gray-700 text-white resize-none"
-                        value={answer}
-                        onChange={(e) => setAnswer(e.target.value)}
-                        placeholder="Type out this section of the tour script from memory. Don't worry about matching it word-for-word - just get the key points down, then hit Submit to see how close you were."
-                    />
-                    <div className="flex justify-center gap-3">
-                        <button onClick={() => setSubmitted(true)} className="p-2 rounded-full bg-blue-800 hover:bg-blue-900">Submit</button>
-                        {canExit &&
-                            <button onClick={onExit} className="p-2 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
-                        }
-                    </div>
-                </div>
-                :
-                <AnswerReview
-                    answer={answer}
-                    correctText={correctText}
-                    section={section}
-                    sections={sections}
-                    scriptText={scriptText}
-                    cosScript={cosScript}
-                    onScriptUpdated={onScriptUpdated}
-                    onTryAgain={handleTryAgain}
-                    onConfidence={handleConfidence}
-                    canExit={canExit}
-                    onExit={onExit}
-                />
-            }
-        </div>
-    )
-}
-
-//shared results view once an answer (typed or transcribed) has been submitted - the score, the
-//side-by-side comparison, "Set as Script", and the grading footer. Used by both Text and Microphone practice.
-export function AnswerReview({answer, correctText, section, sections, scriptText, cosScript, onScriptUpdated, onTryAgain, onConfidence, canExit, onExit}: {
-    answer: string,
-    correctText: string,
-    section: Marker,
-    sections: Marker[],
-    scriptText: string,
-    cosScript: CosScript | null,
-    onScriptUpdated: (newScriptText: string) => void,
-    onTryAgain: () => void,
-    onConfidence: (confidence: number) => void,
-    canExit: boolean,
-    onExit: () => void
-}) {
-    const [settingScript, setSettingScript] = useState(false)
-    const [scriptSet, setScriptSet] = useState(false)
-
-    const score = computeMatchScore(answer, correctText)
-
-    async function handleSetAsScript() {
-        if (!cosScript) {
-            return
-        }
-
-        setSettingScript(true)
-        try {
-            const newScriptText = buildUpdatedScript(scriptText, sections, section, answer)
-            const storage = getStorage()
-            const scriptRef = ref(storage, cosScript.path)
-            const blob = new Blob([newScriptText], {type: "text/vtt"})
-            await uploadBytes(scriptRef, blob)
-            onScriptUpdated(newScriptText)
-            setScriptSet(true)
-        } catch (e) {
-            console.error(e)
-        } finally {
-            setSettingScript(false)
-        }
-    }
-
-    function handleTryAgain() {
-        setScriptSet(false)
-        onTryAgain()
-    }
-
-    return (
-        <div>
-            <div className="flex justify-between items-start mb-3 gap-3">
-                <div className="relative group inline-block">
-                    <button onClick={handleSetAsScript} disabled={settingScript || scriptSet}
-                        className={"text-sm px-3 py-1.5 rounded-full border shrink-0 " + (scriptSet ? "border-green-600 text-green-500 cursor-default" : "border-amber-500 text-amber-400 hover:bg-amber-500/10")}>
-                        {scriptSet ? "Script Updated" : "Set as Script"}
-                    </button>
-                    <div className="absolute left-0 top-full mt-2 w-72 p-3 rounded-lg bg-black text-xs text-gray-200 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
-                        Replaces this section of the tour script with what you just said/typed, so it's what shows for next time.
-                        <span className="block mt-1 text-amber-400 font-semibold">Warning: this action cannot be undone.</span>
-                        To go back to the default script, that has to be done from Settings.
-                    </div>
-                </div>
-                <div className="text-right shrink-0">
-                    <span className="text-2xl font-bold">{score}%</span>
-                    <span className="block text-xs text-gray-400">Match Score</span>
-                </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-                <div>
-                    <h4 className="text-sm text-gray-400 mb-2 text-center">Your Answer</h4>
-                    <p className="p-2 rounded-lg bg-gray-700 whitespace-pre-wrap">{answer || <span className="text-gray-500 italic">No answer</span>}</p>
-                </div>
-                <div>
-                    <h4 className="text-sm text-gray-400 mb-2 text-center">Script</h4>
-                    <p className="p-2 rounded-lg bg-gray-700 whitespace-pre-wrap">{correctText}</p>
-                </div>
-            </div>
-            <GradingControls onTryAgain={handleTryAgain} onConfidence={onConfidence} canExit={canExit} onExit={onExit}/>
-            {settingScript && <Loading text="Updating script..."/>}
-        </div>
-    )
-}
-
-//finds the [lower, upper) marker times that bound the section currentTime is currently in.
-//no markers at all, or no marker left after currentTime, results in an open (-Infinity/Infinity) bound.
-function getSectionBounds(sections: Marker[], currentTime: number): {lower: number, upper: number} {
-    if (sections.length === 0) {
-        return {lower: -Infinity, upper: Infinity}
-    }
-
-    const sortedSections = [...sections].sort((a, b) => a.markTime - b.markTime)
-    const passedSections = sortedSections.filter(m => m.markTime <= currentTime)
-    const nextSection = sortedSections.find(m => m.markTime > currentTime)
-
-    return {
-        lower: passedSections.length > 0 ? passedSections[passedSections.length - 1].markTime : -Infinity,
-        upper: nextSection ? nextSection.markTime : Infinity
-    }
-}
-
-//a marker's quiz covers what was just watched to reach it - from the previous marker (or the very start
-//of the video, if there isn't one) up to this marker - not the section coming up next.
-export function getPrecedingSectionBounds(sections: Marker[], section: Marker): {lower: number, upper: number} {
-    const sortedSections = [...sections].sort((a, b) => a.markTime - b.markTime)
-    const idx = sortedSections.findIndex(m => m.markTime === section.markTime)
-    const previous = idx > 0 ? sortedSections[idx - 1] : undefined
-
-    return {
-        lower: previous ? previous.markTime : -Infinity,
-        upper: section.markTime
-    }
-}
-
-//since sentence timing doesn't line up with section markers, a sentence that straddles the
-//boundary is assigned to whichever section holds the majority of its duration.
-export function isLineInSection(line: Line, lower: number, upper: number): boolean {
-    const overlap = Math.min(line.end, upper) - Math.max(line.start, lower)
-    if (overlap <= 0) {
-        return false
-    }
-
-    const lineDuration = line.end - line.start
-    return lineDuration <= 0 || overlap >= lineDuration / 2
-}
-
-//pads a VTT cue timestamp component - eg pad(4) -> "04", pad(4, 3) -> "004"
-function pad(n: number, len = 2): string {
-    return Math.max(0, Math.floor(n)).toString().padStart(len, "0")
-}
-
-function formatVttTime(totalSeconds: number): string {
-    const hours = Math.floor(totalSeconds / 3600)
-    const minutes = Math.floor((totalSeconds % 3600) / 60)
-    const seconds = Math.floor(totalSeconds % 60)
-    const millis = Math.round((totalSeconds - Math.floor(totalSeconds)) * 1000)
-    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}.${pad(millis, 3)}`
-}
-
-function linesToVtt(lines: Line[]): string {
-    const sorted = [...lines].sort((a, b) => a.start - b.start)
-    return "WEBVTT\n\n" + sorted.map(l => `${formatVttTime(l.start)} --> ${formatVttTime(l.end)}\n${l.text}\n`).join("\n")
-}
-
-//collapses every cue within the given section into a single new cue holding the retyped text, spanning
-//from the earliest cue's start to the latest cue's end, and leaves every other section's cues untouched.
-function buildUpdatedScript(fullVttText: string, sections: Marker[], section: Marker, newSectionText: string): string {
-    const lines = getVtt(fullVttText)
-    const {lower, upper} = getPrecedingSectionBounds(sections, section)
-    const sectionLines = lines.filter(l => isLineInSection(l, lower, upper))
-    const outsideLines = lines.filter(l => !isLineInSection(l, lower, upper))
-
-    if (sectionLines.length === 0) {
-        return fullVttText
-    }
-
-    const mergedLine: Line = {
-        start: Math.min(...sectionLines.map(l => l.start)),
-        end: Math.max(...sectionLines.map(l => l.end)),
-        text: newSectionText.trim()
-    }
-
-    return linesToVtt([...outsideLines, mergedLine])
-}
-
-function normalizeWords(text: string): string[] {
-    return text.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(Boolean)
-}
-
-//longest-common-subsequence of words against the script text, as a percentage of the script's word count -
-//out-of-order or missing words are penalized, but the exact phrasing/punctuation doesn't need to match.
-function computeMatchScore(userAnswer: string, correct: string): number {
-    const correctWords = normalizeWords(correct)
-    const userWords = normalizeWords(userAnswer)
-
-    if (correctWords.length === 0) {
-        return 100
-    }
-
-    const dp: number[][] = Array.from({length: userWords.length + 1}, () => new Array(correctWords.length + 1).fill(0))
-    for (let i = 1; i <= userWords.length; i++) {
-        for (let j = 1; j <= correctWords.length; j++) {
-            dp[i][j] = userWords[i - 1] === correctWords[j - 1]
-                ? dp[i - 1][j - 1] + 1
-                : Math.max(dp[i - 1][j], dp[i][j - 1])
-        }
-    }
-
-    return Math.round((dp[userWords.length][correctWords.length] / correctWords.length) * 100)
-}
-
-function ScriptHandler({vttText, sections, sectionLocked}: {vttText: string, sections: Marker[], sectionLocked: boolean}) {
-    const [searchParams, setSearchpParams] = useSearchParams()
+function ScriptHandler({vttText, sections, sectionLocked, currentSection, progress, onGoToMarker}: {vttText: string, sections: Marker[], sectionLocked: boolean, currentSection: Marker | null, progress: Progress | null, onGoToMarker: (marker: Marker) => void}) {
+    const [searchParams, setSearchParams] = useSearchParams()
+    const {tour} = useParams()
+    const navigate = useNavigate()
     const f = searchParams.get("f")
 
     const currentTime = Player.usePlayer((state) => state.currentTime) || 0
@@ -1249,23 +793,66 @@ function ScriptHandler({vttText, sections, sectionLocked}: {vttText: string, sec
     useEffect(() => {
         setLines(getVtt(vttText))
     }, [vttText])
-
+    
     const {lower, upper} = getSectionBounds(sections, currentTime)
     const visibleLines = lines.filter(line => isLineInSection(line, lower, upper))
 
+    //the button's target normally tracks wherever playback currently is - the next marker chronologically
+    //ahead of currentTime, whether that section's already been completed (reviewing) or not (the real next
+    //test). But it can never point past the mandatory boundary (the earliest not-yet-completed section) -
+    //without that cap, a momentary desync between sectionLocked and currentTime (eg. from scrubbing) would
+    //let this button jump straight over a required, unfinished section.
+    const boundary = getIncompleteBoundary(sections, progress)
+    const rawNext = [...sections].sort((a, b) => a.markTime - b.markTime).find(m => m.markTime > currentTime)
+    const nextMarker = boundary && (!rawNext || rawNext.markTime > boundary.markTime) ? boundary : rawNext
+    const nextFloorCode = f ? getNextFloorCode(f) : null
+
+    //locked on the mandatory boundary itself, which hasn't been completed - there's nothing left for this
+    //button to legitimately do until that test is finished (it's disabled rather than exiting/skipping it).
+    const disabled = sectionLocked && !!currentSection && !!boundary && currentSection.markTime === boundary.markTime
+
+    function handleNavClick() {
+        if (disabled) {
+            return
+        }
+        if (nextMarker) {
+            onGoToMarker(nextMarker)
+        } else if (nextFloorCode) {
+            setSearchParams({f: nextFloorCode})
+        } else {
+            navigate(`/progress/${tour}`)
+        }
+    }
+
+    const navLabel = disabled
+        ? "Finish This Section First"
+        : nextMarker
+            ? `Go To: ${nextMarker.markerName}`
+            : nextFloorCode
+                ? `Finish & Continue to ${floorNameDecoder(nextFloorCode)}`
+                : "Finish & View My Progress"
+
     return (
-        <div style={{background: "linear-gradient(180deg, #C65B11 0%, var(--t-orange, #F97316) 50%, #93440D 100%)"}} className="w-2/6 h-96 rounded-tr-2xl p-5 relative">
-            <h1 className="tracking-wider text-3xl font-bold">{floorNameDecoder(f || "")}</h1>
-            <div className="overflow-y-scroll h-64 w-full">
-                {lines ? visibleLines.map((line, i) => {
-                    return <ScriptLine currentTime={currentTime} key={i} line={line}/>
-                }) : <div className="h-64 animate-pulse bg-gray-500/50 rounded-lg"/>}
-            </div>
-            {sectionLocked &&
-                <div className="absolute inset-0 rounded-tr-2xl bg-gray-950/95 backdrop-blur-sm flex items-center justify-center text-center p-5 z-40">
-                    <p className="text-xl font-semibold tracking-wide">Answer this section down below to reveal the next part of the script</p>
+        <div style={{background: "linear-gradient(180deg, #C65B11 0%, var(--t-orange, #F97316) 50%, #93440D 100%)"}} className="w-2/6 h-96 rounded-tr-2xl p-5 relative flex flex-col">
+            <div className="relative flex-1 min-h-0 flex flex-col">
+                <h1 className="tracking-wider text-3xl font-bold shrink-0">{floorNameDecoder(f || "")}</h1>
+                <div className="overflow-y-scroll flex-1 min-h-0 w-full my-2">
+                    {lines ? visibleLines.map((line, i) => {
+                        return <ScriptLine currentTime={currentTime} key={i} line={line}/>
+                    }) : <div className="h-full animate-pulse bg-gray-500/50 rounded-lg"/>}
                 </div>
-            }
+                {sectionLocked &&
+                    <div className="absolute inset-0 rounded-tr-2xl bg-gray-950/95 backdrop-blur-sm flex items-center justify-center text-center p-5 z-40">
+                        <p className="text-xl font-semibold tracking-wide">Answer this section down below to reveal the next part of the script</p>
+                    </div>
+                }
+            </div>
+            <button onClick={handleNavClick} disabled={disabled} title={disabled ? "Complete this section's test below before moving on" : undefined}
+                className={"shrink-0 w-full mt-2 p-2.5 rounded-full text-sm font-semibold tracking-wide transition-colors flex items-center justify-center gap-2 " +
+                    (disabled ? "bg-gray-700 text-gray-400 cursor-not-allowed" : "bg-amber-900 hover:bg-amber-950")}>
+                {disabled && <FaLock className="text-xs"/>}
+                {navLabel}
+            </button>
         </div>
     )
 }
@@ -1305,4 +892,14 @@ function ScriptLine({line, currentTime, key}: {line: Line, currentTime: number, 
         </h2>
     )
 }
+//the order floors are worked through in - matches the carousel on the Home page. "b" (Slugworks) is the
+//last stop; anything else (eg. "e") isn't part of the guided progression.
 export const FLOOR_SEQUENCE: FloorCode[] = ["f1", "f2", "f3", "b"]
+
+export function getNextFloorCode(current: string): FloorCode | null {
+    const idx = FLOOR_SEQUENCE.indexOf(current as FloorCode)
+    if (idx === -1 || idx === FLOOR_SEQUENCE.length - 1) {
+        return null
+    }
+    return FLOOR_SEQUENCE[idx + 1]
+}

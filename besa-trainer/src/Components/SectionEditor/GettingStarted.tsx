@@ -135,7 +135,7 @@ export default function GettingStarted() {
                         <VisualFrame label="Highlighter mode - highlight one or more words per sentence">
                             <div className="bg-gray-700 rounded-xl p-3 text-sm leading-loose">
                                 Welcome to the <mark className="bg-amber-400/70 text-black rounded px-1">tour</mark>, my name
-                                is <mark className="bg-amber-400/70 text-black rounded px-1">Sam</mark> and I'll be your guide today.
+                                is <mark className="bg-amber-400/70 text-black rounded px-1">Sammie the slug</mark> and I'll be your guide today.
                             </div>
                             <div className="flex justify-center mt-3">
                                 <span className="text-xs px-3 py-1 rounded-full bg-amber-600 text-gray-950 font-semibold">Highlighter: On</span>

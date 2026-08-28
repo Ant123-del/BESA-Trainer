@@ -1,7 +1,7 @@
 //This function will decode a vtt script into something it can understand
 import { WebVTTParser } from "webvtt-parser"
 import { type CosScript, type Marker } from "./types"
-import { Loading } from "../Components/Edit"
+import { Loading } from "../Components/SectionEditor/Edit"
 import { getStorage, ref, uploadBytes } from "firebase/storage"
 import { useState } from "react"
 
@@ -82,8 +82,41 @@ export function linesToVtt(lines: Line[]): string {
     return "WEBVTT\n\n" + sorted.map(l => `${formatVttTime(l.start)} --> ${formatVttTime(l.end)}\n${l.text}\n`).join("\n")
 }
 
-//collapses every cue within the given section into a single new cue holding the retyped text, spanning
-//from the earliest cue's start to the latest cue's end, and leaves every other section's cues untouched.
+//splits retyped section text into sentences - newlines are treated as hard breaks (a script author's own
+//paragraphing), and within a paragraph a sentence ends at ./!/? followed by whitespace and a capital/digit/quote.
+function splitIntoSentences(text: string): string[] {
+    return text
+        .split(/\n+/)
+        .flatMap(paragraph => paragraph.split(/(?<=[.!?])\s+(?=[A-Z0-9"'])/))
+        .map(s => s.trim())
+        .filter(Boolean)
+}
+
+function wordCount(text: string): number {
+    return text.split(/\s+/).filter(Boolean).length
+}
+
+//distributes a section's fixed duration (taken from its original cues' span, ie. how long that part of the
+//video actually runs) across its retyped sentences, weighted by word count as a rough stand-in for how long
+//each one takes to say - so a longer sentence gets proportionally more of the section than a short one,
+//rather than every sentence (or the whole section) sharing one undifferentiated timestamp.
+function distributeTiming(sentences: string[], sectionStart: number, sectionDuration: number): Line[] {
+    const weights = sentences.map(s => Math.max(wordCount(s), 1))
+    const totalWeight = weights.reduce((a, b) => a + b, 0)
+
+    let cursor = sectionStart
+    return sentences.map((text, i) => {
+        const isLast = i === sentences.length - 1
+        const start = cursor
+        const end = isLast ? sectionStart + sectionDuration : cursor + (weights[i] / totalWeight) * sectionDuration
+        cursor = end
+        return {start, end, text}
+    })
+}
+
+//replaces every cue within the given section with newly-timed cues built from the retyped text - split into
+//sentences and spread proportionally across the section's original time span (earliest cue's start to latest
+//cue's end) - and leaves every other section's cues untouched.
 export function buildUpdatedScript(fullVttText: string, sections: Marker[], section: Marker, newSectionText: string): string {
     const lines = getVtt(fullVttText)
     const {lower, upper} = getPrecedingSectionBounds(sections, section)
@@ -94,13 +127,33 @@ export function buildUpdatedScript(fullVttText: string, sections: Marker[], sect
         return fullVttText
     }
 
-    const mergedLine: Line = {
-        start: Math.min(...sectionLines.map(l => l.start)),
-        end: Math.max(...sectionLines.map(l => l.end)),
-        text: newSectionText.trim()
+    const sectionStart = Math.min(...sectionLines.map(l => l.start))
+    const sectionEnd = Math.max(...sectionLines.map(l => l.end))
+    const sentences = splitIntoSentences(newSectionText)
+
+    const newLines: Line[] = sentences.length > 0
+        ? distributeTiming(sentences, sectionStart, sectionEnd - sectionStart)
+        : [{start: sectionStart, end: sectionEnd, text: newSectionText.trim()}]
+
+    return linesToVtt([...outsideLines, ...newLines])
+}
+
+//groups a script's cues by floor section (in marker order), for a plain read-through view - each group's
+//lines are whatever led up to that marker, same "majority overlap" boundary used everywhere else here.
+//No markers at all just returns the whole script as one unlabeled group.
+export function groupScriptBySections(fullVttText: string, sections: Marker[]): {title: string, lines: Line[]}[] {
+    const lines = getVtt(fullVttText)
+    if (sections.length === 0) {
+        return lines.length > 0 ? [{title: "Full Script", lines}] : []
     }
 
-    return linesToVtt([...outsideLines, mergedLine])
+    const sorted = [...sections].sort((a, b) => a.markTime - b.markTime)
+    return sorted
+        .map(marker => {
+            const {lower, upper} = getPrecedingSectionBounds(sorted, marker)
+            return {title: marker.markerName, lines: lines.filter(l => isLineInSection(l, lower, upper))}
+        })
+        .filter(group => group.lines.length > 0)
 }
 
 function normalizeWords(text: string): string[] {

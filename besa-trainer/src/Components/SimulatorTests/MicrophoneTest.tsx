@@ -3,7 +3,7 @@ import { FaMicrophone, FaStop } from "react-icons/fa"
 import { MoonLoader } from "react-spinners"
 import { AnswerReview, getPrecedingSectionBounds, getVtt, isLineInSection } from "../../Tools/ScriptDecoder"
 import { transcribeAudio } from "../../Tools/Fetch"
-import { Loading } from "../Edit"
+import { Loading } from "../SectionEditor/Edit"
 import { saveConfidence } from "../../Pages/Simulator"
 
 import type { CosScript, Marker, Progress, User } from "../../Tools/types"

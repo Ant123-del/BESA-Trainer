@@ -1,7 +1,7 @@
-import { type Marker, type Floor } from "../Tools/types";
+import { type Marker, type Floor, type Script } from "../../Tools/types";
 import { createPlayer, CaptionsButton, selectTime, selectVolume, usePlayer } from "@videojs/react"
 import { videoFeatures, Video } from "@videojs/react/video";
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from "react";
 import ContentLoader from "react-content-loader";
 import { FaPlay } from "react-icons/fa";
 import { FaPause } from "react-icons/fa";
@@ -10,10 +10,12 @@ import { HiMiniSpeakerWave } from "react-icons/hi2";
 import { FaPlus } from "react-icons/fa";
 import { FaDeleteLeft } from "react-icons/fa6";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
-import { db } from "../Tools/firestore";
-import { reconcileProgress } from "../Tools/Fetch";
+import { db } from "../../Tools/firestore";
+import { reconcileProgress } from "../../Tools/Fetch";
 import { useSearchParams } from "react-router-dom";
 import { FaTrash } from "react-icons/fa";
+import { FaStepForward } from "react-icons/fa";
+import { FaStepBackward } from "react-icons/fa";
 
 const Player = createPlayer({features: videoFeatures})
 
@@ -23,14 +25,28 @@ const Player = createPlayer({features: videoFeatures})
 export default function VideoEditor({floor, setFloor} : {floor: Floor, setFloor: Dispatch<SetStateAction<Floor | null>>}) {
     const [loaded, setLoaded] = useState(false)
     const [markers, setMarkers] = useState<Marker[]>([])
+    const [scriptLink, setScriptLink] = useState("")
+
+    useEffect(() => {
+        const scriptRef = doc(db, "training_data", "data_root", "scripts", floor.defScriptId)
+            getDoc(scriptRef).then((data) => {
+                if (data.exists()) {
+                    const e = data.data() as Script
+                    console.log(e.src)
+                    setScriptLink(e.src)
+                } else {
+                    setScriptLink("")
+                }
+            })
+    }, [floor.defScriptId])
 
     return (
         <div className="w-full mx-auto mt-5 relative">
             <Player.Provider>
                 <Player.Container>
-                    { !loaded && <ContentLoader className="w-full rounded-2xl absolute top-0 left-0 box-border" backgroundColor="#F59E0B"><rect x="0" y="0" className="w-full h-36" height="200"/></ContentLoader>}
-                    <Video src={floor.src} autoPlay muted className="rounded-2xl block mx-auto w-full h-96 object-cover" onLoadedData={() => setLoaded(true)}>
-
+                    { !loaded && <ContentLoader className="w-full rounded-2xl absolute top-0 left-0 box-border h-96" backgroundColor="#F59E0B"><rect x="0" y="0" className="w-full h-96"/></ContentLoader>}
+                    <Video src={floor.src} crossOrigin="anonymous" autoPlay muted className="rounded-2xl block mx-auto w-full h-96 object-cover" playsInline onLoadedData={() => setLoaded(true)}>
+                        {scriptLink && <track kind="captions" src={scriptLink} srcLang="en" label="English" default/>}
                     </Video>
                     <h2 className="tracking-wide text-center text-xl mt-5">Placing Markers For Sections</h2>
                     <CustomControls floor={floor} setFloor={setFloor} />
@@ -102,6 +118,20 @@ function CustomControls({floor, setFloor}: {floor: Floor, setFloor: Dispatch<Set
         reconcileProgress(floor.id, updatedMarkers.map(m => m.markTime))
     }
 
+    //renaming a section only ever touches markerName, never markTime - progress entries key off
+    //sectionTime (markTime), so unlike add/delete there's nothing here that could make an already-completed
+    //section look incomplete (or vice versa) - no reconcileProgress call needed.
+    async function handleRenameMarker(markTime: number, newName: string) {
+        const floorRef = doc(db, "training_data", "floors", floor.floorCode, floor.id)
+        const updatedMarkers = floor.markers.map(m => m.markTime === markTime ? {...m, markerName: newName} : m)
+        await updateDoc(floorRef, {markers: updatedMarkers})
+        setFloor(prev => {
+            let floorCopy = {...prev} as Floor
+            floorCopy.markers = updatedMarkers
+            return floorCopy
+        })
+    }
+
     async function handleDeleteMarker() {
         const floorRef = doc(db, "training_data", "floors", floor.floorCode, floor.id)
         if (onMarker && floor.markers) {
@@ -156,8 +186,6 @@ function CustomControls({floor, setFloor}: {floor: Floor, setFloor: Dispatch<Set
 
     const markerGradient = generateMarkerGradient(floor.markers, duration);
 
-
-
     return (
         <>
         <div className="bg-gray-500 rounded-2xl mt-3 text-center w-5/6 mx-auto">
@@ -181,6 +209,7 @@ function CustomControls({floor, setFloor}: {floor: Floor, setFloor: Dispatch<Set
                         style={{background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${progressPercentage}%, #4b5562 ${progressPercentage}%, #4b5562 100%)`}}
                     />
                 </div>
+                <span className="my-4 block">Warning! Adding or removing makers will reset everyone's progress for the floor.</span>
                 <div className="flex justify-start items-center gap-3 mx-auto">
                     <div className="flex justify-center items-center gap-2">
                         {/* Play or pause */}
@@ -202,6 +231,15 @@ function CustomControls({floor, setFloor}: {floor: Floor, setFloor: Dispatch<Set
                                 disabled={isMuted}
                                 onChange={({target}) => vol?.setVolume(parseFloat(target.value))}
                                 />
+                        </div>
+                        {/* Extra Scrubbing controls */}
+                        <div className="flex justify-center items-center gap-2">
+                            <div className="p-2 bg-gray-700 rounded-full hover:bg-gray-800 cursor-pointer" onClick={() => playBack?.seek(Math.max(currentTime - 0.1, 0))}>
+                                <FaStepBackward className="w-4 h-4 fill-white"/>
+                            </div>
+                            <div className="p-2 bg-gray-700 rounded-full hover:bg-gray-800 cursor-pointer" onClick={() => playBack?.seek(Math.min(currentTime + 0.1, duration))}>
+                                <FaStepForward className="w-4 h-4 fill-white"/>
+                            </div>
                         </div>
                     </div>
                     {/* Adding markers */}
@@ -237,32 +275,62 @@ function CustomControls({floor, setFloor}: {floor: Floor, setFloor: Dispatch<Set
             </div>
         </div>
             <h2 className="tracking-wide text-center text-xl mt-5">Sections</h2>
-                    <Sections floor={floor} setFloor={setFloor} onMarker={onMarker} handleDelete={handleDeleteMarker}/>
+                    <Sections floor={floor} onMarker={onMarker} handleDelete={handleDeleteMarker} handleRename={handleRenameMarker}/>
         </>
     )
 }
 
-function Sections({floor, setFloor, onMarker, handleDelete}: {floor: Floor, setFloor: Dispatch<SetStateAction<Floor | null>>, onMarker: Marker | null, handleDelete: () => Promise<void>}) {
-    
+function Sections({floor, onMarker, handleDelete, handleRename}: {floor: Floor, onMarker: Marker | null, handleDelete: () => Promise<void>, handleRename: (markTime: number, newName: string) => Promise<void>}) {
+
     return (
         <div className="bg-gray-500 w-5/6 mx-auto rounded-xl my-3 p-2">
+            <span>Click on the Section Title to change. Press Enter when done.</span>
             {floor.markers.length ? floor.markers.map((marker, i) => {
-                return <Section marker={marker} key={i} on={(marker.markTime == onMarker?.markTime ? true : false)} handleDelete={handleDelete}/>
+                return <Section marker={marker} key={i} on={(marker.markTime == onMarker?.markTime ? true : false)} handleDelete={handleDelete} handleRename={handleRename}/>
             }) : <span>Add Markers</span>}
         </div>
     )
 }
 
-function Section({marker, key, on, handleDelete}: {marker: Marker, key:number, on: boolean, handleDelete: () => Promise<void>}) {
+function Section({marker, key, on, handleDelete, handleRename}: {marker: Marker, key:number, on: boolean, handleDelete: () => Promise<void>, handleRename: (markTime: number, newName: string) => Promise<void>}) {
     const playback = Player.usePlayer(selectTime)
     const playActions = Player.usePlayer()
+    const [edit, setEdit] = useState(false)
+    const [editVal, setEditVal] = useState("")
+
+    function handleClick() {
+        setEditVal(marker.markerName)
+        setEdit(true)
+    }
+
+    //basically onsubmit
+    async function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+        if (e.key == "Enter") {
+            e.preventDefault();//prevents new line
+            setEdit(false)
+            await handleRename(marker.markTime, editVal)
+        }
+    }
+
     return (
-        <div key={key} className={"rounded-xl p-2 my-2 hover:bg-gray-700 flex justify-around items-center" + (on ? " bg-gray-800" : " bg-gray-600")} 
+        <div key={key} className={"rounded-xl p-2 my-2 hover:bg-gray-700 flex justify-between items-center" + (on ? " bg-gray-800" : " bg-gray-600")} 
             onClick={() => {
                 playback?.seek(marker.markTime)
                 playActions.pause()
                 }}>
-            <h3>{marker.markerName}: {formatTime(marker.markTime)}</h3>
+            <h3>
+                {/* This is the functionality to make the input appear */}
+                {!edit ? <span onClick={handleClick}>{marker.markerName}</span> : 
+                <input 
+                    type="text"
+                    autoFocus
+                    onBlur={() => setEdit(false)} 
+                    value={editVal}
+                    onChange={({target}) => setEditVal(target.value)}
+                    onKeyDown={handleKeyDown}
+                    className="w-28 px-2 bg-gray-900 rounded-full"/>
+                }: {formatTime(marker.markTime)}
+            </h3>
             <FaTrash className="fill-red-500" onClick={() => handleDelete()}/>
         </div>
     )

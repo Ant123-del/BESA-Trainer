@@ -29,3 +29,4 @@ dist-ssr
 
 ./besa-api/besa-trainer-api-firebase-adminsdk-fbsvc-f685a6ef51.json
 ./besa-api/.venv
+./besa-api/serviceAccountKey.json

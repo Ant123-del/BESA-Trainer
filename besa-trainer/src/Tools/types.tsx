@@ -1,8 +1,15 @@
+//"user" is a regular trainee account. "besa"/"besaLead" are claimed off the external BESA roster at
+//signup (see /signup-besa) - besaLead additionally always has admin privileges, and is the only tier
+//that can promote/demote other besa/besaLead accounts' admin status (see /manage-admins).
+export type AccountType = "user" | "besa" | "besaLead"
+
 export type User = {
     uid: string
     scriptPaths: CosScript[] // personalized scripts.
     admin: boolean
     progress: Progress[]// Have have id's of the progress
+    accountType: AccountType
+    besaName?: string // the roster name claimed at signup - only set when accountType isn't "user"
 }
 
 //will be used to keep track of personalized vll scripts

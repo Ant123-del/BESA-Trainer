@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Fill, Floor, Marker, Script, SuccessResponse } from "../Tools/types";
+import type { Fill, Floor, Marker, Script, SuccessResponse } from "../../Tools/types";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
-import { db } from "../Tools/firestore";
-import { CreateScript, getScript } from "../Tools/Fetch";
+import { db } from "../../Tools/firestore";
+import { CreateScript, getScript } from "../../Tools/Fetch";
 import { getStorage, ref, uploadBytes } from "firebase/storage";
-import { getVtt, type Line, BLANK_PLACEHOLDER, locateBlankRanges } from "../Tools/ScriptDecoder";
+import { getVtt, type Line, BLANK_PLACEHOLDER, locateBlankRanges } from "../../Tools/ScriptDecoder";
 import { Loading } from "./Edit";
 
 type Filling = Fill["fillings"][number]

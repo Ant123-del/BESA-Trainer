@@ -1,7 +1,8 @@
 import { useSearchParams, useParams, useNavigate, Link } from "react-router-dom";
 import { IoMdArrowRoundBack } from "react-icons/io";
 import { IoMdSettings } from "react-icons/io";
-import { floorNameDecoder, Loading } from "../Components/Edit";
+import { FaBook } from "react-icons/fa";
+import { floorNameDecoder, Loading } from "../Components/SectionEditor/Edit";
 import { useEffect, useRef, useState } from "react";
 import { createPlayer, selectTime, selectVolume, videoFeatures } from "@videojs/react";
 import { Video } from "@videojs/react/video";
@@ -14,7 +15,7 @@ import { MoonLoader } from "react-spinners";
 import ContentLoader from "react-content-loader";
 import { AiFillMuted } from "react-icons/ai";
 import { HiMiniSpeakerWave } from "react-icons/hi2";
-import { formatTime } from "../Components/VideoEditor";
+import { formatTime } from "../Components/SectionEditor/VideoEditor";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { v4 } from "uuid";
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
@@ -23,7 +24,8 @@ import { getSectionBounds, getVtt, isLineInSection, type Line } from "../Tools/S
 import MicrophoneTest from "../Components/SimulatorTests/MicrophoneTest";
 import { FillTest } from "../Components/SimulatorTests/FillTest";
 import { TextTest } from "../Components/SimulatorTests/TextTest";
-import SimulatorInfo from "../Components/SimulatorInfo";
+import SimulatorInfo from "../Components/SimulatorTests/SimulatorInfo";
+import ScriptViewer from "../Components/SimulatorTests/ScriptViewer";
 
 const Player = createPlayer({features: videoFeatures})
 
@@ -67,8 +69,13 @@ export default function Simulator() {
     const [needsPracticeTypeChoice, setNeedsPracticeTypeChoice] = useState(false)
     const [practiceTypePopup, setPracticeTypePopup] = useState(false)
     const [settingsPopup, setSettingsPopup] = useState(false)
+    const [scriptViewerOpen, setScriptViewerOpen] = useState(false)
     const [pendingPracticeType, setPendingPracticeType] = useState<PracticeTypes>(practiceType)
     const [settingsSaving, setSettingsSaving] = useState(false)
+
+    //regular (non-BESA) accounts never practice/test - they just watch the tour, so there's no practice
+    //type to choose and nothing below the video ever locks.
+    const isBesaAccount = userInfo?.accountType === "besa" || userInfo?.accountType === "besaLead"
 
     //retrives user data and tries to implement custom script
     useEffect(() => {
@@ -212,7 +219,9 @@ export default function Simulator() {
         playBack?.seek(marker.markTime)
         playerActions.pause()
         setCurrentSection(marker)
-        setSectionLocked(true)
+        if (isBesaAccount) {
+            setSectionLocked(true)
+        }
     }
 
     function toTitleCase(str: string): string {
@@ -232,7 +241,7 @@ export default function Simulator() {
     }
 
     function handleContinue() {
-        if (needsPracticeTypeChoice) {
+        if (needsPracticeTypeChoice && isBesaAccount) {
             setPracticeTypePopup(true)
         } else {
             setInitalCheck(false)
@@ -315,7 +324,12 @@ export default function Simulator() {
                         <IoMdArrowRoundBack/>
                         <span>Back</span>
                     </div>
-                    <IoMdSettings onClick={openSettings} className="fill-white hover:fill-gray-400 cursor-pointer w-5 h-5 mr-3"/>
+                    {Draft &&
+                        <FaBook onClick={() => setScriptViewerOpen(true)} title="Script Viewer" className="fill-white hover:fill-gray-400 cursor-pointer w-4 h-4 mr-3"/>
+                    }
+                    {isBesaAccount &&
+                        <IoMdSettings onClick={openSettings} className="fill-white hover:fill-gray-400 cursor-pointer w-5 h-5 mr-3"/>
+                    }
                 </div>
               </header>
               {/* Container for main simulator */}
@@ -335,35 +349,37 @@ export default function Simulator() {
                             onMouseOver={handleVideoHover} onMouseMove={handleVideoHover} onMouseOut={() => setPauseState(false)}
                             onClick={handleToggle} onLoadedData={() => setVideoLoaded(true)}>
                             </Video>
-                            <VideoControls sections={Draft.markers} progress={progress} sectionLocked={sectionLocked} currentSection={currentSection} setSectionLocked={setSectionLocked} setCurrentSection={setCurrentSection}/>
+                            <VideoControls sections={Draft.markers} progress={progress} sectionLocked={sectionLocked} currentSection={currentSection} setSectionLocked={setSectionLocked} setCurrentSection={setCurrentSection} isBesaAccount={isBesaAccount}/>
                             {pauseState && <div className="transition-all absolute top-0 left-0 rounded-tl-2xl bg-black/40 w-full h-96 z-30" style={{pointerEvents: "none"}}>
                                 {/* This is where the pause button will show when hovered over the video */}
                             </div>}
                         </div>
                         {/* Container for script / other  */}
-                        <ScriptHandler vttText={script || ""} sections={Draft.markers} sectionLocked={sectionLocked} currentSection={currentSection} progress={progress} onGoToMarker={goToMarker}/>
-                        
+                        <ScriptHandler vttText={script || ""} sections={Draft.markers} sectionLocked={sectionLocked} currentSection={currentSection} progress={progress} onGoToMarker={goToMarker} isBesaAccount={isBesaAccount}/>
+
                     </Player.Container>
                     {/* Below the video */}
-                    <div className="p-5">
-                        <h3 className="text-gray-500 text-sm mb-2">Practice type: {practiceType}</h3>
-                        {sectionLocked && currentSection &&
-                            <SectionTest
-                                floorId={Draft.id}
-                                section={currentSection}
-                                sections={Draft.markers}
-                                scriptText={script || ""}
-                                cosScript={cosScript}
-                                onScriptUpdated={setScript}
-                                practiceType={practiceType}
-                                progress={progress}
-                                setProgress={setProgress}
-                                userInfo={userInfo}
-                                setUserInfo={setUserInfo}
-                                setSectionLocked={setSectionLocked}
-                            />
-                        }
-                    </div>
+                    {isBesaAccount &&
+                        <div className="p-5">
+                            <h3 className="text-gray-500 text-sm mb-2">Practice type: {practiceType}</h3>
+                            {sectionLocked && currentSection &&
+                                <SectionTest
+                                    floorId={Draft.id}
+                                    section={currentSection}
+                                    sections={Draft.markers}
+                                    scriptText={script || ""}
+                                    cosScript={cosScript}
+                                    onScriptUpdated={setScript}
+                                    practiceType={practiceType}
+                                    progress={progress}
+                                    setProgress={setProgress}
+                                    userInfo={userInfo}
+                                    setUserInfo={setUserInfo}
+                                    setSectionLocked={setSectionLocked}
+                                />
+                            }
+                        </div>
+                    }
                     </>) :
                     // placeHolder
                     <p>No Video set up yet.</p> : 
@@ -371,9 +387,9 @@ export default function Simulator() {
                     <div className="w-full bg-gray-900">
                         <h2 className="text-light-blue-300 text-6xl tracking-wider my-10">Welcome to {floorNameDecoder(f || " the Simulation")}</h2>
                         <hr></hr>
-                        <SimulatorInfo/>
+                        {isBesaAccount ? <SimulatorInfo/> : <TourWelcomeInfo/>}
                         <div className="fixed bottom-0 right-0 p-3 flex justify-end items-center gap-3 text-2xl bg-gray-900 w-full">
-                            <span className="flex justify-center gap-2 items-center">Continue to Training <FaArrowRight/></span>
+                            <span className="flex justify-center gap-2 items-center">{isBesaAccount ? "Continue to Training" : "Continue to Tour"} <FaArrowRight/></span>
                             <button
                             className={"p-2 rounded-full" + (initialLoading ? " bg-blue-gray-400" : " bg-blue-800 hover:bg-blue-900")}
                             disabled={initialLoading}
@@ -446,10 +462,30 @@ export default function Simulator() {
                         </button>
                     </div>
                 </Loading>}
+
+              {/* Script Viewer - a plain read-through of the script, exits via the X or by clicking outside of it */}
+              {scriptViewerOpen && Draft &&
+                <ScriptViewer floor={Draft} myScript={script || ""} onClose={() => setScriptViewerOpen(false)}/>
+              }
         </div>
     )
 }
 
+
+//shown to regular (non-BESA) accounts instead of SimulatorInfo's practice-type breakdown - they're just
+//here to watch, not be tested.
+function TourWelcomeInfo() {
+    return (
+        <section className="p-5 pb-24 max-w-3/4 mx-auto text-center">
+            <h3 className="text-amber-500 text-3xl tracking-wide my-5">Take A Look Around</h3>
+            <p className="p-2 text-gray-300">
+                Sit back and watch the tour play through. Use the markers on the timeline below the video to
+                jump to any part you're curious about, and open the <FaBook className="inline mb-1"/> script
+                panel any time if you'd rather read along with what's being said.
+            </p>
+        </section>
+    )
+}
 
 //the single source of truth for "how far is this user actually allowed to go": the earliest section
 //that hasn't been completed yet under the given progress record. Nothing at or beyond this marker can
@@ -466,7 +502,7 @@ function getIncompleteBoundary(sections: Marker[], progress: Progress | null): M
     return sortedSections.find(m => !completedTimes.has(m.markTime))
 }
 
-function VideoControls({sections, progress, sectionLocked, currentSection, setSectionLocked, setCurrentSection}:{sections: Marker[], progress: Progress | null, sectionLocked: boolean, currentSection: Marker | null, setSectionLocked: (locked: boolean) => void, setCurrentSection: (section: Marker | null) => void}) {
+function VideoControls({sections, progress, sectionLocked, currentSection, setSectionLocked, setCurrentSection, isBesaAccount}:{sections: Marker[], progress: Progress | null, sectionLocked: boolean, currentSection: Marker | null, setSectionLocked: (locked: boolean) => void, setCurrentSection: (section: Marker | null) => void, isBesaAccount: boolean}) {
     const playerActions = Player.usePlayer()
     const isPaused = Player.usePlayer((state) => state.paused)
     const isMuted = Player.usePlayer((state) => state.muted)
@@ -491,13 +527,20 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
         }
     }
 
+    //regular accounts have nothing mandatory to complete, so there's no boundary to enforce.
     function getNextMarker(): Marker | undefined {
-        return getIncompleteBoundary(sections, progress)
+        return isBesaAccount ? getIncompleteBoundary(sections, progress) : undefined
     }
 
     //clicking a completed marker (to review it) or the next marker (to jump straight into it) locks the
-    //player into that section's test. anything further ahead than "next" can't be jumped to.
+    //player into that section's test. anything further ahead than "next" can't be jumped to. Regular
+    //accounts can jump to any marker freely - there's no test to lock into.
     function handleMarkerClick(marker: Marker) {
+        if (!isBesaAccount) {
+            playBack?.seek(marker.markTime)
+            return
+        }
+
         const nextMarker = getNextMarker()
         const completed = progress?.progress.some(p => p.sectionTime === marker.markTime) ?? false
         const isNext = nextMarker?.markTime === marker.markTime
@@ -511,7 +554,7 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
         setSectionLocked(true)
     }
 
-    //ensures that will not go past the progress.
+    //ensures that will not go past the progress. Regular accounts can scrub anywhere.
     function handleScub( e: React.ChangeEvent<HTMLInputElement>) {
         const newTime = parseFloat(e.target.value)
         const nextMarker = getNextMarker()
@@ -528,8 +571,12 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
 
     //ensures video doesnt play beyond nextmarker, but if undefined, then it is okay. Also re-checked whenever
     //progress itself changes (eg. switching practice type mid-session swaps in a different completion history,
-    //which can mean the playhead is now sitting past that type's next unanswered marker).
+    //which can mean the playhead is now sitting past that type's next unanswered marker). Regular accounts
+    //never lock at all - they're just watching, not being tested.
     useEffect(() => {
+        if (!isBesaAccount) {
+            return
+        }
         const nextMarker = getNextMarker()
         if (nextMarker && currentTime >= nextMarker.markTime) {
             playBack?.seek(nextMarker.markTime)
@@ -547,7 +594,7 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
         if (!isDeliberateReview) {
             setSectionLocked(false)
         }
-    }, [currentTime, progress, currentSection])
+    }, [currentTime, progress, currentSection, isBesaAccount])
 
     return (
         <>
@@ -584,7 +631,7 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
                 <span>{formatTime(currentTime)} / {formatTime(duration)}</span>
                 <div className="w-full relative">
                     {/* Markers and points */}
-                    <ShowSections sections={sections} progress={progress} nextMarker={getNextMarker()} onMarkerClick={handleMarkerClick}/>
+                    <ShowSections sections={sections} progress={progress} nextMarker={getNextMarker()} onMarkerClick={handleMarkerClick} isBesaAccount={isBesaAccount}/>
                     <input
                         className="w-full h-3 bg-gray-600 rounded-full appearance-none cursor-pointer accent-amber-800 
                         hover:accent-amber-900 focus:outline-none [&::-webkit-slider-runnable-track]:bg-transparent z-30"
@@ -606,12 +653,16 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
     )
 }
 
-function ShowSections({sections, progress, nextMarker, onMarkerClick}: {sections: Marker[], progress: Progress | null, nextMarker: Marker | undefined, onMarkerClick: (m: Marker) => void}) {
+function ShowSections({sections, progress, nextMarker, onMarkerClick, isBesaAccount}: {sections: Marker[], progress: Progress | null, nextMarker: Marker | undefined, onMarkerClick: (m: Marker) => void, isBesaAccount: boolean}) {
     const duration = Player.usePlayer((state) => state.duration) || 1
     const currentTime = Player.usePlayer((state) => state.currentTime) || 0
     const [onMarker, setOnMarker] = useState<Marker | null>(null)
 
+    //regular accounts can jump to any marker - only BESA accounts have a mandatory, in-order progression.
     function isClickable(m: Marker): boolean {
+        if (!isBesaAccount) {
+            return true
+        }
         const completed = progress?.progress.some(p => p.sectionTime === m.markTime) ?? false
         return completed || nextMarker?.markTime === m.markTime
     }
@@ -779,7 +830,7 @@ export async function saveConfidence({confidence, section, floorId, practiceType
 }
 
 
-function ScriptHandler({vttText, sections, sectionLocked, currentSection, progress, onGoToMarker}: {vttText: string, sections: Marker[], sectionLocked: boolean, currentSection: Marker | null, progress: Progress | null, onGoToMarker: (marker: Marker) => void}) {
+function ScriptHandler({vttText, sections, sectionLocked, currentSection, progress, onGoToMarker, isBesaAccount}: {vttText: string, sections: Marker[], sectionLocked: boolean, currentSection: Marker | null, progress: Progress | null, onGoToMarker: (marker: Marker) => void, isBesaAccount: boolean}) {
     const [searchParams, setSearchParams] = useSearchParams()
     const {tour} = useParams()
     const navigate = useNavigate()
@@ -801,15 +852,17 @@ function ScriptHandler({vttText, sections, sectionLocked, currentSection, progre
     //ahead of currentTime, whether that section's already been completed (reviewing) or not (the real next
     //test). But it can never point past the mandatory boundary (the earliest not-yet-completed section) -
     //without that cap, a momentary desync between sectionLocked and currentTime (eg. from scrubbing) would
-    //let this button jump straight over a required, unfinished section.
-    const boundary = getIncompleteBoundary(sections, progress)
+    //let this button jump straight over a required, unfinished section. Regular accounts have no such
+    //boundary - the button just always tracks the next chapter chronologically.
+    const boundary = isBesaAccount ? getIncompleteBoundary(sections, progress) : undefined
     const rawNext = [...sections].sort((a, b) => a.markTime - b.markTime).find(m => m.markTime > currentTime)
     const nextMarker = boundary && (!rawNext || rawNext.markTime > boundary.markTime) ? boundary : rawNext
     const nextFloorCode = f ? getNextFloorCode(f) : null
 
     //locked on the mandatory boundary itself, which hasn't been completed - there's nothing left for this
     //button to legitimately do until that test is finished (it's disabled rather than exiting/skipping it).
-    const disabled = sectionLocked && !!currentSection && !!boundary && currentSection.markTime === boundary.markTime
+    //Never applies to regular accounts - nothing they do ever locks.
+    const disabled = isBesaAccount && sectionLocked && !!currentSection && !!boundary && currentSection.markTime === boundary.markTime
 
     function handleNavClick() {
         if (disabled) {
@@ -819,8 +872,10 @@ function ScriptHandler({vttText, sections, sectionLocked, currentSection, progre
             onGoToMarker(nextMarker)
         } else if (nextFloorCode) {
             setSearchParams({f: nextFloorCode})
-        } else {
+        } else if (isBesaAccount) {
             navigate(`/progress/${tour}`)
+        } else {
+            navigate("/")
         }
     }
 
@@ -830,7 +885,9 @@ function ScriptHandler({vttText, sections, sectionLocked, currentSection, progre
             ? `Go To: ${nextMarker.markerName}`
             : nextFloorCode
                 ? `Finish & Continue to ${floorNameDecoder(nextFloorCode)}`
-                : "Finish & View My Progress"
+                : isBesaAccount
+                    ? "Finish & View My Progress"
+                    : "Finish Tour"
 
     return (
         <div style={{background: "linear-gradient(180deg, #C65B11 0%, var(--t-orange, #F97316) 50%, #93440D 100%)"}} className="w-2/6 h-96 rounded-tr-2xl p-5 relative flex flex-col">

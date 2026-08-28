@@ -13,6 +13,7 @@ import { db } from "../Tools/firestore"
 
 import { CiLogout } from "react-icons/ci";
 import { MdEdit } from "react-icons/md";
+import { FaUserShield } from "react-icons/fa";
 
 const navClass = "h-fit text-sm"
 
@@ -68,11 +69,17 @@ export default function Header(): JSX.Element {
         await signOut(getFirebaseAuth())
     }
 
+    //BESA/BESA Lead accounts see the "BESA Trainer" brand; everyone else (logged out, or a regular
+    //user account) sees "BESA Resources" - matches the Home page's own title split.
+    const brandName = userData && (userData.accountType === "besa" || userData.accountType === "besaLead")
+        ? "BESA Trainer"
+        : "BESA Resources"
+
     return (
         <header className={"flex h-16 w-screen items-center justify-around border-b-2 border-double border-gray-500 bg-white text-blue-900 top-0 z-50 fixed"}>
         <div className="flex items-center justify-center gap-5 font-sans text-3xl font-semibold tracking-wide">
             <img src={Logo} className="w-10" alt="" width={40} height={40} />
-            <span>BESA-Trainer</span>
+            <span>{brandName}</span>
         </div>
         <nav className="flex h-fit justify-center items-center gap-x-10 text-sm">
             <NavLink className={navClass} to="/">
@@ -102,9 +109,14 @@ export default function Header(): JSX.Element {
                             <span>Profile</span>
                         </NavLink>
                         {userData?.admin && (
-                        <NavLink to={"/section-editor"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-gray-400 hover:brightness-75 bg-white"}>
+                        <NavLink to={"/section-editor/getting-started"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-gray-400 hover:brightness-75 bg-white"}>
                             <MdEdit className="border-solid rounded-full border-2 border-gray-300 w-5 h-5 fill-blue-900 p-2 box-content"/>
                             <span>Edit Sections</span>
+                        </NavLink>)}
+                        {userData?.accountType === "besaLead" && (
+                        <NavLink to={"/manage-admins"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-gray-400 hover:brightness-75 bg-white"}>
+                            <FaUserShield className="border-solid rounded-full border-2 border-gray-300 w-5 h-5 fill-blue-900 p-2 box-content"/>
+                            <span>Manage Admins</span>
                         </NavLink>)}
                     </div>
                 </div>

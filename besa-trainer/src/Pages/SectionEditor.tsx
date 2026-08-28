@@ -1,11 +1,6 @@
-import { NavLink, Outlet, useNavigate, useSearchParams } from "react-router-dom";
+import { NavLink, Outlet, useSearchParams } from "react-router-dom";
 import Header from "../Components/Header";
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
-import { onAuthStateChanged, type User } from "firebase/auth";
-import type { User as CustomUser } from "../Tools/types";
-import { getFirebaseAuth } from "../Tools/firebase";
-import { doc, getDoc } from "firebase/firestore";
-import { db } from "../Tools/firestore";
 
 import { IoMdExit } from "react-icons/io";
 import { LuNewspaper } from "react-icons/lu";
@@ -17,36 +12,9 @@ import { FaHandshakeSimple } from "react-icons/fa6";
 
 
 
+//admin access is enforced by RequireAccess (see App.tsx) before this ever mounts.
 export default function SectionEditor() {
-    const [user, setUser] = useState<User | null>(null)
-    const [userData, setUserData] = useState<CustomUser | null>(null)
     const [expand, setExpand] = useState(true)
-    
-    const navigate = useNavigate()
-
-    useEffect(() => {
-        //getting information
-        const auth = getFirebaseAuth()
-        const unsub = onAuthStateChanged(auth, (firebaseUser) => {
-            setUser(firebaseUser)
-            if(firebaseUser) {
-                const docRef = doc(db, "training_data", "data_root", "users", firebaseUser.uid)
-                getDoc(docRef).then((docSnap) => {
-                    if(docSnap.exists()) {
-                        const data = docSnap.data() as CustomUser
-                        //user needs admin privilages to be in section editor
-                        if (!data.admin) {
-                            navigate("/")
-                        }
-                        setUserData(data)
-                    } else {
-                        console.error("No user found with uuid")
-                    }
-                })
-            }
-        })
-        return unsub
-    }, [])
 
     return (
         <>

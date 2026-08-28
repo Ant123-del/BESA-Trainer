@@ -5,7 +5,7 @@ import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/
 import { db } from "../Tools/firestore"
 import { MoonLoader } from "react-spinners"
 import Header from "../Components/Header"
-import { floorNameDecoder } from "../Components/Edit"
+import { floorNameDecoder } from "../Components/SectionEditor/Edit"
 import { FLOOR_SEQUENCE, toDate } from "./Simulator"
 import type { Floor, FloorCode, PracticeTypes, Progress as ProgressEntry, User } from "../Tools/types"
 

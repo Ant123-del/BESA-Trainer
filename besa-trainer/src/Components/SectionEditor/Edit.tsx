@@ -2,15 +2,15 @@ import { getAuth, onAuthStateChanged, type Auth } from "firebase/auth"
 import { v4 as uuid4 } from "uuid" 
 import { useEffect, useState, type ChangeEvent, type Dispatch, type DragEvent, type JSX, type SetStateAction, type SubmitEvent } from "react"
 import { useSearchParams } from "react-router-dom"
-import { db, deleteDraftFloor, setCurrentFloorDraft } from "../Tools/firestore"
+import { db, deleteDraftFloor, setCurrentFloorDraft } from "../../Tools/firestore"
 import { collection, doc, getDoc, getDocs, limit, query, setDoc, where } from "firebase/firestore"
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage"
-import type { Floor, FloorCode, Script } from "../Tools/types"
+import type { Floor, FloorCode, Script } from "../../Tools/types"
 import {PulseLoader} from 'react-spinners'
 import ContentLoader from 'react-content-loader'
 
 import { MdFileUpload } from "react-icons/md";
-import { getFirebaseAuth } from "../Tools/firebase"
+import { getFirebaseAuth } from "../../Tools/firebase"
 import VideoEditor from "./VideoEditor"
 import EditScript from "./EditScript"
 
@@ -404,7 +404,7 @@ function DraftCard({floorInfo, key, selected, setSelected} : {floorInfo:Floor, k
     return (
         <div className={"bg-gray-600 rounded-2xl w-1/2 p-2 hover:brightness-75 text-gray-200 relative" + (selected?.id && selected.id == floorInfo.id ? " brightness-50" : "")} key={key} onClick={() => setSelected(floorInfo)}>
             <video className="w-full h-96 rounded-2xl object-cover border-b-amber-700 border-b-4 border-b-solid" src={floorInfo.src} preload="metadata" onLoadedData={() => setLoaded(true)}/>
-            { !loaded && <ContentLoader className="w-full rounded-2xl absolute top-0 left-0 p-2 box-border" backgroundColor="#F59E0B"><rect x="0" y="0" className="w-full h-36" height="200"/></ContentLoader>}
+            { !loaded && <ContentLoader className="w-full h-96 rounded-2xl absolute top-0 left-0 p-2 box-border" backgroundColor="#F59E0B"><rect x="0" y="0" className="w-full h-96"/></ContentLoader>}
             <div className="flex mt-3 justify-between items-center">
                 <h2 className="text-lg">{floorInfo.draftName}</h2>
                 {floorInfo.current ? <p className="p-1 bg-amber-800 rounded-full">Default</p> : <p></p>}

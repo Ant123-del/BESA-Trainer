@@ -141,7 +141,8 @@ function EmailPasswordSignUp(): JSX.Element {
             uid: userCredential.user.uid,
             scriptPaths: [],
             admin: false,
-            progress: []
+            progress: [],
+            accountType: "user"
         }
         await createUserDoc(user)
 
@@ -207,6 +208,12 @@ function EmailPasswordSignUp(): JSX.Element {
             </p>
             <div className="separator">OR</div>
             <GoogleSignInButton />
+            <p className="text-center mt-5 text-gray-700">
+            Are you a BESA?{" "}
+            <Link to="/signup-besa" className="text-blue-900 font-semibold">
+                Sign Up as BESA
+            </Link>
+            </p>
         </form>
         </div>
     )

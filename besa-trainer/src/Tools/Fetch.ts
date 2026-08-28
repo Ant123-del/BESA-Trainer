@@ -1,7 +1,87 @@
 import { getAuth } from "firebase/auth"
-import type { SuccessResponse } from "./types"
+import type { AccountType, SuccessResponse } from "./types"
 
 const url = "http://127.0.0.1:8000/"
+
+export type RosterEntry = {
+    name: string
+    tier: Extract<AccountType, "besa" | "besaLead">
+}
+
+//the BESA names not already claimed by an account here - public/unauthenticated since it's needed
+//before an account (and thus an ID token) exists yet, from the /signup-besa picker.
+export async function getBesaRoster(): Promise<RosterEntry[] | void> {
+    try {
+        const response = await fetch(url + "besa-roster")
+        if (!response.ok) {
+            console.error(response.status)
+            return
+        }
+        const data = await response.json() as {success: boolean, roster: RosterEntry[]}
+        return data.roster
+    } catch (e) {
+        console.error(e)
+    }
+}
+
+export type BesaAccount = {
+    uid: string
+    email: string
+    besaName?: string
+    accountType: AccountType
+    admin: boolean
+}
+
+//BESA Lead only - every besa/besaLead account here, for the admin-management page.
+export async function getBesaAccounts(): Promise<BesaAccount[] | void> {
+    try {
+        const auth = getAuth()
+        const user = auth.currentUser
+        if (!user) {
+            return console.error("not logged in")
+        }
+
+        const idToken = await user.getIdToken()
+        const response = await fetch(url + "besa-accounts", {
+            headers: {"Authorization": `Bearer ${idToken}`}
+        })
+        if (!response.ok) {
+            console.error(response.status)
+            return
+        }
+        const data = await response.json() as {success: boolean, accounts: BesaAccount[]}
+        return data.accounts
+    } catch (e) {
+        console.error(e)
+    }
+}
+
+//BESA Lead only - grants or revokes admin on another besa/besaLead account.
+export async function setAdminStatus(targetUid: string, admin: boolean): Promise<SuccessResponse | void> {
+    try {
+        const auth = getAuth()
+        const user = auth.currentUser
+        if (!user) {
+            return console.error("not logged in")
+        }
+
+        const idToken = await user.getIdToken()
+        const response = await fetch(url + "set-admin-status", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${idToken}`
+            },
+            body: JSON.stringify({targetUid, admin})
+        })
+        if (!response.ok) {
+            console.error(response.status)
+        }
+        return await response.json() as SuccessResponse
+    } catch (e) {
+        console.error(e)
+    }
+}
 
 export async function CreateScript(floorId: string, scriptId: string, aiModel: "chirp" | "gemini" = "chirp") {
     try {

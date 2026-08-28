@@ -62,8 +62,121 @@ def require_admin(user: dict = Depends(get_current_user)):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin priviledges needed"
         )
-    
+
     return user
+
+
+#stricter than require_admin - a besa account that's been promoted to admin still isn't a besaLead,
+#and only besaLeads can see/manage the roster of who else has admin.
+def require_besa_lead(user: dict = Depends(get_current_user)):
+    user_id = user.get("uid")
+    db = firestore.client()
+    user_doc = db.collection("training_data").document("data_root").collection("users").document(user_id).get()
+
+    if not user_doc.exists or user_doc.to_dict().get("accountType") != "besaLead":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="BESA Lead priviledges needed"
+        )
+
+    return user
+
+
+# ---- BESA roster (besa-app project) ----
+# besa-app is a separate Firebase project holding the club's own member roster at /Besas/{id} - a
+# second, named Admin SDK app talks to it, kept apart from the default app (this project)
+# initialized above. Each doc: {id, name, email, status, role, supportedTourIds?, officeHours}.
+# TODO: BESA_APP_CRED_PATH needs a service-account JSON for besa-app (same idea as
+# FIREBASE_CRED_PATH above) dropped somewhere under besa-api/ and pointed to via .env.
+BESA_APP_CRED_PATH = os.getenv("BESA_APP_CRED_PATH")
+BESA_ROSTER_COLLECTION = os.getenv("BESA_ROSTER_COLLECTION", "Besas")
+BESA_ROSTER_NAME_FIELD = os.getenv("BESA_ROSTER_NAME_FIELD", "name")
+BESA_ROSTER_ROLE_FIELD = os.getenv("BESA_ROSTER_ROLE_FIELD", "role")
+BESA_ROSTER_LEAD_VALUE = os.getenv("BESA_ROSTER_LEAD_VALUE", "BESA Lead")
+BESA_ROSTER_STATUS_FIELD = os.getenv("BESA_ROSTER_STATUS_FIELD", "status")
+BESA_ROSTER_ACTIVE_VALUE = os.getenv("BESA_ROSTER_ACTIVE_VALUE", "active")
+
+_besa_app = None
+
+def _get_besa_app_db():
+    global _besa_app
+    if not BESA_APP_CRED_PATH:
+        return None
+    if _besa_app is None:
+        besa_cred = credentials.Certificate(BESA_APP_CRED_PATH)
+        _besa_app = firebase_admin.initialize_app(besa_cred, name="besa-app")
+    return firestore.client(_besa_app)
+
+
+@app.get("/besa-roster")
+def besaRoster():
+    besa_db = _get_besa_app_db()
+    if besa_db is None:
+        raise HTTPException(status_code=503, detail="BESA roster isn't configured yet (missing BESA_APP_CRED_PATH).")
+
+    #every active roster entry, tagged besaLead/besa based on its role field
+    roster = []
+    for entry in besa_db.collection(BESA_ROSTER_COLLECTION).stream():
+        data = entry.to_dict() or {}
+        if data.get(BESA_ROSTER_STATUS_FIELD) != BESA_ROSTER_ACTIVE_VALUE:
+            continue
+        name = data.get(BESA_ROSTER_NAME_FIELD)
+        if not name:
+            continue
+        tier = "besaLead" if data.get(BESA_ROSTER_ROLE_FIELD) == BESA_ROSTER_LEAD_VALUE else "besa"
+        roster.append({"name": name, "tier": tier})
+
+    #names already claimed by an account in this project get filtered out of the picker
+    db = firestore.client()
+    claimed = {
+        u.to_dict().get("besaName")
+        for u in db.collection("training_data").document("data_root").collection("users").stream()
+        if (u.to_dict() or {}).get("besaName")
+    }
+
+    available = [r for r in roster if r["name"] not in claimed]
+    return {"success": True, "roster": available}
+
+
+class SetAdminStatusRequest(BaseModel):
+    targetUid: str
+    admin: bool
+
+
+@app.post("/set-admin-status")
+def setAdminStatus(request_data: SetAdminStatusRequest, lead_user: dict = Depends(require_besa_lead)):
+    db = firestore.client()
+    target_ref = db.collection("training_data").document("data_root").collection("users").document(request_data.targetUid)
+    target_doc = target_ref.get()
+
+    if not target_doc.exists or target_doc.to_dict().get("accountType") not in ("besa", "besaLead"):
+        raise HTTPException(status_code=404, detail="No BESA account found with that id.")
+
+    target_ref.update({"admin": request_data.admin})
+    return {"success": True, "floorId": "", "message": "Admin status updated."}
+
+
+@app.get("/besa-accounts")
+def besaAccounts(lead_user: dict = Depends(require_besa_lead)):
+    db = firestore.client()
+    accounts = []
+    for u in db.collection("training_data").document("data_root").collection("users").stream():
+        data = u.to_dict() or {}
+        if data.get("accountType") not in ("besa", "besaLead"):
+            continue
+        try:
+            email = auth.get_user(u.id).email or ""
+        except Exception:
+            email = ""
+        accounts.append({
+            "uid": u.id,
+            "email": email,
+            "besaName": data.get("besaName"),
+            "accountType": data.get("accountType"),
+            "admin": bool(data.get("admin")),
+        })
+
+    return {"success": True, "accounts": accounts}
 
 app.add_middleware(
     CORSMiddleware,
@@ -256,7 +369,9 @@ def transcribeAudio(request_data: TranscribeRequest, user: dict = Depends(get_cu
             "Return ONLY the raw transcript text - no labels, timestamps, speaker names, or extra commentary."
         )
 
-        print("Transcribing recording via chirp")
+        #the voice test needs fast turnaround for a short answer clip, unlike script generation's Chirp 3
+        #batch job (built for a full-length narration track) - so this always transcribes via Gemini.
+        print("Transcribing recording via Gemini")
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=[gemini_file, prompt]

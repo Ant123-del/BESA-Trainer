@@ -1,7 +1,9 @@
 import { getFirestore, setDoc, doc, collection, getDoc, writeBatch, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
 import { getFirebaseApp } from "./firebase";
-import type { CosScript, Floor, FloorCode, User } from "./types";
-import { deleteObject, getStorage, ref } from "firebase/storage";
+import type { CosScript, Floor, Script, User } from "./types";
+import { deleteObject, getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
+import { v4 as uuidv4 } from "uuid";
+import { getScript } from "./Fetch";
 
 const app = getFirebaseApp()
 export const db = getFirestore(app)
@@ -86,6 +88,40 @@ export async function removeCustomScript(uid: string, scriptPaths: CosScript[], 
     const newScriptPaths = scriptPaths.filter(s => s.id !== target.id)
     await updateDoc(doc(db, "training_data", "data_root", "users", uid), {scriptPaths: newScriptPaths})
     return newScriptPaths
+}
+
+//finds this floor's personal script copy for the user, creating one from the default (or repairing a
+//corrupted entry missing its src) if none exists yet - shared by the Simulator's practice flow and the
+//Read Script page so both stay in sync on how a personal copy gets made.
+export async function ensurePersonalScript(uid: string, scriptPaths: CosScript[], floor: Floor): Promise<{cosScript: CosScript, scriptText: string, scriptPaths: CosScript[]}> {
+    const existing = scriptPaths.find(s => s.floorCode === floor.floorCode)
+    if (existing?.src) {
+        return {cosScript: existing, scriptText: await getScript(existing.src) || "", scriptPaths}
+    }
+
+    const scriptDocSnap = await getDoc(doc(db, "training_data/data_root/scripts/" + floor.defScriptId))
+    const scriptDoc = scriptDocSnap.data() as Script
+
+    const copyScriptId = uuidv4()
+    const storage = getStorage()
+    const scriptPath = "scripts/" + copyScriptId
+    const scriptRef = ref(storage, scriptPath)
+    const copy = await getScript(scriptDoc.src) as string
+    const copyBlob = new Blob([copy], {type: "text/vtt"})
+    const snap = await uploadBytes(scriptRef, copyBlob)
+
+    const newCosScript: CosScript = {
+        path: scriptPath,
+        src: await getDownloadURL(snap.ref),
+        floorCode: floor.floorCode,
+        id: copyScriptId,
+        isPublic: false,
+        scriptDeviationId: scriptDoc.id
+    }
+    //drops any malformed entry for this floor (missing src) rather than leaving it stuck alongside the new one
+    const newScriptPaths = [...scriptPaths.filter(s => s.floorCode !== floor.floorCode), newCosScript]
+    await updateDoc(doc(db, "training_data", "data_root", "users", uid), {scriptPaths: newScriptPaths})
+    return {cosScript: newCosScript, scriptText: copy, scriptPaths: newScriptPaths}
 }
 
 export async function deleteDraftFloor(floor: Floor) {

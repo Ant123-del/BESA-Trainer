@@ -6,6 +6,7 @@ import Profile from './Pages/Profile'
 import SectionEditor from './Pages/SectionEditor'
 import Edit from './Components/SectionEditor/Edit'
 import Simulator from './Pages/Simulator'
+import ReadScript from './Pages/ReadScript'
 import MyProgress from './Pages/Progress'
 import { createPlayer, videoFeatures } from '@videojs/react'
 import GettingStarted from './Components/SectionEditor/GettingStarted'
@@ -30,6 +31,7 @@ const router = createBrowserRouter(createRoutesFromChildren(
     <Route path='/simulator/:tour' element={<Player.Provider><Simulator/></Player.Provider>}>
       <Route path='general' element={<div></div>}/>
     </Route>,
+    <Route path='/read-script/:tour' element={<RequireAccess level="besa"><ReadScript/></RequireAccess>}/>,
     <Route path='/questions/:type' element={<QuestionSimulator/>}>
       <Route path='student-life' element={<div></div>}/>
     </Route>,

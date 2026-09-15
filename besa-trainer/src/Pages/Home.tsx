@@ -6,13 +6,19 @@ import Header from "../Components/Header";
 import { getFirebaseAuth } from "../Tools/firebase";
 import { db } from "../Tools/firestore";
 import type { User as CustomUser } from "../Tools/types";
-import type { JSX } from "react";
+import type { JSX, ComponentType } from "react";
 import Background from "../imgs/background.jpg"
 import Background2 from "../imgs/background-2.jpg"
 import Background3 from "../imgs/background-3.jpeg"
 import Background4 from "../imgs/background-4.jpeg"
-import { FaPlay } from "react-icons/fa";
-import {Carousel, IconButton} from "@material-tailwind/react"
+import { FaPlay, FaBook } from "react-icons/fa";
+import {Carousel as CarouselUntyped, IconButton as IconButtonUntyped, type CarouselProps, type IconButtonProps} from "@material-tailwind/react"
+
+//@material-tailwind/react's shipped .d.ts pins its forwardRef signature to an old @types/react
+//snapshot that no longer matches, making every prop look "missing" even though the components work
+//fine at runtime - recast to the library's own (correctly typed) prop interfaces instead.
+const Carousel = CarouselUntyped as unknown as ComponentType<CarouselProps>
+const IconButton = IconButtonUntyped as unknown as ComponentType<IconButtonProps>
 import { FaChevronLeft } from "react-icons/fa";
 import { FaChevronRight } from "react-icons/fa";
 import { IoSchool } from "react-icons/io5";
@@ -188,7 +194,7 @@ function UserDashboard({brandName}: {brandName: string}) {
                             )
                         }}
                         navigation={({ setActiveIndex, activeIndex, length }) => (
-                        <div className="absolute bottom-20 left-2/4 z-50 flex -translate-x-2/4 gap-2">
+                        <div className="absolute bottom-0 left-2/4 z-50 flex -translate-x-2/4 gap-2">
                             {new Array(length).fill("").map((_, i) => (
                             <span
                                 key={i}
@@ -284,7 +290,7 @@ function BesaDashboard({brandName}: {brandName: string}) {
                             )
                         }}
                         navigation={({ setActiveIndex, activeIndex, length }) => (
-                        <div className="absolute bottom-20 left-2/4 z-50 flex -translate-x-2/4 gap-2">
+                        <div className="absolute bottom-36 left-2/4 z-50 flex -translate-x-2/4 gap-2">
                             {new Array(length).fill("").map((_, i) => (
                             <span
                                 key={i}
@@ -297,10 +303,14 @@ function BesaDashboard({brandName}: {brandName: string}) {
                         </div>
                         )}>
                         {/* Backgrounds */}
-                        <Tour src={Background} to="/simulator/general?f=f1" name="First Floor" cta="Begin Practice"/>
-                        <Tour src={Background2} to="/simulator/general?f=f2" name="Second Floor" cta="Begin Practice"/>
-                        <Tour src={Background3} to="/simulator/general?f=f3" name="Third Floor" cta="Begin Practice"/>
-                        <Tour src={Background4} to="/simulator/general?f=b" name="Slugworks" cta="Begin Practice"/>
+                        <Tour src={Background} to="/simulator/general?f=f1" name="First Floor" cta="Begin Practice"
+                            secondaryTo="/read-script/general?f=f1" secondaryCta="Read Script"/>
+                        <Tour src={Background2} to="/simulator/general?f=f2" name="Second Floor" cta="Begin Practice"
+                            secondaryTo="/read-script/general?f=f2" secondaryCta="Read Script"/>
+                        <Tour src={Background3} to="/simulator/general?f=f3" name="Third Floor" cta="Begin Practice"
+                            secondaryTo="/read-script/general?f=f3" secondaryCta="Read Script"/>
+                        <Tour src={Background4} to="/simulator/general?f=b" name="Slugworks" cta="Begin Practice"
+                            secondaryTo="/read-script/general?f=b" secondaryCta="Read Script"/>
                     </Carousel>
 
                 {/* This is the divider for the other section of practing questions parents may ask: */}
@@ -328,19 +338,26 @@ function BesaDashboard({brandName}: {brandName: string}) {
     )
 }
 
-function Tour({src, to, name, cta}: {src: string, to: string, name: string, cta: string}) {
+function Tour({src, to, name, cta, secondaryTo, secondaryCta}: {src: string, to: string, name: string, cta: string, secondaryTo?: string, secondaryCta?: string}) {
     return (
         <div className="w-full bg-white mx-auto rounded-2xl">
             <div className="relative w-full h-64">
                 <img src={src} className="brightness-75 rounded-t-2xl object-cover h-64 w-full absolute top-0 right-0 z-0"/>
                 <h2 className="bg-blue-800 p-3 z-10 relative rounded-xl w-2/4 top-16 left-5 text-3xl">{name}</h2>
             </div>
-            <div className="bg-white text-black rounded-b-2xl p-3">
+            <div className="bg-white text-black rounded-b-2xl p-3 flex flex-col gap-2">
                 <Link className="mx-auto bg-amber-500 p-3 bold flex justify-center items-center w-3/4 rounded-full shadow-light
                     hover:bg-amber-600 gap-4" to={to}>
                     <FaPlay/>
                     <span>{cta}</span>
                 </Link>
+                {secondaryTo && secondaryCta &&
+                    <Link className="mx-auto bg-gray-800 text-white p-3 bold flex justify-center items-center w-3/4 rounded-full shadow-light
+                        hover:bg-gray-900 gap-4" to={secondaryTo}>
+                        <FaBook/>
+                        <span>{secondaryCta}</span>
+                    </Link>
+                }
             </div>
         </div>
     )

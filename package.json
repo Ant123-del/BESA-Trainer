@@ -1,0 +1,9 @@
+{
+  "name": "besa-trainer",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "frontend": "cd besa-trainer \n npm run dev",
+    "backend": "cd besa-api \n source ./.venv/bin/activate \n uvicorn main:app --reload"
+  }
+}

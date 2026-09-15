@@ -7,8 +7,8 @@ import { useEffect, useRef, useState } from "react";
 import { createPlayer, selectTime, selectVolume, videoFeatures } from "@videojs/react";
 import { Video } from "@videojs/react/video";
 import { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } from "firebase/firestore";
-import { db } from "../Tools/firestore";
-import { type CosScript, type User, type Floor, type Marker, type Script, type Progress, type PracticeTypes, type FloorCode } from "../Tools/types";
+import { db, ensurePersonalScript } from "../Tools/firestore";
+import { type CosScript, type User, type Floor, type Marker, type Progress, type PracticeTypes, type FloorCode } from "../Tools/types";
 import { FaArrowRight, FaPause, FaLock } from "react-icons/fa";
 import { FaPlay } from "react-icons/fa";
 import { MoonLoader } from "react-spinners";
@@ -17,9 +17,6 @@ import { AiFillMuted } from "react-icons/ai";
 import { HiMiniSpeakerWave } from "react-icons/hi2";
 import { formatTime } from "../Components/SectionEditor/VideoEditor";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
-import { v4 } from "uuid";
-import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
-import { getScript } from "../Tools/Fetch";
 import { getSectionBounds, getVtt, isLineInSection, type Line } from "../Tools/ScriptDecoder";
 import MicrophoneTest from "../Components/SimulatorTests/MicrophoneTest";
 import { FillTest } from "../Components/SimulatorTests/FillTest";
@@ -83,6 +80,7 @@ export default function Simulator() {
         if (!Draft) {
             return
         }
+        const floor = Draft
         //retrieving user information from database
         setInitalLoading(true)
         const auth = getAuth()
@@ -127,50 +125,12 @@ export default function Simulator() {
                 //pick which practice type to start with (asked once they hit "Continue")
                 setNeedsPracticeTypeChoice(!latestProgress || latestProgress.progress.length === 0)
 
-                //retrieving original script doc ------------
-                let scriptDoc = (await getDoc(doc(db, "training_data/data_root/scripts/" + Draft?.defScriptId))).data() as Script
-
-                //Checking if there is an associated cosScript with this draft
-                if (scriptDoc && foundUser.scriptPaths) {
-                    const path = foundUser.scriptPaths.find(s => {
-                        return f == s.floorCode
-                    })
-                    //if there is a custom script
-                    if (path?.src) {
-                        console.log("ran")
-                        setCosScript(path)
-                        setScript(await getScript(path.src) || "")
-                    } else if (path) {
-                        console.error("Custom script path found with no src, leaving default script in place")
-                    } else {
-                        console.log("creation")
-                        // if no custom script was made, then we will make a new one.
-                        const newScriptPaths = [...foundUser.scriptPaths]
-                        const copyScriptId = v4()
-                        const storage = getStorage()
-                        const ScriptPath = "scripts/" + copyScriptId
-                        const scriptRef = ref(storage, ScriptPath)
-
-                        //copying original script blob
-                        //retriving original scirpt
-                        let copy = await getScript(scriptDoc.src) as string
-
-                        setScript(copy)
-                        //writing into file
-                        const copyBlob = new Blob([copy], {type: "text/vtt"})
-                        const snap = await uploadBytes(scriptRef, copyBlob)
-                        console.log("copy made")
-                        //create firebase file first of the copy.
-                        newScriptPaths.push({
-                            path: ScriptPath,
-                            src: await getDownloadURL(snap.ref),
-                            floorCode: Draft?.floorCode,
-                            id: copyScriptId,
-                            isPublic: false,
-                            scriptDeviationId: scriptDoc.id
-                        } as CosScript)
-                        await updateDoc(userD, {scriptPaths: newScriptPaths})
-                    }
+                //retrieving/creating this floor's personal script copy ------------
+                if (foundUser.scriptPaths) {
+                    const {cosScript, scriptText, scriptPaths} = await ensurePersonalScript(foundUser.uid, foundUser.scriptPaths, floor)
+                    setCosScript(cosScript)
+                    setScript(scriptText)
+                    foundUser.scriptPaths = scriptPaths
                 }
             } catch (e) {
                 console.error(e)

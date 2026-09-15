@@ -13,12 +13,10 @@
     "@material-tailwind/react": "^2.1.10",
     "@videojs/react": "^10.0.0-beta.24",
     "firebase": "^12.13.0",
+    "placeholder-loading": "^0.7.0",
     "react": "^18.3.1",
     "react-content-loader": "^7.1.2",
     "react-dom": "^18.3.1",
-    "placeholder-loading": "^0.7.0",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5",
     "react-icons": "^5.6.0",
     "react-router-dom": "^7.15.0",
     "react-spinners": "^0.17.0",
@@ -27,8 +25,8 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.12.2",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
     "@types/uuid": "^10.0.0",
     "@types/webvtt-parser": "^2.2.0",
     "@vitejs/plugin-react": "^6.0.1",
@@ -41,9 +39,5 @@
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.10",
     "webvtt-parser": "^2.2.0"
-  },
-  "overrides": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
   }
 }

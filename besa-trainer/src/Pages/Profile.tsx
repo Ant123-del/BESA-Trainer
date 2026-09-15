@@ -1,38 +1,22 @@
 import { useEffect, useState, type JSX } from "react"
 import { onAuthStateChanged, deleteUser, type User as FirebaseUser } from "firebase/auth"
-import { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } from "firebase/firestore"
-import { getStorage, ref, uploadBytes } from "firebase/storage"
+import { doc, getDoc } from "firebase/firestore"
 import { useNavigate } from "react-router-dom"
 import { MoonLoader } from "react-spinners"
 import Header from "../Components/Header"
-import { Loading, floorNameDecoder } from "../Components/SectionEditor/Edit"
+import { Loading } from "../Components/SectionEditor/Edit"
 import { getFirebaseAuth } from "../Tools/firebase"
-import { db, deleteUserAccountData, removeCustomScript } from "../Tools/firestore"
-import { getScript } from "../Tools/Fetch"
+import { db, deleteUserAccountData } from "../Tools/firestore"
 import { mapFirebaseAuthError } from "../Tools/authErrors"
-import type { CosScript, Floor, Script, User as CustomUser } from "../Tools/types"
+import type { User as CustomUser } from "../Tools/types"
 
 const DELETE_CONFIRM_PHRASE = "Yes I want to delete my account"
-
-type ScriptStatus = {
-    cosScript: CosScript
-    floorName: string
-    currentFloor: Floor | null
-    defaultScriptSrc: string | null
-    outOfDate: boolean
-}
 
 export default function Profile(): JSX.Element {
     const navigate = useNavigate()
     const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null)
     const [userData, setUserData] = useState<CustomUser | null>(null)
     const [loading, setLoading] = useState(true)
-
-    const [scriptStatuses, setScriptStatuses] = useState<ScriptStatus[]>([])
-    const [statusesLoading, setStatusesLoading] = useState(true)
-    const [removingId, setRemovingId] = useState<string | null>(null)
-    const [updatingId, setUpdatingId] = useState<string | null>(null)
-    const [scriptActionError, setScriptActionError] = useState("")
 
     const [deletePopup, setDeletePopup] = useState(false)
     const [confirmText, setConfirmText] = useState("")
@@ -56,94 +40,6 @@ export default function Profile(): JSX.Element {
         })
         return unsub
     }, [])
-
-    //figures out, per custom script, which floor it belongs to and whether that floor's current
-    //draft still matches what the custom script was originally copied from.
-    useEffect(() => {
-        if (!userData) {
-            return
-        }
-        if (userData.scriptPaths.length === 0) {
-            setScriptStatuses([])
-            setStatusesLoading(false)
-            return
-        }
-
-        let cancelled = false
-        setStatusesLoading(true)
-        Promise.all(userData.scriptPaths.map(async (cosScript): Promise<ScriptStatus> => {
-            const floorDocs = await getDocs(query(
-                collection(db, "training_data/floors/" + cosScript.floorCode),
-                where("current", "==", true),
-                limit(1)
-            ))
-            const currentFloor = floorDocs.empty ? null : floorDocs.docs[0].data() as Floor
-
-            let defaultScriptSrc: string | null = null
-            if (currentFloor) {
-                const scriptDoc = await getDoc(doc(db, "training_data/data_root/scripts/" + currentFloor.defScriptId))
-                defaultScriptSrc = scriptDoc.exists() ? (scriptDoc.data() as Script).src : null
-            }
-
-            return {
-                cosScript,
-                floorName: floorNameDecoder(cosScript.floorCode),
-                currentFloor,
-                defaultScriptSrc,
-                outOfDate: !!currentFloor && cosScript.scriptDeviationId !== currentFloor.defScriptId
-            }
-        })).then((results) => {
-            if (!cancelled) {
-                setScriptStatuses(results)
-                setStatusesLoading(false)
-            }
-        })
-
-        return () => { cancelled = true }
-    }, [userData])
-
-    async function handleRemoveScript(cosScript: CosScript) {
-        if (!userData) {
-            return
-        }
-        setScriptActionError("")
-        setRemovingId(cosScript.id)
-        try {
-            const newScriptPaths = await removeCustomScript(userData.uid, userData.scriptPaths, cosScript)
-            setUserData({...userData, scriptPaths: newScriptPaths})
-            setScriptStatuses(prev => prev.filter(s => s.cosScript.id !== cosScript.id))
-        } catch (e) {
-            console.error(e)
-            setScriptActionError("Something went wrong reverting that script. Please try again.")
-        } finally {
-            setRemovingId(null)
-        }
-    }
-
-    async function handleUpdateScript(status: ScriptStatus) {
-        if (!userData || !status.currentFloor || !status.defaultScriptSrc) {
-            return
-        }
-        setScriptActionError("")
-        setUpdatingId(status.cosScript.id)
-        try {
-            const newText = await getScript(status.defaultScriptSrc) || ""
-            const storage = getStorage()
-            await uploadBytes(ref(storage, status.cosScript.path), new Blob([newText], {type: "text/vtt"}))
-
-            const updatedEntry: CosScript = {...status.cosScript, scriptDeviationId: status.currentFloor.defScriptId}
-            const newScriptPaths = userData.scriptPaths.map(s => s.id === status.cosScript.id ? updatedEntry : s)
-            await updateDoc(doc(db, "training_data/data_root/users/" + userData.uid), {scriptPaths: newScriptPaths})
-
-            setUserData({...userData, scriptPaths: newScriptPaths})
-            setScriptStatuses(prev => prev.map(s => s.cosScript.id === status.cosScript.id ? {...s, cosScript: updatedEntry, outOfDate: false} : s))
-        } catch (e) {
-            console.error(e)
-            setScriptActionError("Something went wrong updating that script. Please try again.")
-        } finally {
-            setUpdatingId(null)
-        }
-    }
 
     async function handleDeleteAccount() {
         if (!firebaseUser || !userData || confirmText !== DELETE_CONFIRM_PHRASE) {
@@ -190,45 +86,6 @@ export default function Profile(): JSX.Element {
                                 className="p-2 px-6 rounded-full bg-red-800 hover:bg-red-900 text-sm">
                                 Delete Account
                             </button>
-                        </section>
-
-                        <section className="bg-gray-800 rounded-2xl p-6">
-                            <h2 className="text-2xl tracking-wide mb-1">Manage Custom Scripts</h2>
-                            <p className="text-xs text-gray-400 mb-4">
-                                Each floor you've practiced gets its own personalized copy of the script. From here you can update
-                                one to match the latest draft, or drop it entirely to go back to using the default script.
-                            </p>
-                            {scriptActionError && <p className="text-red-400 text-sm mb-3">{scriptActionError}</p>}
-                            {statusesLoading ?
-                                <div className="flex justify-center py-10"><MoonLoader color="white" size={24}/></div>
-                                : scriptStatuses.length === 0 ?
-                                <p className="text-gray-500 italic text-sm">You don't have any custom scripts yet.</p>
-                                :
-                                <div className="flex flex-col gap-3">
-                                    {scriptStatuses.map(status => (
-                                        <div key={status.cosScript.id} className="bg-gray-900/60 rounded-xl p-4 flex justify-between items-center gap-3">
-                                            <div>
-                                                <h3 className="font-semibold">{status.floorName}</h3>
-                                                {status.outOfDate &&
-                                                    <span className="text-xs text-amber-400">Out of date - doesn't match the current draft for this floor</span>
-                                                }
-                                            </div>
-                                            <div className="flex items-center gap-2 shrink-0">
-                                                {status.outOfDate &&
-                                                    <button onClick={() => handleUpdateScript(status)} disabled={updatingId === status.cosScript.id}
-                                                        className="p-2 px-4 rounded-full bg-amber-800 hover:bg-amber-900 text-xs disabled:opacity-50">
-                                                        {updatingId === status.cosScript.id ? "Updating..." : "Update to Latest"}
-                                                    </button>
-                                                }
-                                                <button onClick={() => handleRemoveScript(status.cosScript)} disabled={removingId === status.cosScript.id}
-                                                    className="p-2 px-4 rounded-full border border-gray-400 hover:bg-gray-800 text-xs disabled:opacity-50">
-                                                    {removingId === status.cosScript.id ? "Removing..." : "Use Default Script"}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            }
                         </section>
                     </div>
                 }

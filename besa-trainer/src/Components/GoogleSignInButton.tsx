@@ -4,9 +4,9 @@ import { signInWithPopup, type Auth, type UserCredential } from "firebase/auth"
 import { useNavigate } from "react-router-dom"
 import Image from "../imgs/Google.png"
 import { mapFirebaseAuthError } from "../Tools/authErrors"
-import { getFirebaseAuth, googleAuthProvider, isFirebaseConfigured } from "../Tools/firebase"
+import { getFirebaseAuth, googleAuthProvider } from "../Tools/firebase"
 import type { AccountType, User as CustomUser } from "../Tools/types"
-import { createUserDoc, db, getUserDataById } from "../Tools/firestore"
+import { createUserDoc, db } from "../Tools/firestore"
 import { doc, getDoc } from "firebase/firestore"
 
 //when used from the BESA signup flow, the caller passes along whichever roster name/tier the user

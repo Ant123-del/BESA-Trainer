@@ -1,7 +1,9 @@
 import { getAuth } from "firebase/auth"
 import type { AccountType, SuccessResponse } from "./types"
 
-const url = "http://127.0.0.1:8000/"
+//besa-api's base URL - defaults to local dev; set VITE_API_URL in the deployment environment to point
+//at wherever besa-api is actually hosted (e.g. a Firebase Functions URL) once deployed.
+const url = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/"
 
 export type RosterEntry = {
     name: string

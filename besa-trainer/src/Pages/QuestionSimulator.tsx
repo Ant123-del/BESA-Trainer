@@ -3,8 +3,7 @@ import { IoMdArrowRoundBack, IoMdSettings } from "react-icons/io";
 import { useNavigate, useParams } from "react-router-dom";
 
 export default function QuestionSimulator() {
-    const [backWarning, setBackWarning] = useState(false)
-    const [settings, setSettings] = useState(false)
+    const [, setSettings] = useState(false)
     const navigate = useNavigate()
     const {type} = useParams()
 
@@ -40,10 +39,3 @@ export default function QuestionSimulator() {
     )
 }
 
-function ProgressLoader() {
-    return (
-        <div>
-
-        </div>
-    )
-}

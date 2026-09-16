@@ -1,7 +1,7 @@
 import { type Marker, type Floor, type Script } from "../../Tools/types";
-import { createPlayer, CaptionsButton, selectTime, selectVolume, usePlayer } from "@videojs/react"
+import { createPlayer, selectTime, selectVolume } from "@videojs/react"
 import { videoFeatures, Video } from "@videojs/react/video";
-import { useEffect, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import ContentLoader from "react-content-loader";
 import { FaPlay } from "react-icons/fa";
 import { FaPause } from "react-icons/fa";
@@ -24,7 +24,6 @@ const Player = createPlayer({features: videoFeatures})
 
 export default function VideoEditor({floor, setFloor} : {floor: Floor, setFloor: Dispatch<SetStateAction<Floor | null>>}) {
     const [loaded, setLoaded] = useState(false)
-    const [markers, setMarkers] = useState<Marker[]>([])
     const [scriptLink, setScriptLink] = useState("")
 
     useEffect(() => {
@@ -64,7 +63,7 @@ function CustomControls({floor, setFloor}: {floor: Floor, setFloor: Dispatch<Set
     const playBack = Player.usePlayer(selectTime)
     const vol = Player.usePlayer(selectVolume)
 
-    const [searchParam, setSearchParam] = useSearchParams()
+    const [searchParam] = useSearchParams()
     const f = searchParam.get("f")
 
     const [sound, setSound] = useState(false)

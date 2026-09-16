@@ -36,7 +36,7 @@ export default function SectionEditor() {
 
 export function SideBar({expand, setExpand}: {expand: boolean, setExpand: Dispatch<SetStateAction<boolean>>}) {
     const [navStyles, setNavStyles] = useState(Array(6).fill(false))
-    const [searchParams, setSearchparams] = useSearchParams()
+    const [searchParams] = useSearchParams()
     const f = searchParams.get("f")
     const sidebarNavStyle = "flex items-center hover:bg-gray-800 p-3 rounded-full gap-3 my-3 mx-auto justify-" + (expand ? "start" : "center")
 

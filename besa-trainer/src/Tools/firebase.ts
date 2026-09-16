@@ -1,5 +1,4 @@
 import { initializeApp, type FirebaseApp } from "firebase/app"
-import { getFirestore } from 'firebase/firestore'
 import { getAuth, GoogleAuthProvider, type Auth } from "firebase/auth"
 
 //web app config from firebase console, vite only exposes VITE_ vars to the browser

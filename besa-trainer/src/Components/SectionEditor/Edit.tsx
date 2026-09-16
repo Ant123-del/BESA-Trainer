@@ -1,22 +1,21 @@
-import { getAuth, onAuthStateChanged, type Auth } from "firebase/auth"
+import { getAuth, onAuthStateChanged } from "firebase/auth"
 import { v4 as uuid4 } from "uuid" 
-import { useEffect, useState, type ChangeEvent, type Dispatch, type DragEvent, type JSX, type SetStateAction, type SubmitEvent } from "react"
+import { useEffect, useState, type ChangeEvent, type Dispatch, type DragEvent, type FormEvent, type JSX, type SetStateAction } from "react"
 import { useSearchParams } from "react-router-dom"
 import { db, deleteDraftFloor, setCurrentFloorDraft } from "../../Tools/firestore"
-import { collection, doc, getDoc, getDocs, limit, query, setDoc, where } from "firebase/firestore"
+import { collection, doc, getDocs, setDoc } from "firebase/firestore"
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage"
 import type { Floor, FloorCode, Script } from "../../Tools/types"
 import {PulseLoader} from 'react-spinners'
 import ContentLoader from 'react-content-loader'
 
 import { MdFileUpload } from "react-icons/md";
-import { getFirebaseAuth } from "../../Tools/firebase"
 import VideoEditor from "./VideoEditor"
 import EditScript from "./EditScript"
 
 export default function Edit() {
-    const [searchParam, setSearchParam] = useSearchParams()
-    const [floorData, setFloorData] = useState<Floor | null>(null)
+    const [searchParam] = useSearchParams()
+    const [, setFloorData] = useState<Floor | null>(null)
     const [otherVideos, setOtherVideos] = useState<Floor[]>([])
     const [uploaded, setUploaded] = useState(false)
     const [uploading, setUploading] = useState(false)
@@ -27,7 +26,7 @@ export default function Edit() {
         //going to need to leave off from here but
         //Checking if there are any document uploaded for the floor
         const auth = getAuth()
-        const unsub = onAuthStateChanged(auth, async (fireBaseUser) => {
+        const unsub = onAuthStateChanged(auth, async (_fireBaseUser) => {
             const floorsRef = collection(db, "training_data", "floors", f || "")
             const OtherDocs = await getDocs(floorsRef)
 
@@ -67,9 +66,9 @@ export default function Edit() {
 function UploadVideo({setUploaded, hasMoreVideos, setOtherVideos, setUploading}: {setUploaded: Dispatch<SetStateAction<boolean>>, hasMoreVideos: boolean, setOtherVideos: Dispatch<SetStateAction<Floor[]>>, setUploading: Dispatch<SetStateAction<boolean>>}) {
     const [vid, setVideo] = useState<File | null>(null)
     const [vidsrc, setVidSrc] = useState("")
-    const [isDragging, setIsDragging] = useState(false)
+    const [, setIsDragging] = useState(false)
     const [current, setCurrent] = useState(true)
-    const [searchParam, setSearchParam] = useSearchParams()
+    const [searchParam] = useSearchParams()
     const [draftName, setDraftName] = useState("")
     const f = searchParam.get("f")
 
@@ -127,7 +126,7 @@ function UploadVideo({setUploaded, hasMoreVideos, setOtherVideos, setUploading}:
         }
     }
 
-    function handleSubmit(e: SubmitEvent<HTMLFormElement>) {
+    function handleSubmit(e: FormEvent<HTMLFormElement>) {
         e.preventDefault()
         if (!vid) return null
         const id = uuid4()
@@ -254,7 +253,7 @@ export function Loading({text, children, onClose}:{text?:string, children?:JSX.E
 
 
 function ManageVideo({otherVideos, setUploaded, setOtherVideos}: {otherVideos:Floor[], setUploaded: Dispatch<SetStateAction<boolean>>, setOtherVideos: Dispatch<SetStateAction<Floor[]>>}) {
-    const [searchParam, setSearchParam] = useSearchParams()
+    const [searchParam] = useSearchParams()
     const f = searchParam.get("f")
     const current = otherVideos.find((doc:Floor) => doc.current)
     const [selected, setSelected] = useState<Floor | null>(current || null)
@@ -262,7 +261,6 @@ function ManageVideo({otherVideos, setUploaded, setOtherVideos}: {otherVideos:Fl
     const [loading, setLoading] = useState(false)
     const [startSelect, setStartSelect] = useState(false)
     const [loadingCurrent, setLoadingCurrent] = useState(false)
-    const [hasScript, setHasScript] = useState(true)
 
     useEffect(() => {
         setStartSelect(true)

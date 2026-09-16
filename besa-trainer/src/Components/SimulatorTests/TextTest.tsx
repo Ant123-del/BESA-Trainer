@@ -1,7 +1,7 @@
 import { saveConfidence } from "../../Pages/Simulator"
 import { AnswerReview, getPrecedingSectionBounds, getVtt, isLineInSection } from "../../Tools/ScriptDecoder";
 import { type Marker, type Progress, type User, type CosScript} from "../../Tools/types"
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 export function TextTest({floorId, section, sections, scriptText, cosScript, onScriptUpdated, progress, setProgress, userInfo, setUserInfo, onContinue, canExit, onExit}: {
     floorId: string,

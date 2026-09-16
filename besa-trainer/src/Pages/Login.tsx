@@ -1,5 +1,5 @@
 import type { SyntheticEvent, JSX } from "react"
-import React, { useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 import type { User as CustomUser } from "../Tools/types"
 import {
   createUserWithEmailAndPassword,
@@ -12,7 +12,7 @@ import { Link, useNavigate } from "react-router-dom"
 import Header from "../Components/Header"
 import GoogleSignInButton from "../Components/GoogleSignInButton"
 import { mapFirebaseAuthError } from "../Tools/authErrors"
-import { getFirebaseAuth, isFirebaseConfigured } from "../Tools/firebase"
+import { getFirebaseAuth } from "../Tools/firebase"
 import { createUserDoc } from "../Tools/firestore"
 
 //login prop comes from the router, switches between sign in vs sign up form (see App.tsx)

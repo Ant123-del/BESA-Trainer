@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Literal
 import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from google import genai
 import os
 import base64
@@ -77,6 +79,22 @@ def require_besa_lead(user: dict = Depends(get_current_user)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="BESA Lead priviledges needed"
+        )
+
+    return user
+
+
+#the shared kiosk account - clocks OTHER besa/besaLead accounts in/out by student id, so it needs its
+#own tier rather than piggybacking on admin/besaLead (which are about managing the roster, not this).
+def require_root(user: dict = Depends(get_current_user)):
+    user_id = user.get("uid")
+    db = firestore.client()
+    user_doc = db.collection("training_data").document("data_root").collection("users").document(user_id).get()
+
+    if not user_doc.exists or user_doc.to_dict().get("accountType") != "root":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Root priviledges needed"
         )
 
     return user
@@ -177,6 +195,271 @@ def besaAccounts(lead_user: dict = Depends(require_besa_lead)):
         })
 
     return {"success": True, "accounts": accounts}
+
+
+# ---- Root kiosk: clock in/out, current sessions, hours, activity types ----
+PACIFIC = ZoneInfo("America/Los_Angeles")
+ACTIVITY_TYPES_DEFAULT = ["Tours", "Summer Project", "BESA Booking", "BESA Trainer", "Other"]
+
+
+#Sunday-Saturday week, anchored to Pacific local time regardless of what tz `dt` carries.
+def _week_start(dt: datetime) -> datetime:
+    local = dt.astimezone(PACIFIC)
+    start_of_day = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start_of_day - timedelta(days=(local.weekday() + 1) % 7)
+
+
+def _find_besa_by_student_id(db, student_id: str):
+    users_ref = db.collection("training_data").document("data_root").collection("users")
+    for u in users_ref.stream():
+        data = u.to_dict() or {}
+        if data.get("accountType") in ("besa", "besaLead") and data.get("studentId") == student_id:
+            return u.reference, data
+    return None, None
+
+
+#prunes biWeeklyHours to the current week (relative to `now`), then merges this session's hours into
+#(or creates) the entry for checked_in_at's calendar day. Shared by manual clock-out and auto-clockout.
+def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False):
+    elapsed_hours = max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5)
+    entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
+    current_week_start = _week_start(now)
+
+    pruned = [e for e in existing if e.get("date") and e["date"].astimezone(PACIFIC) >= current_week_start]
+
+    merged = False
+    new_hours = []
+    for e in pruned:
+        if e["date"].astimezone(PACIFIC).date() == entry_day.date():
+            new_hours.append({
+                "date": e["date"],
+                "hours": e.get("hours", 0) + elapsed_hours,
+                "activities": sorted(set((e.get("activities") or []) + activities)),
+                "autoClockedOut": bool(e.get("autoClockedOut")) or auto_clocked_out,
+            })
+            merged = True
+        else:
+            new_hours.append(e)
+    if not merged:
+        new_hours.append({
+            "date": entry_day,
+            "hours": elapsed_hours,
+            "activities": activities,
+            "autoClockedOut": auto_clocked_out,
+        })
+    return new_hours, elapsed_hours
+
+
+#besa-app roster docs are matched to our users by name (same linkage /besa-roster uses for claiming).
+#Each roster doc's officeHours looks like {"monday": {"available": bool, "timeSlots":
+#[{"start": "HH:MM", "end": "HH:MM", "id": ...}, ...]}, ...} - picks the latest slot end on the
+#check-in's weekday that's still after the check-in time (covers someone with multiple slots that day).
+def _get_office_hours_end(besa_name, checked_in_at: datetime):
+    besa_db = _get_besa_app_db()
+    if besa_db is None or not besa_name:
+        return None
+
+    roster_doc = None
+    for entry in besa_db.collection(BESA_ROSTER_COLLECTION).stream():
+        data = entry.to_dict() or {}
+        if data.get(BESA_ROSTER_NAME_FIELD) == besa_name:
+            roster_doc = data
+            break
+    if roster_doc is None:
+        return None
+
+    office_hours = roster_doc.get("officeHours") or {}
+    day_name = checked_in_at.strftime("%A").lower()
+    day_slots = (office_hours.get(day_name) or {}).get("timeSlots") or []
+
+    candidate_ends = []
+    for slot in day_slots:
+        try:
+            end_time = datetime.strptime(slot["end"], "%H:%M").time()
+        except (KeyError, ValueError, TypeError):
+            continue
+        end_dt = checked_in_at.replace(hour=end_time.hour, minute=end_time.minute, second=0, microsecond=0)
+        if end_dt > checked_in_at:
+            candidate_ends.append(end_dt)
+
+    return max(candidate_ends) if candidate_ends else None
+
+
+#if someone forgot to clock out and it's now past 8pm of the day they clocked in, close their session
+#automatically using their scheduled office-hours end time (from the besa-app roster) as the effective
+#clock-out, rather than crediting them until 8pm or leaving them clocked in forever. Falls back to 8pm
+#itself if no matching office-hours slot is found. Runs lazily (no scheduler infra exists here) -
+#triggered from every endpoint that reads/lists clocked-in accounts, plus a self-check endpoint below.
+def _auto_clock_out_if_needed(target_ref, data: dict) -> dict:
+    last_checked_in = data.get("lastCheckedIn")
+    if not last_checked_in:
+        return data
+
+    checked_in_at = last_checked_in.astimezone(PACIFIC)
+    now = datetime.now(PACIFIC)
+    cutoff = checked_in_at.replace(hour=20, minute=0, second=0, microsecond=0)
+    if now < cutoff:
+        return data
+
+    office_end = _get_office_hours_end(data.get("besaName"), checked_in_at)
+    effective_end = office_end if office_end and office_end > checked_in_at else cutoff
+
+    activities = data.get("lastCheckedInActivities") or []
+    new_hours, _ = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, effective_end, activities, now, auto_clocked_out=True)
+
+    target_ref.update({
+        "biWeeklyHours": new_hours,
+        "lastCheckedIn": None,
+        "lastCheckedInActivities": [],
+    })
+    return {**data, "biWeeklyHours": new_hours, "lastCheckedIn": None, "lastCheckedInActivities": []}
+
+
+class ClockInRequest(BaseModel):
+    studentId: str
+    activities: list[str]
+
+
+@app.post("/clock-in")
+def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _find_besa_by_student_id(db, request_data.studentId)
+    if target_ref is None:
+        raise HTTPException(status_code=404, detail="No BESA account found with that School Id.")
+    #a forgotten session from an earlier day shouldn't block today's legitimate clock-in
+    data = _auto_clock_out_if_needed(target_ref, data)
+    if data.get("lastCheckedIn"):
+        raise HTTPException(status_code=409, detail=f"{data.get('besaName')} is already clocked in.")
+
+    now = datetime.now(PACIFIC)
+    target_ref.update({"lastCheckedIn": now, "lastCheckedInActivities": request_data.activities})
+    return {"success": True, "besaName": data.get("besaName"), "clockedInAt": now.isoformat()}
+
+
+class ClockOutRequest(BaseModel):
+    studentId: str
+
+
+@app.post("/clock-out")
+def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _find_besa_by_student_id(db, request_data.studentId)
+    if target_ref is None:
+        raise HTTPException(status_code=404, detail="No BESA account found with that School Id.")
+
+    last_checked_in = data.get("lastCheckedIn")
+    if not last_checked_in:
+        raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't currently clocked in.")
+
+    now = datetime.now(PACIFIC)
+    checked_in_at = last_checked_in.astimezone(PACIFIC)
+    activities = data.get("lastCheckedInActivities") or []
+    new_hours, elapsed_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now, activities, now)
+
+    target_ref.update({
+        "biWeeklyHours": new_hours,
+        "lastCheckedIn": None,
+        "lastCheckedInActivities": [],
+    })
+    return {"success": True, "besaName": data.get("besaName"), "hoursThisSession": elapsed_hours}
+
+
+@app.post("/check-auto-clockout")
+def checkAutoClockout(user: dict = Depends(get_current_user)):
+    db = firestore.client()
+    target_ref = db.collection("training_data").document("data_root").collection("users").document(user.get("uid"))
+    doc = target_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    data = _auto_clock_out_if_needed(target_ref, doc.to_dict() or {})
+    hours = [
+        {"date": e["date"].isoformat(), "hours": e.get("hours", 0), "activities": e.get("activities") or [], "autoClockedOut": bool(e.get("autoClockedOut"))}
+        for e in (data.get("biWeeklyHours") or [])
+    ]
+    return {"success": True, "biWeeklyHours": hours, "lastCheckedIn": None}
+
+
+@app.get("/current-sessions")
+def currentSessions(root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    sessions = []
+    for u in db.collection("training_data").document("data_root").collection("users").stream():
+        data = u.to_dict() or {}
+        if data.get("accountType") not in ("besa", "besaLead"):
+            continue
+        if data.get("lastCheckedIn"):
+            #closes out anyone who's been sitting clocked in past 8pm before listing "current" sessions
+            data = _auto_clock_out_if_needed(u.reference, data)
+        if not data.get("lastCheckedIn"):
+            continue
+        sessions.append({
+            "uid": u.id,
+            "besaName": data.get("besaName"),
+            "activities": data.get("lastCheckedInActivities") or [],
+            "clockedInAt": data["lastCheckedIn"].isoformat(),
+        })
+    return {"success": True, "sessions": sessions}
+
+
+@app.get("/all-hours")
+def allHours(root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    current_week_start = _week_start(datetime.now(PACIFIC))
+    members = []
+    for u in db.collection("training_data").document("data_root").collection("users").stream():
+        data = u.to_dict() or {}
+        if data.get("accountType") not in ("besa", "besaLead"):
+            continue
+        if data.get("lastCheckedIn"):
+            data = _auto_clock_out_if_needed(u.reference, data)
+        hours = [
+            {"date": e["date"].isoformat(), "hours": e.get("hours", 0), "activities": e.get("activities") or [], "autoClockedOut": bool(e.get("autoClockedOut"))}
+            for e in (data.get("biWeeklyHours") or [])
+            if e.get("date") and e["date"].astimezone(PACIFIC) >= current_week_start
+        ]
+        members.append({"uid": u.id, "besaName": data.get("besaName"), "studentId": data.get("studentId"), "hours": hours})
+    return {"success": True, "members": members}
+
+
+@app.get("/activity-types")
+def getActivityTypes(user: dict = Depends(get_current_user)):
+    db = firestore.client()
+    root_doc = db.collection("training_data").document("data_root").get()
+    types = (root_doc.to_dict() or {}).get("activityTypes") if root_doc.exists else None
+    return {"success": True, "activityTypes": types or ACTIVITY_TYPES_DEFAULT}
+
+
+class ActivityTypeRequest(BaseModel):
+    name: str
+
+
+@app.post("/activity-types/add")
+def addActivityType(request_data: ActivityTypeRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    root_ref = db.collection("training_data").document("data_root")
+    #seed the defaults on the doc the first time anyone touches this list, so "add" from a fresh
+    #doc doesn't silently drop the mockup's starting activities
+    root_doc = root_ref.get()
+    current = (root_doc.to_dict() or {}).get("activityTypes") if root_doc.exists else None
+    base = current if current is not None else ACTIVITY_TYPES_DEFAULT
+    if request_data.name not in base:
+        base = base + [request_data.name]
+    root_ref.set({"activityTypes": base}, merge=True)
+    return {"success": True, "activityTypes": base}
+
+
+@app.post("/activity-types/remove")
+def removeActivityType(request_data: ActivityTypeRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    root_ref = db.collection("training_data").document("data_root")
+    root_doc = root_ref.get()
+    current = (root_doc.to_dict() or {}).get("activityTypes") if root_doc.exists else None
+    base = current if current is not None else ACTIVITY_TYPES_DEFAULT
+    base = [t for t in base if t != request_data.name]
+    root_ref.set({"activityTypes": base}, merge=True)
+    return {"success": True, "activityTypes": base}
+
 
 app.add_middleware(
     CORSMiddleware,

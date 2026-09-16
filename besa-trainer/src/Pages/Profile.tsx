@@ -8,7 +8,22 @@ import { Loading } from "../Components/SectionEditor/Edit"
 import { getFirebaseAuth } from "../Tools/firebase"
 import { db, deleteUserAccountData } from "../Tools/firestore"
 import { mapFirebaseAuthError } from "../Tools/authErrors"
-import type { User as CustomUser } from "../Tools/types"
+import type { User as CustomUser, DayHours } from "../Tools/types"
+import { checkAutoClockout, getAllHours, type MemberHours } from "../Tools/Fetch"
+import WeeklyHoursTable, { type WeeklyHoursEntry } from "../Components/WeeklyHoursTable"
+
+type RawDayHours = DayHours | {date: string, hours: number, activities: string[], autoClockedOut?: boolean}
+
+//DayHours.date comes back from Firestore as a Timestamp (has .toDate()), not a plain JS Date -
+//normalize both that and the backend's ISO-string dates (root's /all-hours) to the same shape.
+function toWeeklyHoursEntries(entries: RawDayHours[]): WeeklyHoursEntry[] {
+    return entries.map(e => ({
+        hours: e.hours,
+        activities: e.activities,
+        autoClockedOut: e.autoClockedOut,
+        date: typeof e.date === "string" ? new Date(e.date) : (e.date as unknown as {toDate: () => Date}).toDate(),
+    }))
+}
 
 const DELETE_CONFIRM_PHRASE = "Yes I want to delete my account"
 
@@ -23,6 +38,11 @@ export default function Profile(): JSX.Element {
     const [deleting, setDeleting] = useState(false)
     const [deleteError, setDeleteError] = useState("")
 
+    const [allHours, setAllHours] = useState<MemberHours[] | null>(null)
+    //overrides userData.biWeeklyHours once the auto-clockout self-check comes back, so a forgotten
+    //session that gets closed out mid-visit shows up without needing a manual refresh.
+    const [ownHours, setOwnHours] = useState<RawDayHours[] | null>(null)
+
     useEffect(() => {
         const auth = getFirebaseAuth()
         const unsub = onAuthStateChanged(auth, (user) => {
@@ -34,8 +54,14 @@ export default function Profile(): JSX.Element {
 
             const docRef = doc(db, "training_data", "data_root", "users", user.uid)
             getDoc(docRef).then((docSnap) => {
-                setUserData(docSnap.exists() ? docSnap.data() as CustomUser : null)
+                const data = docSnap.exists() ? docSnap.data() as CustomUser : null
+                setUserData(data)
                 setLoading(false)
+                if (data?.accountType === "root") {
+                    getAllHours().then(result => setAllHours(result || []))
+                } else if (data?.accountType === "besa" || data?.accountType === "besaLead") {
+                    checkAutoClockout().then(result => result && setOwnHours(result.biWeeklyHours))
+                }
             })
         })
         return unsub
@@ -87,6 +113,33 @@ export default function Profile(): JSX.Element {
                                 Delete Account
                             </button>
                         </section>
+
+                        {userData?.accountType === "root" &&
+                            <section className="bg-gray-800 rounded-2xl p-6">
+                                <h2 className="text-2xl tracking-wide mb-4">Everyone's Hours (This Week)</h2>
+                                {allHours === null ?
+                                    <div className="flex justify-center py-10"><MoonLoader color="white" size={24}/></div>
+                                    : allHours.length === 0 ?
+                                    <p className="text-gray-500 italic text-sm">No BESA accounts yet.</p>
+                                    :
+                                    <div className="flex flex-col gap-6">
+                                        {allHours.map(member => (
+                                            <div key={member.uid}>
+                                                <p className="font-semibold mb-2">{member.besaName || "(no name on file)"}</p>
+                                                <WeeklyHoursTable entries={toWeeklyHoursEntries(member.hours)}/>
+                                            </div>
+                                        ))}
+                                    </div>
+                                }
+                            </section>
+                        }
+
+                        {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&
+                            <section className="bg-gray-800 rounded-2xl p-6">
+                                <h2 className="text-2xl tracking-wide mb-4">My Hours (This Week)</h2>
+                                <WeeklyHoursTable entries={toWeeklyHoursEntries(ownHours ?? userData.biWeeklyHours ?? [])}/>
+                            </section>
+                        }
                     </div>
                 }
             </div>

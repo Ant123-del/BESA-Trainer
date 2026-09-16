@@ -69,9 +69,11 @@ export default function Header(): JSX.Element {
         await signOut(getFirebaseAuth())
     }
 
-    //BESA/BESA Lead accounts see the "BESA Trainer" brand; everyone else (logged out, or a regular
-    //user account) sees "BESA Resources" - matches the Home page's own title split.
-    const brandName = userData && (userData.accountType === "besa" || userData.accountType === "besaLead")
+    //BESA/BESA Lead accounts see the "BESA Trainer" brand; the root kiosk sees "BESA Root"; everyone
+    //else (logged out, or a regular user account) sees "BESA Resources" - matches Home's title split.
+    const brandName = userData?.accountType === "root"
+        ? "BESA Root"
+        : userData && (userData.accountType === "besa" || userData.accountType === "besaLead")
         ? "BESA Trainer"
         : "BESA Resources"
 

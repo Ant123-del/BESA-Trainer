@@ -19,6 +19,7 @@ export default function BesaSignUp(): JSX.Element {
     const [roster, setRoster] = useState<RosterEntry[] | null>(null)
     const [rosterError, setRosterError] = useState(false)
     const [selectedName, setSelectedName] = useState("")
+    const [studentId, setStudentId] = useState("")
 
     const [email, setEmail] = useState("")
     const [password, setPassword] = useState("")
@@ -53,6 +54,10 @@ export default function BesaSignUp(): JSX.Element {
             setError("Please select your name from the list first.")
             return
         }
+        if (!studentId.trim()) {
+            setError("Please enter your school id.")
+            return
+        }
         setError(null)
         setBusy(true)
         try {
@@ -64,7 +69,8 @@ export default function BesaSignUp(): JSX.Element {
                 admin: selected.tier === "besaLead",
                 progress: [],
                 accountType: selected.tier,
-                besaName: selected.name
+                besaName: selected.name,
+                studentId: studentId.trim()
             }
             await createUserDoc(user)
             navigate("/")
@@ -119,6 +125,16 @@ export default function BesaSignUp(): JSX.Element {
                     }
 
                     <input
+                        type="text"
+                        name="studentId"
+                        required
+                        placeholder="Enter your school id..."
+                        value={studentId}
+                        onChange={(e) => setStudentId(e.target.value)}
+                        className="block my-5 w-full p-3 rounded-xl bg-gray-600 focus:border-amber-500 focus:border-2 text-white"
+                    />
+
+                    <input
                         type="email"
                         name="email"
                         autoComplete="email"
@@ -147,7 +163,7 @@ export default function BesaSignUp(): JSX.Element {
                 ) : null}
                 <button
                     type="submit"
-                    disabled={busy || !selected}
+                    disabled={busy || !selected || !studentId.trim()}
                     className="py-5 px-2 my-5 bg-blue-900 rounded-2xl text-white font-[500] w-3/4 mx-auto block cursor-pointer hover:brightness-75 active:brightness-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                     {busy ? "Creating account…" : "Submit"}
@@ -159,10 +175,10 @@ export default function BesaSignUp(): JSX.Element {
                     </Link>
                 </p>
                 <div className="separator">OR</div>
-                {selected ?
-                    <GoogleSignInButton besaSelection={{besaName: selected.name, accountType: selected.tier}}/>
+                {selected && studentId.trim() ?
+                    <GoogleSignInButton besaSelection={{besaName: selected.name, accountType: selected.tier, studentId: studentId.trim()}}/>
                     :
-                    <p className="text-center text-xs text-gray-500 mt-5">Select your name above to sign up with Google.</p>
+                    <p className="text-center text-xs text-gray-500 mt-5">Select your name and enter your school id above to sign up with Google.</p>
                 }
                 <p className="text-center mt-5 text-gray-700">
                     Not a BESA?{" "}

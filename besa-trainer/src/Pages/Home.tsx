@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { onAuthStateChanged, type User as FirebaseUser } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import Header from "../Components/Header";
+import RootDashboard from "./RootDashboard";
 import { getFirebaseAuth } from "../Tools/firebase";
 import { db } from "../Tools/firestore";
 import type { User as CustomUser } from "../Tools/types";
@@ -64,6 +65,10 @@ export default function Home() {
 
     if (!firebaseUser) {
         return <Landing/>
+    }
+
+    if (userData?.accountType === "root") {
+        return <RootDashboard/>
     }
 
     return isBesa ? <BesaDashboard brandName={brandName}/> : <UserDashboard brandName={brandName}/>

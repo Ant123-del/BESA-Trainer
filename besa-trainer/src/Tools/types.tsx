@@ -1,7 +1,9 @@
 //"user" is a regular trainee account. "besa"/"besaLead" are claimed off the external BESA roster at
 //signup (see /signup-besa) - besaLead additionally always has admin privileges, and is the only tier
-//that can promote/demote other besa/besaLead accounts' admin status (see /manage-admins).
-export type AccountType = "user" | "besa" | "besaLead"
+//that can promote/demote other besa/besaLead accounts' admin status (see /manage-admins). "root" is the
+//shared kiosk account - there's only ever one, and it's created by hand-editing Firestore directly
+//(no signup flow) since it's a physical always-logged-in computer, not a person's account.
+export type AccountType = "user" | "besa" | "besaLead" | "root"
 
 export type User = {
     uid: string
@@ -10,6 +12,18 @@ export type User = {
     progress: Progress[]// Have have id's of the progress
     accountType: AccountType
     besaName?: string // the roster name claimed at signup - only set when accountType isn't "user"
+    studentId?: string // collected at BESA signup - the kiosk lookup key for clock in/out
+    biWeeklyHours?: DayHours[] // current week (Sun-Sat) only - pruned on every clock-out
+    lastCheckedIn?: Date | null // set by the root kiosk on clock-in, cleared on clock-out
+    lastCheckedInActivities?: string[] // activities picked at clock-in - always set/cleared together with lastCheckedIn
+}
+
+//one calendar day's worked hours, recorded via the root kiosk's clock in/out flow.
+export type DayHours = {
+    hours: number // in 0.5 increments
+    activities: string[] // activity type names worked that day
+    date: Date // the calendar day this entry is for (clock-in date, not clock-out date)
+    autoClockedOut?: boolean // true if this day's hours (or part of them) came from a forgotten-checkout auto-clockout, not a manual one
 }
 
 //will be used to keep track of personalized vll scripts

@@ -11,7 +11,7 @@ import { doc, getDoc } from "firebase/firestore"
 
 //when used from the BESA signup flow, the caller passes along whichever roster name/tier the user
 //already picked from the dropdown, so a fresh account picks it up the same way the email/password path does.
-type BesaSelection = {besaName: string, accountType: Extract<AccountType, "besa" | "besaLead">}
+type BesaSelection = {besaName: string, accountType: Extract<AccountType, "besa" | "besaLead">, studentId: string}
 
 export default function GoogleSignInButton({besaSelection}: {besaSelection?: BesaSelection}): JSX.Element {
   //we are using navigate to redirect the user to the home page after they sign in
@@ -40,7 +40,7 @@ export default function GoogleSignInButton({besaSelection}: {besaSelection?: Bes
           admin: besaSelection?.accountType === "besaLead",
           scriptPaths: [],
           accountType: besaSelection?.accountType || "user",
-          ...(besaSelection && {besaName: besaSelection.besaName})
+          ...(besaSelection && {besaName: besaSelection.besaName, studentId: besaSelection.studentId})
         }
         //Adds custom user data to database.
         await createUserDoc(user)

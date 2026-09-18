@@ -44,29 +44,6 @@ export default function SimulatorInfo() {
                 <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-yellow-500 inline-block"/>Good</span>
                 <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-green-600 inline-block"/>Easy</span>
             </div>
-
-            <h3 className="text-amber-500 text-3xl tracking-wide my-5">Mindset When Touring</h3>
-            <p className="p-2">
-                Think of a tour as a one-sided conversation - you'll be doing most of the talking, but that
-                doesn't mean it's a monologue. Keep these three things in mind while you speak:
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 my-5">
-                <div className="bg-gray-800 rounded-2xl p-4 text-center">
-                    <FaHeadphones className="w-6 h-6 mx-auto mb-2 text-gray-300"/>
-                    <h4 className="font-semibold">Active Listening</h4>
-                    <p className="text-sm text-gray-400">Even while you're talking, stay tuned in to reactions and questions from the group.</p>
-                </div>
-                <div className="bg-gray-800 rounded-2xl p-4 text-center">
-                    <FaHandshake className="w-6 h-6 mx-auto mb-2 text-gray-300"/>
-                    <h4 className="font-semibold">Respect</h4>
-                    <p className="text-sm text-gray-400">Every group is different - meet them where they are instead of running one fixed script.</p>
-                </div>
-                <div className="bg-gray-800 rounded-2xl p-4 text-center">
-                    <FaHeart className="w-6 h-6 mx-auto mb-2 text-gray-300"/>
-                    <h4 className="font-semibold">Empathy</h4>
-                    <p className="text-sm text-gray-400">You're there to help them understand the school, not just to get through your lines.</p>
-                </div>
-            </div>
         </section>
     )
 }

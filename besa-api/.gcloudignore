@@ -1,0 +1,15 @@
+# Firebase deploy packages up everything in this directory except what's listed here - none of this
+# ever needs to leave the local machine, and the credential files especially must never be uploaded
+# (the deployed function uses Application Default Credentials / secrets instead, see main.py).
+.venv
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+*firebase-adminsdk*.json
+serviceAccountKey.json
+.DS_Store
+README.md
+requirements.txt.orig

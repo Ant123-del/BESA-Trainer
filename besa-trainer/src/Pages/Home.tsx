@@ -104,7 +104,7 @@ function Landing() {
 
                 <div className="w-4/6 mx-auto py-16">
                     <h2 className="text-3xl tracking-wide text-center mb-10">What You Can Do Here</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <FeatureCard icon={<FaMapMarkedAlt className="w-8 h-8"/>} title="Take A Virtual Tour">
                             Watch real video walk-throughs of each floor - First Floor, Second Floor, Third
                             Floor, and Slugworks - at your own pace.
@@ -112,10 +112,6 @@ function Landing() {
                         <FeatureCard icon={<FaComments className="w-8 h-8"/>} title="Get Your Questions Answered">
                             Browse answers to the questions parents and prospective students most
                             commonly ask about the school.
-                        </FeatureCard>
-                        <FeatureCard icon={<FaChartLine className="w-8 h-8"/>} title="For BESAs: Practice Tools">
-                            BESA members get an expanded dashboard with tour rehearsal, quizzes, and
-                            progress tracking to prepare for leading real tours.
                         </FeatureCard>
                     </div>
                 </div>

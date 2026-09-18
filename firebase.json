@@ -1,0 +1,6 @@
+{
+  "functions": {
+    "source": "besa-api",
+    "runtime": "python311"
+  }
+}

@@ -351,7 +351,7 @@ export default function Simulator() {
                         <div className="fixed bottom-0 right-0 p-3 flex justify-end items-center gap-3 text-2xl bg-gray-900 w-full">
                             <span className="flex justify-center gap-2 items-center">{isBesaAccount ? "Continue to Training" : "Continue to Tour"} <FaArrowRight/></span>
                             <button
-                            className={"p-2 rounded-full" + (initialLoading ? " bg-blue-gray-400" : " bg-blue-800 hover:bg-blue-900")}
+                            className={"p-2 rounded-full inline" + (initialLoading ? " bg-blue-gray-400" : " bg-blue-800 hover:bg-blue-900")}
                             disabled={initialLoading}
                             onClick={handleContinue}>
                                 {initialLoading ? <MoonLoader color="white" size={20}/> : <span>Lets Go!</span>}

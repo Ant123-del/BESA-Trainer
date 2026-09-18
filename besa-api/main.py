@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from mangum import Mangum
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Literal
@@ -20,13 +19,36 @@ from google.api_core.client_options import ClientOptions
 from google.oauth2 import service_account as gcp_service_account
 
 from dotenv import load_dotenv
-load_dotenv()
-client = genai.Client()
+#named .env.local (not .env) on purpose - Firebase's deploy tooling auto-loads a plain ".env" file in
+#this directory as real Cloud Run env vars, which collides with GEMINI_API_KEY also being declared as
+#a secret below (Cloud Run rejects a var being both). ".env.local" is emulator-only by Firebase's own
+#convention, so it's never picked up at deploy time - only used here, locally, for uvicorn dev.
+load_dotenv(".env.local")
+
+#lazy, not constructed at import time - Firebase's own deploy-time discovery step imports this module
+#in a throwaway local process to find the https_fn.on_request()-decorated functions below, WITHOUT the
+#secrets (GEMINI_API_KEY etc.) injected yet, since those only exist once the function actually runs in
+#production. Building genai.Client() eagerly at import time stalls that discovery step until it times
+#out (see https://firebase.google.com/docs/functions/tips#avoid_deployment_timeouts_during_initialization).
+_genai_client = None
+def _get_genai_client():
+    global _genai_client
+    if _genai_client is None:
+        _genai_client = genai.Client()
+    return _genai_client
 
 FIREBASE_CRED_PATH = "./besa-trainer-api-firebase-adminsdk-fbsvc-f685a6ef51.json"
 
-# Firebase SDK
-cred = credentials.Certificate(FIREBASE_CRED_PATH)
+# Firebase SDK - the local service-account file is only present (and gitignored) on a dev machine.
+# Deployed on Cloud Functions/Cloud Run, there's no file at all: the function's own runtime service
+# account is picked up automatically via Application Default Credentials, so nothing has to be shipped.
+if os.path.exists(FIREBASE_CRED_PATH):
+    cred = credentials.Certificate(FIREBASE_CRED_PATH)
+    speech_credentials = gcp_service_account.Credentials.from_service_account_file(FIREBASE_CRED_PATH)
+else:
+    cred = credentials.ApplicationDefault()
+    speech_credentials = None  # let SpeechClient fall back to ADC too
+
 firebase_admin.initialize_app(cred, {
     "storageBucket": "besa-trainer-api.firebasestorage.app"
 })
@@ -34,10 +56,16 @@ firebase_admin.initialize_app(cred, {
 # Chirp 3 (Speech-to-Text v2) lives only in specific multi-regions today.
 SPEECH_LOCATION = "us"
 GCP_PROJECT_ID = cred.project_id
-speech_client = SpeechClient(
-    credentials=gcp_service_account.Credentials.from_service_account_file(FIREBASE_CRED_PATH),
-    client_options=ClientOptions(api_endpoint=f"{SPEECH_LOCATION}-speech.googleapis.com"),
-)
+
+_speech_client = None
+def _get_speech_client():
+    global _speech_client
+    if _speech_client is None:
+        _speech_client = SpeechClient(
+            credentials=speech_credentials,
+            client_options=ClientOptions(api_endpoint=f"{SPEECH_LOCATION}-speech.googleapis.com"),
+        )
+    return _speech_client
 
 app = FastAPI()
 security = HTTPBearer()
@@ -101,41 +129,37 @@ def require_root(user: dict = Depends(get_current_user)):
 
 
 # ---- BESA roster (besa-app project) ----
-# besa-app is a separate Firebase project holding the club's own member roster at /Besas/{id} - a
-# second, named Admin SDK app talks to it, kept apart from the default app (this project)
-# initialized above. Each doc: {id, name, email, status, role, supportedTourIds?, officeHours}.
-# TODO: BESA_APP_CRED_PATH needs a service-account JSON for besa-app (same idea as
-# FIREBASE_CRED_PATH above) dropped somewhere under besa-api/ and pointed to via .env.
-BESA_APP_CRED_PATH = os.getenv("BESA_APP_CRED_PATH")
-BESA_ROSTER_COLLECTION = os.getenv("BESA_ROSTER_COLLECTION", "Besas")
+# besa-app is a separate Firebase project holding the club's own member roster at /Besas/{id}. We used
+# to reach across projects live (a second, named Admin SDK app talking directly to besa-app), but that
+# path is blocked in this GCP org - the besa-app service account gets PERMISSION_DENIED from Cloud Run
+# even with the correct IAM role granted, which points at an org policy (e.g. a cross-project service
+# account restriction) neither project owner can self-serve around. Instead, someone with access to
+# both projects runs sync_roster.py locally (same script, same machine, same auth that already proves
+# this works outside Cloud Run) to mirror the roster into this project's own Firestore, and everything
+# below just reads that local mirror. Each cached doc: {name, role, status, officeHours}.
 BESA_ROSTER_NAME_FIELD = os.getenv("BESA_ROSTER_NAME_FIELD", "name")
 BESA_ROSTER_ROLE_FIELD = os.getenv("BESA_ROSTER_ROLE_FIELD", "role")
 BESA_ROSTER_LEAD_VALUE = os.getenv("BESA_ROSTER_LEAD_VALUE", "BESA Lead")
 BESA_ROSTER_STATUS_FIELD = os.getenv("BESA_ROSTER_STATUS_FIELD", "status")
 BESA_ROSTER_ACTIVE_VALUE = os.getenv("BESA_ROSTER_ACTIVE_VALUE", "active")
+BESA_ROSTER_CACHE_COLLECTION = "besa_roster_cache"
 
-_besa_app = None
 
-def _get_besa_app_db():
-    global _besa_app
-    if not BESA_APP_CRED_PATH:
-        return None
-    if _besa_app is None:
-        besa_cred = credentials.Certificate(BESA_APP_CRED_PATH)
-        _besa_app = firebase_admin.initialize_app(besa_cred, name="besa-app")
-    return firestore.client(_besa_app)
+def _get_cached_roster() -> list:
+    db = firestore.client()
+    docs = db.collection("training_data").document("data_root").collection(BESA_ROSTER_CACHE_COLLECTION).stream()
+    return [d.to_dict() or {} for d in docs]
 
 
 @app.get("/besa-roster")
 def besaRoster():
-    besa_db = _get_besa_app_db()
-    if besa_db is None:
-        raise HTTPException(status_code=503, detail="BESA roster isn't configured yet (missing BESA_APP_CRED_PATH).")
+    roster_docs = _get_cached_roster()
+    if not roster_docs:
+        raise HTTPException(status_code=503, detail="BESA roster cache is empty - ask someone with besa-app access to run sync_roster.py.")
 
     #every active roster entry, tagged besaLead/besa based on its role field
     roster = []
-    for entry in besa_db.collection(BESA_ROSTER_COLLECTION).stream():
-        data = entry.to_dict() or {}
+    for data in roster_docs:
         if data.get(BESA_ROSTER_STATUS_FIELD) != BESA_ROSTER_ACTIVE_VALUE:
             continue
         name = data.get(BESA_ROSTER_NAME_FIELD)
@@ -255,16 +279,10 @@ def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: d
 #[{"start": "HH:MM", "end": "HH:MM", "id": ...}, ...]}, ...} - picks the latest slot end on the
 #check-in's weekday that's still after the check-in time (covers someone with multiple slots that day).
 def _get_office_hours_end(besa_name, checked_in_at: datetime):
-    besa_db = _get_besa_app_db()
-    if besa_db is None or not besa_name:
+    if not besa_name:
         return None
 
-    roster_doc = None
-    for entry in besa_db.collection(BESA_ROSTER_COLLECTION).stream():
-        data = entry.to_dict() or {}
-        if data.get(BESA_ROSTER_NAME_FIELD) == besa_name:
-            roster_doc = data
-            break
+    roster_doc = next((d for d in _get_cached_roster() if d.get(BESA_ROSTER_NAME_FIELD) == besa_name), None)
     if roster_doc is None:
         return None
 
@@ -461,9 +479,13 @@ def removeActivityType(request_data: ActivityTypeRequest, root_user: dict = Depe
     return {"success": True, "activityTypes": base}
 
 
+#comma-separated in prod (e.g. "https://besa-trainer.vercel.app,https://besa-trainer-git-main.vercel.app") -
+#defaults to local dev only so a deploy without this set fails closed rather than open.
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Update if your frontend port is different
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -504,7 +526,7 @@ def _generate_vtt_with_chirp(bucket, temp_local_audio: str, floor_id: str) -> st
         )
 
         print("Generating script content via Chirp 3...")
-        operation = speech_client.batch_recognize(
+        operation = _get_speech_client().batch_recognize(
             request=cloud_speech.BatchRecognizeRequest(
                 recognizer=f"projects/{GCP_PROJECT_ID}/locations/{SPEECH_LOCATION}/recognizers/_",
                 config=recognition_config,
@@ -530,7 +552,7 @@ def _generate_vtt_with_chirp(bucket, temp_local_audio: str, floor_id: str) -> st
 
 def _generate_vtt_with_gemini(temp_local_audio: str) -> str:
     print("Uploading audio to Gemini Files API...")
-    gemini_file = client.files.upload(
+    gemini_file = _get_genai_client().files.upload(
         file=temp_local_audio,
         config=types.UploadFileConfig(mime_type="audio/mp3") # Explicitly set audio mime-type
     )
@@ -539,7 +561,7 @@ def _generate_vtt_with_gemini(temp_local_audio: str) -> str:
     while gemini_file.state.name == "PROCESSING":
         print("Gemini is processing audio tracks...")
         time.sleep(2) # Added a small sleep to avoid spamming rate limits
-        gemini_file = client.files.get(name=gemini_file.name)
+        gemini_file = _get_genai_client().files.get(name=gemini_file.name)
 
     if gemini_file.state.name == "FAILED":
         raise HTTPException(status_code=500, detail="Gemini audio processing failed.")
@@ -552,13 +574,13 @@ def _generate_vtt_with_gemini(temp_local_audio: str) -> str:
     )
 
     print("Generating script content via Gemini...")
-    response = client.models.generate_content(
+    response = _get_genai_client().models.generate_content(
         model="gemini-2.5-flash",
         contents=[gemini_file, prompt]
     )
 
     #Clean up Gemini's File API space
-    client.files.delete(name=gemini_file.name)
+    _get_genai_client().files.delete(name=gemini_file.name)
 
     return response.text
 
@@ -635,14 +657,14 @@ def transcribeAudio(request_data: TranscribeRequest, user: dict = Depends(get_cu
             f.write(audio_bytes)
 
         print("Uploading recording to Gemini Files API...")
-        gemini_file = client.files.upload(
+        gemini_file = _get_genai_client().files.upload(
             file=temp_local_audio,
             config=types.UploadFileConfig(mime_type=request_data.mimeType)
         )
 
         while gemini_file.state.name == "PROCESSING":
             time.sleep(1)
-            gemini_file = client.files.get(name=gemini_file.name)
+            gemini_file = _get_genai_client().files.get(name=gemini_file.name)
 
         if gemini_file.state.name == "FAILED":
             raise HTTPException(status_code=500, detail="Gemini audio processing failed.")
@@ -655,12 +677,12 @@ def transcribeAudio(request_data: TranscribeRequest, user: dict = Depends(get_cu
         #the voice test needs fast turnaround for a short answer clip, unlike script generation's Chirp 3
         #batch job (built for a full-length narration track) - so this always transcribes via Gemini.
         print("Transcribing recording via Gemini")
-        response = client.models.generate_content(
+        response = _get_genai_client().models.generate_content(
             model="gemini-2.5-flash",
             contents=[gemini_file, prompt]
         )
 
-        client.files.delete(name=gemini_file.name)
+        _get_genai_client().files.delete(name=gemini_file.name)
 
         return {"success": True, "text": (response.text or "").strip()}
 
@@ -732,4 +754,33 @@ def reconcileProgress(request_data: ReconcileProgressRequest, admin_user: dict =
         "message": f"Reconciled progress for {updated_count} account(s)."
     }
 
-handler = Mangum(app)
+#---- Firebase Functions entrypoint ----
+#Cloud Functions for Firebase (2nd gen, Python) discovers module-level https_fn.on_request()-decorated
+#callables and deploys each as its own HTTPS Cloud Run service - it does NOT speak ASGI natively, only
+#WSGI-style (Request) -> Response, so the FastAPI app is bridged through a2wsgi. Every route above stays
+#reachable under this one function's URL (e.g. https://api-<hash>-<region>.a.run.app/clock-in).
+#Local dev is unaffected - `uvicorn main:app --reload` still runs the same `app` object directly.
+from firebase_functions import https_fn, options
+from a2wsgi import ASGIMiddleware
+
+#lazy, not constructed at import time - ASGIMiddleware spawns a background thread running its own
+#event loop AT CONSTRUCTION, and functions-framework serves requests via gunicorn's pre-fork worker
+#model: if that thread gets created before gunicorn forks, fork() drops every thread but the caller's,
+#so each worker inherits a loop object with nobody actually running it - every request then hangs
+#forever waiting on a loop that's dead, with no error and no log output. Building it lazily, on first
+#request inside the already-forked worker, avoids this entirely.
+_wsgi_app = None
+def _get_wsgi_app():
+    global _wsgi_app
+    if _wsgi_app is None:
+        _wsgi_app = ASGIMiddleware(app)
+    return _wsgi_app
+
+@https_fn.on_request(
+    memory=options.MemoryOption.GB_1,
+    timeout_sec=900,
+    secrets=["GEMINI_API_KEY", "ALLOWED_ORIGINS"],
+    invoker="public",
+)
+def api(req: https_fn.Request) -> https_fn.Response:
+    return https_fn.Response.from_app(_get_wsgi_app(), req.environ)

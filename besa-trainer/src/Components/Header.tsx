@@ -91,7 +91,7 @@ export default function Header(): JSX.Element {
             {user ? (
                 <div className="relative w-64" ref={ref}>
                     <img 
-                    className="rounded-full w-8 border-gray-300 border-solid border-2 hover:brightness-75 mx-auto" 
+                    className="rounded-full w-8 h-8 border-gray-300 border-solid border-2 hover:brightness-75 mx-auto" 
                     src={user.photoURL || DefaultProfile}
                     onClick={() => setPopup((e:boolean) => !e)}
                     />

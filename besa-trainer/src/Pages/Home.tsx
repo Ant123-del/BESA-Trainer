@@ -23,7 +23,7 @@ const IconButton = IconButtonUntyped as unknown as ComponentType<IconButtonProps
 import { FaChevronLeft } from "react-icons/fa";
 import { FaChevronRight } from "react-icons/fa";
 import { IoSchool } from "react-icons/io5";
-import { FaMapMarkedAlt, FaComments, FaChartLine } from "react-icons/fa";
+import { FaMapMarkedAlt, FaComments } from "react-icons/fa";
 
 //logged out (or still loading) shows the public landing page - a general "come see what Baskin
 //Engineering is about" pitch aimed at anyone curious about the school, not specifically at BESAs.

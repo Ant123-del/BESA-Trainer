@@ -1,4 +1,4 @@
-import { FaHandshake, FaHeadphones, FaHeart, FaKeyboard, FaMicrophone } from "react-icons/fa"
+import { FaKeyboard, FaMicrophone } from "react-icons/fa"
 import { IoMdSettings } from "react-icons/io"
 
 export default function SimulatorInfo() {

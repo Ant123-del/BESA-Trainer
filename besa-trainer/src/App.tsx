@@ -11,6 +11,8 @@ import MyProgress from './Pages/Progress'
 import { createPlayer, videoFeatures } from '@videojs/react'
 import GettingStarted from './Components/SectionEditor/GettingStarted'
 import QuestionSimulator from './Pages/QuestionSimulator'
+import QuestionsEditor from './Pages/QuestionsEditor'
+import QuestionsProgress from './Pages/QuestionsProgress'
 import BesaSignUp from './Pages/BesaSignUp'
 import ManageAdmins from './Pages/ManageAdmins'
 import RequireAccess from './Components/RequireAccess'
@@ -32,9 +34,9 @@ const router = createBrowserRouter(createRoutesFromChildren(
       <Route path='general' element={<div></div>}/>
     </Route>,
     <Route path='/read-script/:tour' element={<RequireAccess level="besa"><ReadScript/></RequireAccess>}/>,
-    <Route path='/questions/:type' element={<QuestionSimulator/>}>
-      <Route path='student-life' element={<div></div>}/>
-    </Route>,
+    <Route path='/questions/:setId' element={<QuestionSimulator/>}/>,
+    <Route path='/questions-editor' element={<RequireAccess level="besa"><QuestionsEditor/></RequireAccess>}/>,
+    <Route path='/questions-progress' element={<QuestionsProgress/>}/>,
     <Route path='/progress/:tour' element={<MyProgress/>}/>,
     <Route path='/' element={<Home/>}/>,
   ]))

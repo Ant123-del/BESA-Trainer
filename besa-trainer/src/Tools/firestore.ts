@@ -1,6 +1,6 @@
 import { getFirestore, setDoc, doc, collection, getDoc, writeBatch, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
 import { getFirebaseApp } from "./firebase";
-import type { CosScript, Floor, Script, User } from "./types";
+import type { CosScript, Floor, Script, User, Question, QuestionSet, CustomAnswer } from "./types";
 import { deleteObject, getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
 import { v4 as uuidv4 } from "uuid";
 import { getScript } from "./Fetch";
@@ -122,6 +122,50 @@ export async function ensurePersonalScript(uid: string, scriptPaths: CosScript[]
     const newScriptPaths = [...scriptPaths.filter(s => s.floorCode !== floor.floorCode), newCosScript]
     await updateDoc(doc(db, "training_data", "data_root", "users", uid), {scriptPaths: newScriptPaths})
     return {cosScript: newCosScript, scriptText: copy, scriptPaths: newScriptPaths}
+}
+
+// ---- Question sets: shared, collaboratively-editable Q&A decks (see QuestionsEditor.tsx) ----
+
+const QUESTION_SETS_PATH = ["training_data", "data_root", "question_sets"] as const
+
+export async function getQuestionSets(): Promise<QuestionSet[]> {
+    const snap = await getDocs(collection(db, ...QUESTION_SETS_PATH))
+    return snap.docs.map(d => d.data() as QuestionSet)
+}
+
+export async function createQuestionSet(uid: string, title: string): Promise<QuestionSet> {
+    const newSet: QuestionSet = {id: uuidv4(), title, createdBy: uid, questions: []}
+    await setDoc(doc(db, ...QUESTION_SETS_PATH, newSet.id), newSet)
+    return newSet
+}
+
+//overwrites a set's whole questions array - covers add/edit/delete/import from one place, same
+//rebuild-the-array-then-write pattern used throughout this file.
+export async function saveQuestions(setId: string, questions: Question[]) {
+    await updateDoc(doc(db, ...QUESTION_SETS_PATH, setId), {questions})
+}
+
+export async function deleteQuestionSet(setId: string) {
+    await deleteDoc(doc(db, ...QUESTION_SETS_PATH, setId))
+}
+
+//upserts one personalized answer (replacing any existing entry for the same set+question) and writes
+//the whole customAnswers array back to the user doc - direct analogue of ensurePersonalScript, but no
+//Storage step since it's just text.
+export async function setCustomAnswer(uid: string, customAnswers: CustomAnswer[], setId: string, questionId: string, answer: string): Promise<CustomAnswer[]> {
+    const newCustomAnswers = [
+        ...customAnswers.filter(a => !(a.setId === setId && a.questionId === questionId)),
+        {setId, questionId, answer}
+    ]
+    await updateDoc(doc(db, "training_data", "data_root", "users", uid), {customAnswers: newCustomAnswers})
+    return newCustomAnswers
+}
+
+//drops a personalized answer (used for "revert to original") - direct analogue of removeCustomScript.
+export async function removeCustomAnswer(uid: string, customAnswers: CustomAnswer[], setId: string, questionId: string): Promise<CustomAnswer[]> {
+    const newCustomAnswers = customAnswers.filter(a => !(a.setId === setId && a.questionId === questionId))
+    await updateDoc(doc(db, "training_data", "data_root", "users", uid), {customAnswers: newCustomAnswers})
+    return newCustomAnswers
 }
 
 export async function deleteDraftFloor(floor: Floor) {

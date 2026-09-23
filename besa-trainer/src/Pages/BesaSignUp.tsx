@@ -86,7 +86,7 @@ export default function BesaSignUp(): JSX.Element {
         <Header/>
         <div className="w-screen min-h-screen flex items-center justify-center bg-gray-900 py-10">
             <form
-                className="w-2/4 mx-auto bg-white rounded-2xl p-5 text-black"
+                className="w-11/12 sm:w-3/4 md:w-2/4 mx-auto bg-white rounded-2xl p-5 text-black"
                 onSubmit={(e) => void onSubmit(e)}
             >
                 <h2 className="mb-2 text-center text-3xl font-bold">Sign Up as BESA</h2>
@@ -94,7 +94,7 @@ export default function BesaSignUp(): JSX.Element {
                     Pick your name from the BESA roster below to link your account to your BESA info.
                 </p>
 
-                <div className="w-3/4 mx-auto">
+                <div className="w-full sm:w-3/4 mx-auto">
                     {roster === null && !rosterError &&
                         <div className="flex justify-center my-10"><MoonLoader color="#1e3a8a" size={24}/></div>
                     }
@@ -164,7 +164,7 @@ export default function BesaSignUp(): JSX.Element {
                 <button
                     type="submit"
                     disabled={busy || !selected || !studentId.trim()}
-                    className="py-5 px-2 my-5 bg-blue-900 rounded-2xl text-white font-[500] w-3/4 mx-auto block cursor-pointer hover:brightness-75 active:brightness-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="py-5 px-2 my-5 bg-blue-900 rounded-2xl text-white font-[500] w-full sm:w-3/4 mx-auto block cursor-pointer hover:brightness-75 active:brightness-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                     {busy ? "Creating account…" : "Submit"}
                 </button>

@@ -4,8 +4,8 @@ import { IoMdSettings } from "react-icons/io"
 export default function SimulatorInfo() {
     return (
         
-        <section className="p-5 pb-24 max-w-3/4 mx-auto">
-            <h3 className="text-amber-500 text-3xl tracking-wide my-5">Using The Simulation</h3>
+        <section className="p-5 pb-24 max-w-3/4 mx-auto px-4">
+            <h3 className="text-amber-500 text-2xl sm:text-3xl tracking-wide my-5">Using The Simulation</h3>
             <p className="p-2">
                 The tour video plays in short sections. Each time you reach a marker, playback pauses and you're
                 tested on what was just said before you can move on to the next part - you can watch the upcoming
@@ -38,7 +38,7 @@ export default function SimulatorInfo() {
             <p className="p-2">
                 After each test, rate how it went - the colored dots on the video's progress bar keep track for you:
             </p>
-            <div className="flex items-center gap-6 p-2 text-sm text-gray-300">
+            <div className="flex flex-wrap items-center gap-3 sm:gap-6 p-2 text-sm text-gray-300">
                 <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-amber-600 inline-block"/>Not tested yet</span>
                 <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-red-600 inline-block"/>Hard</span>
                 <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-yellow-500 inline-block"/>Good</span>

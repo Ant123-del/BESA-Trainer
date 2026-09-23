@@ -5,8 +5,8 @@ import { doc, getDoc } from "firebase/firestore";
 import Header from "../Components/Header";
 import RootDashboard from "./RootDashboard";
 import { getFirebaseAuth } from "../Tools/firebase";
-import { db } from "../Tools/firestore";
-import type { User as CustomUser } from "../Tools/types";
+import { db, getQuestionSets } from "../Tools/firestore";
+import type { User as CustomUser, QuestionSet } from "../Tools/types";
 import type { JSX, ComponentType } from "react";
 import Background from "../imgs/background.jpg"
 import Background2 from "../imgs/background-2.jpg"
@@ -85,8 +85,8 @@ function Landing() {
                 <div className="relative w-full h-[28rem] overflow-hidden">
                     <img src={Background} className="w-full h-full object-cover brightness-50" alt=""/>
                     <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-5">
-                        <h1 className="text-5xl font-semibold tracking-wide mb-4">BESA Resources</h1>
-                        <p className="text-lg text-gray-200 max-w-2xl mb-8">
+                        <h1 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-wide mb-4">BESA Resources</h1>
+                        <p className="text-base sm:text-lg text-gray-200 max-w-2xl mb-8">
                             Curious about Baskin Engineering? Take a video walk through each floor, get answers
                             to the questions students and parents ask most, and get a feel for the school
                             without having to schedule a visit.
@@ -102,8 +102,8 @@ function Landing() {
                     </div>
                 </div>
 
-                <div className="w-4/6 mx-auto py-16">
-                    <h2 className="text-3xl tracking-wide text-center mb-10">What You Can Do Here</h2>
+                <div className="w-11/12 md:w-4/6 mx-auto py-16">
+                    <h2 className="text-2xl sm:text-3xl tracking-wide text-center mb-10">What You Can Do Here</h2>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <FeatureCard icon={<FaMapMarkedAlt className="w-8 h-8"/>} title="Take A Virtual Tour">
                             Watch real video walk-throughs of each floor - First Floor, Second Floor, Third
@@ -117,7 +117,7 @@ function Landing() {
                 </div>
 
                 <div className="w-full bg-gray-800 py-14">
-                    <div className="w-4/6 mx-auto text-center">
+                    <div className="w-11/12 md:w-4/6 mx-auto text-center">
                         <h2 className="text-2xl tracking-wide mb-3">Ready to take a look around?</h2>
                         <p className="text-gray-400 mb-6">Create a free account to start exploring.</p>
                         <Link to="/signup" className="px-8 py-3 rounded-full bg-amber-500 hover:bg-amber-600 text-black font-semibold">
@@ -150,25 +150,33 @@ function FeatureCard({icon, title, children}: {icon: JSX.Element, title: string,
 //Simulator itself already renders a simplified, untested viewing experience for non-BESA accounts, so
 //this only has to point at it.
 function UserDashboard({brandName}: {brandName: string}) {
+    const [questionSets, setQuestionSets] = useState<QuestionSet[]>([])
+
+    useEffect(() => {
+        getQuestionSets().then(result => setQuestionSets(result))
+    }, [])
+
     return (
         <>
             <Header/>
             <div className="h-16 relative top-0 left-0 w-full"></div>
-            <div className="w-full min-h-screen bg-gray-900 flex justify-center items-start relative text-white gap-4">
-                <div className="sticky top-0 right-0 w-1/6 mt-16 border-r-solid border-r-gray-600 border-r-2 py-10 px-3">
+            <div className="w-full min-h-screen bg-gray-900 flex flex-col md:flex-row justify-center items-stretch md:items-start relative text-white gap-4">
+                <div className="static md:sticky top-0 right-0 w-full md:w-1/6 mt-6 md:mt-16 border-b-2 md:border-b-0 border-r-solid md:border-r-gray-600 md:border-r-2 border-gray-600 py-5 md:py-10 px-3">
                     <h3 className="text-2xl tracking-wider">Explore</h3>
                     <hr className="w-2/4 mx-auto my-5"></hr>
 
-                    <SideBarElement to="#general-tour">
-                        <h4>Take A Tour</h4>
-                    </SideBarElement>
-                    <SideBarElement to="#q-a">
-                        <h4>Common Questions</h4>
-                    </SideBarElement>
+                    <div className="flex md:block gap-2 flex-wrap">
+                        <SideBarElement to="#general-tour">
+                            <h4>Take A Tour</h4>
+                        </SideBarElement>
+                        <SideBarElement to="#questions">
+                            <h4>Common Questions</h4>
+                        </SideBarElement>
+                    </div>
                 </div>
-                <div className="w-4/6 mt-16">
-                    <div>
-                        <h1 className="text-2xl tracking-wider">
+                <div className="w-11/12 md:w-4/6 mx-auto md:mx-0 mt-6 md:mt-16">
+                    <div id="general-tour" className="scroll-mt-20">
+                        <h1 className="text-xl sm:text-2xl tracking-wider">
                             Welcome to {brandName}
                         </h1>
                         <p className="text-xs text-gray-500 mb-2">
@@ -213,22 +221,27 @@ function UserDashboard({brandName}: {brandName: string}) {
                         <Tour src={Background4} to="/simulator/general?f=b" name="Slugworks" cta="Watch Tour"/>
                     </Carousel>
 
-                    <div id="questions">
-                        <div className="mt-5">
-                            <h1 className="text-2xl tracking-wider">
+                    <hr className="w-3/4 mx-auto mt-16 border-gray-700"/>
+                    <div id="questions" className="scroll-mt-20">
+                        <div className="mt-10">
+                            <h1 className="text-xl sm:text-2xl tracking-wider">
                                 Common Questions
                             </h1>
                             <p className="text-xs text-gray-500 mb-2">
                                 Things parents and prospective students often ask about the school.
                             </p>
                         </div>
-                        <div className="flex justify-center items-center gap-5">
-                            <Card to="/questions/student-life" title="Student Life">
-                                <IoSchool className="mx-auto my-5 box-border w-16 h-16"/>
-                                <p>
-                                    See answers to common questions about student life at Baskin Engineering.
-                                </p>
-                            </Card>
+                        <div className="flex justify-center items-center gap-5 flex-wrap">
+                            {questionSets.length === 0 ?
+                                <p className="text-gray-500 italic text-sm">No question sets yet.</p>
+                                : questionSets.map(set => (
+                                <Card key={set.id} to={`/questions/${set.id}`} title={set.title}>
+                                    <IoSchool className="mx-auto my-5 box-border w-16 h-16"/>
+                                    <p>
+                                        {set.questions.length} question{set.questions.length === 1 ? "" : "s"}
+                                    </p>
+                                </Card>
+                            ))}
                         </div>
                     </div>
                 </div>
@@ -239,27 +252,35 @@ function UserDashboard({brandName}: {brandName: string}) {
 
 //a BESA/BESA Lead's dashboard - the full practice experience (rehearsal, quizzes, progress tracking).
 function BesaDashboard({brandName}: {brandName: string}) {
+    const [questionSets, setQuestionSets] = useState<QuestionSet[]>([])
+
+    useEffect(() => {
+        getQuestionSets().then(result => setQuestionSets(result))
+    }, [])
+
     return (
         <>
             <Header/>
             <div className="h-16 relative top-0 left-0 w-full"></div>
-            <div className="w-full min-h-screen bg-gray-900 flex justify-center items-start relative text-white gap-4">
-                <div className="sticky top-0 right-0 w-1/6 mt-16 border-r-solid border-r-gray-600 border-r-2 py-10 px-3">
+            <div className="w-full min-h-screen bg-gray-900 flex flex-col md:flex-row justify-center items-stretch md:items-start relative text-white gap-4">
+                <div className="static md:sticky top-0 right-0 w-full md:w-1/6 mt-6 md:mt-16 border-b-2 md:border-b-0 border-r-solid md:border-r-gray-600 md:border-r-2 border-gray-600 py-5 md:py-10 px-3">
                     {/* This is the nav bar */}
                     <h3 className="text-2xl tracking-wider">Practice</h3>
                     <hr className="w-2/4 mx-auto my-5"></hr>
 
-                    <SideBarElement to="#general-tour">
-                        <h4>Practice Tours</h4>
-                    </SideBarElement>
-                    <SideBarElement to="#q-a">
-                        <h4>Practice Questions</h4>
-                    </SideBarElement>
+                    <div className="flex md:block gap-2 flex-wrap">
+                        <SideBarElement to="#general-tour">
+                            <h4>Practice Tours</h4>
+                        </SideBarElement>
+                        <SideBarElement to="#questions">
+                            <h4>Practice Questions</h4>
+                        </SideBarElement>
+                    </div>
                 </div>
-                <div className="w-4/6 mt-16">
-                    <div className="flex justify-between items-start">
+                <div className="w-11/12 md:w-4/6 mx-auto md:mx-0 mt-6 md:mt-16">
+                    <div id="general-tour" className="flex flex-col sm:flex-row justify-between items-start gap-3 scroll-mt-20">
                         <div>
-                            <h1 className="text-2xl tracking-wider">
+                            <h1 className="text-xl sm:text-2xl tracking-wider">
                                 Welcome to {brandName}
                             </h1>
                             <p className="text-xs text-gray-500 mb-2">
@@ -314,23 +335,40 @@ function BesaDashboard({brandName}: {brandName: string}) {
                             secondaryTo="/read-script/general?f=b" secondaryCta="Read Script"/>
                     </Carousel>
 
-                {/* This is the divider for the other section of practing questions parents may ask: */}
-                    <div id="questions">
-                        <div className="mt-5">
-                            <h1 className="text-2xl tracking-wider">
-                                Practicing General Questions
-                            </h1>
-                            <p className="text-xs text-gray-500 mb-2">
-                                Parents or students may ask general questions.
-                            </p>
-                        </div>
-                        <div className="flex justify-center items-center gap-5">
-                            <Card to="/questions/student-life" title="Student Life">
-                                <IoSchool className="mx-auto my-5 box-border w-16 h-16"/>
-                                <p>
-                                    Practice answering questions that frequently come up from parents and future students!
+                {/* Divider for the other section of practicing questions parents may ask: */}
+                    <hr className="w-3/4 mx-auto mt-16 border-gray-700"/>
+                    <div id="questions" className="scroll-mt-20">
+                        <div className="mt-10 flex flex-col sm:flex-row justify-between items-start gap-3">
+                            <div>
+                                <h1 className="text-xl sm:text-2xl tracking-wider">
+                                    Practicing General Questions
+                                </h1>
+                                <p className="text-xs text-gray-500 mb-2">
+                                    Parents or students may ask general questions.
                                 </p>
-                            </Card>
+                            </div>
+                            <div className="flex gap-2 shrink-0 flex-wrap">
+                                <Link to="/questions-editor"
+                                    className="p-2 px-6 rounded-full bg-amber-500 hover:bg-amber-600 text-black text-sm font-semibold">
+                                    Question Editor
+                                </Link>
+                                <Link to="/questions-progress"
+                                    className="p-2 px-6 rounded-full border border-gray-400 hover:bg-gray-800 text-sm font-semibold">
+                                    My Progress
+                                </Link>
+                            </div>
+                        </div>
+                        <div className="flex justify-center items-center gap-5 flex-wrap">
+                            {questionSets.length === 0 ?
+                                <p className="text-gray-500 italic text-sm">No question sets yet - use Question Editor to create one.</p>
+                                : questionSets.map(set => (
+                                <Card key={set.id} to={`/questions/${set.id}`} title={set.title}>
+                                    <IoSchool className="mx-auto my-5 box-border w-16 h-16"/>
+                                    <p>
+                                        {set.questions.length} question{set.questions.length === 1 ? "" : "s"}
+                                    </p>
+                                </Card>
+                            ))}
                         </div>
                     </div>
                 </div>
@@ -344,7 +382,7 @@ function Tour({src, to, name, cta, secondaryTo, secondaryCta}: {src: string, to:
         <div className="w-full bg-white mx-auto rounded-2xl">
             <div className="relative w-full h-64">
                 <img src={src} className="brightness-75 rounded-t-2xl object-cover h-64 w-full absolute top-0 right-0 z-0"/>
-                <h2 className="bg-blue-800 p-3 z-10 relative rounded-xl w-2/4 top-16 left-5 text-3xl">{name}</h2>
+                <h2 className="bg-blue-800 p-3 z-10 relative rounded-xl w-3/4 sm:w-2/4 top-16 left-5 text-xl sm:text-2xl md:text-3xl">{name}</h2>
             </div>
             <div className="bg-white text-black rounded-b-2xl p-3 flex flex-col gap-2">
                 <Link className="mx-auto bg-amber-500 p-3 bold flex justify-center items-center w-3/4 rounded-full shadow-light
@@ -377,7 +415,7 @@ function SideBarElement({children, to}: {children: JSX.Element, to: string}) {
 function Card({children, title, to}: {children:JSX.Element[], title: string, to: string}) {
 
     return (
-        <Link to={to} className="w-4/12 rounded-2xl bg-amber-700 text-white p-3 text-center hover:bg-amber-800">
+        <Link to={to} className="w-full sm:w-5/12 md:w-4/12 rounded-2xl bg-amber-700 text-white p-3 text-center hover:bg-amber-800">
             <h3 className="text-2xl">{title}</h3>
             {children}
         </Link>

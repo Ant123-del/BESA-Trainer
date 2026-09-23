@@ -158,7 +158,7 @@ export function FillTest({floorId, section, progress, setProgress, userInfo, set
                 </div>
                 :
                 <div>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <h4 className="text-sm text-gray-400 mb-2 text-center">Your Answer</h4>
                             {sectionFillings.map((f, i) => (

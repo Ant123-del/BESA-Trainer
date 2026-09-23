@@ -30,7 +30,7 @@ export default function ReadScript() {
     const [floor, setFloor] = useState<Floor | null>(null)
     const [floorChecked, setFloorChecked] = useState(false)
 
-    const [source, setSource] = useState<Source>("mine")
+    const [source, setSource] = useState<Source>("default")
     const [defaultScript, setDefaultScript] = useState<string | null>(null)
     const [cosScript, setCosScript] = useState<CosScript | null>(null)
     const [personalScript, setPersonalScript] = useState<string | null>(null)
@@ -67,9 +67,9 @@ export default function ReadScript() {
         })
     }, [f])
 
-    //switching floors always lands back on "My Script" and clears whatever the previous floor loaded
+    //switching floors always lands back on "Default Script" and clears whatever the previous floor loaded
     useEffect(() => {
-        setSource("mine")
+        setSource("default")
         setDefaultScript(null)
         setCosScript(null)
         setPersonalScript(null)
@@ -195,8 +195,8 @@ export default function ReadScript() {
             <Header/>
             <div className="h-16 relative top-0 left-0 w-full"></div>
 
-            <header className="p-3 flex justify-between items-center border-b-2 border-b-solid border-b-gray-500">
-                <h1 className="text-4xl tracking-wider">{floorNameDecoder(f)} Script</h1>
+            <header className="p-3 flex flex-wrap justify-between items-center gap-3 border-b-2 border-b-solid border-b-gray-500">
+                <h1 className="text-2xl sm:text-3xl md:text-4xl tracking-wider">{floorNameDecoder(f)} Script</h1>
                 <Link to="/" className="flex justify-center gap-2 items-center hover:text-gray-400 p-2">
                     <IoMdArrowRoundBack/>
                     <span>Back</span>

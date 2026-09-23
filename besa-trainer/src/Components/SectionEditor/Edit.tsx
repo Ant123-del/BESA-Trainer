@@ -383,8 +383,8 @@ function ManageVideo({otherVideos, setUploaded, setOtherVideos}: {otherVideos:Fl
             {/* Popup message confirmation deleting draft */}
             {deletePopup && 
             <div className="z-[100] fixed w-screen h-screen bg-gray-600/50 top-0 right-0 flex justify-center items-center">
-                <div className="bg-white w-1/4 rounded-2xl">
-                    <h2 className="text-red-500 text-3xl text-center my-3">Are you sure you want to delete this draft?</h2>
+                <div className="bg-white w-11/12 sm:w-2/3 md:w-1/4 max-w-sm rounded-2xl">
+                    <h2 className="text-red-500 text-2xl sm:text-3xl text-center my-3 px-3">Are you sure you want to delete this draft?</h2>
                     <p className="mx-auto my-3 text-black text-center">This action cannot be undone</p>
                     <button className="text-white block rounded-full bg-red-800 p-3 mx-auto my-3 w-3/4 hover:bg-red-900" onClick={() => handleDelete()}>Yes I am sure</button>
                     <button className="text-white block rounded-full bg-blue-800 p-3 mx-auto my-3 w-3/4 hover:bg-blue-900" onClick={() => setDeletePopup(false)}>Cancel</button>

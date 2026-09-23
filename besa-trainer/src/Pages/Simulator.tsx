@@ -271,14 +271,14 @@ export default function Simulator() {
     return (
         <div className="bg-gray-900 w-full min-h-screen text-white">
             {/* custom header for the simulator */}
-              <header className="p-3 flex justify-between items-center border-b-2 border-b-solid border-b-gray-500">
+              <header className="p-3 flex flex-wrap justify-between items-center gap-3 border-b-2 border-b-solid border-b-gray-500">
                 <div className="">
                     <h1
-                        className="text-4xl tracking-wider"
+                        className="text-2xl sm:text-3xl md:text-4xl tracking-wider"
                     >{toTitleCase(tour as string)} Tour
                     </h1>
                 </div>
-                <div className="flex justify-between items-center w-1/6">
+                <div className="flex justify-between items-center gap-3 sm:gap-0 w-auto sm:w-1/6">
                     {/* Going to have to change back warning once progress is made, say that it wont save */}
                     <div onClick={() => setBackWarning(true)} className="flex justify-center gap-2 items-center hover:text-gray-400 p-2 cursor-pointer ">
                         <IoMdArrowRoundBack/>
@@ -296,21 +296,21 @@ export default function Simulator() {
               <div className="w-11/12 box-border mx-auto my-3 rounded-2xl bg-gray-800">
                 {!(initalCheck || initialLoading) ? 
                     Draft ? 
-                    (<><Player.Container className="flex justify-center items-center relative w-full">
-                        <div className="relative w-4/6">
+                    (<><Player.Container className="flex flex-col lg:flex-row justify-center items-center relative w-full">
+                        <div className="relative w-full lg:w-4/6">
                             {!videoLoaded &&
-                                <div className="absolute top-0 left-0 w-full h-96 rounded-tl-2xl bg-gray-800 z-20 overflow-hidden flex items-center justify-center">
+                                <div className="absolute top-0 left-0 w-full h-96 rounded-t-2xl lg:rounded-t-none lg:rounded-tl-2xl bg-gray-800 z-20 overflow-hidden flex items-center justify-center">
                                     <ContentLoader className="w-full h-full" backgroundColor="#374151" foregroundColor="#F59E0B">
                                         <rect x="0" y="0" className="w-full h-full"/>
                                     </ContentLoader>
                                 </div>
                             }
-                            <Video src={Draft.src}  className="w-full h-96 object-cover rounded-tl-2xl z-10"
+                            <Video src={Draft.src}  className="w-full h-96 object-cover rounded-t-2xl lg:rounded-t-none lg:rounded-tl-2xl z-10"
                             onMouseOver={handleVideoHover} onMouseMove={handleVideoHover} onMouseOut={() => setPauseState(false)}
                             onClick={handleToggle} onLoadedData={() => setVideoLoaded(true)}>
                             </Video>
                             <VideoControls sections={Draft.markers} progress={progress} sectionLocked={sectionLocked} currentSection={currentSection} setSectionLocked={setSectionLocked} setCurrentSection={setCurrentSection} isBesaAccount={isBesaAccount}/>
-                            {pauseState && <div className="transition-all absolute top-0 left-0 rounded-tl-2xl bg-black/40 w-full h-96 z-30" style={{pointerEvents: "none"}}>
+                            {pauseState && <div className="transition-all absolute top-0 left-0 rounded-t-2xl lg:rounded-t-none lg:rounded-tl-2xl bg-black/40 w-full h-96 z-30" style={{pointerEvents: "none"}}>
                                 {/* This is where the pause button will show when hovered over the video */}
                             </div>}
                         </div>
@@ -345,7 +345,7 @@ export default function Simulator() {
                     <p>No Video set up yet.</p> : 
                     //Placeholder for when things load up and start running
                     <div className="w-full bg-gray-900">
-                        <h2 className="text-light-blue-300 text-6xl tracking-wider my-10">Welcome to {floorNameDecoder(f || " the Simulation")}</h2>
+                        <h2 className="text-light-blue-300 text-3xl sm:text-4xl md:text-6xl tracking-wider my-10 px-4">Welcome to {floorNameDecoder(f || " the Simulation")}</h2>
                         <hr></hr>
                         {isBesaAccount ? <SimulatorInfo/> : <TourWelcomeInfo/>}
                         <div className="fixed bottom-0 right-0 p-3 flex justify-end items-center gap-3 text-2xl bg-gray-900 w-full">
@@ -365,7 +365,7 @@ export default function Simulator() {
               {/* Popup for going back if there is progress */}
               {BackWarning && 
                 <Loading>
-                    <div className="bg-gray-900 w-1/4 p-3 rounded-2xl text-center">
+                    <div className="bg-gray-900 w-11/12 sm:w-2/3 md:w-1/4 max-w-sm p-3 rounded-2xl text-center">
                         <h3 className="text-2xl">
                             Are You Sure You Want to Exit?
                         </h3>
@@ -382,7 +382,7 @@ export default function Simulator() {
               {/* Popup for picking a practice type before starting, when none has been done yet on this floor */}
               {practiceTypePopup &&
                 <Loading>
-                    <div className="bg-gray-900 w-1/3 p-5 rounded-2xl text-center">
+                    <div className="bg-gray-900 w-11/12 sm:w-2/3 md:w-1/3 max-w-md p-5 rounded-2xl text-center">
                         <h3 className="text-2xl mb-1">
                             How Do You Want To Practice?
                         </h3>
@@ -401,7 +401,7 @@ export default function Simulator() {
               {/* Settings popup, exits via the X or by clicking outside of it */}
               {settingsPopup &&
                 <Loading onClose={() => setSettingsPopup(false)}>
-                    <div className="bg-gray-900 w-1/3 p-5 rounded-2xl text-center relative">
+                    <div className="bg-gray-900 w-11/12 sm:w-2/3 md:w-1/3 max-w-md p-5 rounded-2xl text-center relative">
                         <button onClick={() => setSettingsPopup(false)}
                         className="absolute top-3 right-3 text-gray-400 hover:text-white text-xl leading-none">&times;</button>
                         <h3 className="text-2xl mb-1">Settings</h3>
@@ -436,7 +436,7 @@ export default function Simulator() {
 //here to watch, not be tested.
 function TourWelcomeInfo() {
     return (
-        <section className="p-5 pb-24 max-w-3/4 mx-auto text-center">
+        <section className="p-5 pb-24 max-w-3/4 mx-auto text-center px-4">
             <h3 className="text-amber-500 text-3xl tracking-wide my-5">Take A Look Around</h3>
             <p className="p-2 text-gray-300">
                 Sit back and watch the tour play through. Use the markers on the timeline below the video to
@@ -559,7 +559,7 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
     return (
         <>
         {sectionLocked &&
-            <div className="absolute top-0 left-0 w-full h-96 z-40 rounded-tl-2xl bg-black/60 flex items-center justify-center">
+            <div className="absolute top-0 left-0 w-full h-96 z-40 rounded-t-2xl lg:rounded-t-none lg:rounded-tl-2xl bg-black/60 flex items-center justify-center">
                 <p className="text-xl font-semibold tracking-wide text-center px-6">Please answer this Section Down Below</p>
             </div>
         }
@@ -850,7 +850,7 @@ function ScriptHandler({vttText, sections, sectionLocked, currentSection, progre
                     : "Finish Tour"
 
     return (
-        <div style={{background: "linear-gradient(180deg, #C65B11 0%, var(--t-orange, #F97316) 50%, #93440D 100%)"}} className="w-2/6 h-96 rounded-tr-2xl p-5 relative flex flex-col">
+        <div style={{background: "linear-gradient(180deg, #C65B11 0%, var(--t-orange, #F97316) 50%, #93440D 100%)"}} className="w-full lg:w-2/6 h-96 rounded-b-2xl lg:rounded-b-none lg:rounded-tr-2xl p-5 relative flex flex-col">
             <div className="relative flex-1 min-h-0 flex flex-col">
                 <h1 className="tracking-wider text-3xl font-bold shrink-0">{floorNameDecoder(f || "")}</h1>
                 <div className="overflow-y-scroll flex-1 min-h-0 w-full my-2">

@@ -78,12 +78,12 @@ export default function Header(): JSX.Element {
         : "BESA Resources"
 
     return (
-        <header className={"flex h-16 w-screen items-center justify-around border-b-2 border-double border-gray-500 bg-white text-blue-900 top-0 z-50 fixed"}>
-        <div className="flex items-center justify-center gap-5 font-sans text-3xl font-semibold tracking-wide">
-            <img src={Logo} className="w-10" alt="" width={40} height={40} />
-            <span>{brandName}</span>
+        <header className={"flex h-16 w-screen items-center justify-between sm:justify-around px-3 sm:px-0 border-b-2 border-double border-gray-500 bg-white text-blue-900 top-0 z-50 fixed"}>
+        <div className="flex items-center justify-center gap-2 sm:gap-5 font-sans text-lg sm:text-2xl md:text-3xl font-semibold tracking-wide min-w-0">
+            <img src={Logo} className="w-7 sm:w-10 shrink-0" alt="" width={40} height={40} />
+            <span className="truncate">{brandName}</span>
         </div>
-        <nav className="flex h-fit justify-center items-center gap-x-10 text-sm">
+        <nav className="flex h-fit justify-center items-center gap-x-4 sm:gap-x-10 text-sm shrink-0">
             <NavLink className={navClass} to="/">
             HOME
             </NavLink>

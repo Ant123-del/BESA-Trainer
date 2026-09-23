@@ -96,12 +96,12 @@ export default function MyProgress() {
         <div className="bg-gray-900 w-full min-h-screen text-white">
             <Header/>
             <div className="h-16 relative top-0 left-0 w-full"></div>
-            <div className="w-5/6 mx-auto py-10">
-                <div className="flex justify-between items-center mb-2">
-                    <h1 className="text-4xl tracking-wider">My Progress</h1>
+            <div className="w-11/12 md:w-5/6 mx-auto py-10">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-2">
+                    <h1 className="text-2xl sm:text-3xl md:text-4xl tracking-wider">My Progress</h1>
                     <Link to="/" className="p-2 px-6 rounded-full border border-gray-400 hover:bg-gray-800 shrink-0">Back to Home</Link>
                 </div>
-                <div className="flex items-center gap-4 text-xs text-gray-400 mb-8">
+                <div className="flex flex-wrap items-center gap-4 text-xs text-gray-400 mb-8">
                     <LegendDot color="bg-green-600" label="Easy"/>
                     <LegendDot color="bg-yellow-500" label="Good"/>
                     <LegendDot color="bg-red-600" label="Hard"/>

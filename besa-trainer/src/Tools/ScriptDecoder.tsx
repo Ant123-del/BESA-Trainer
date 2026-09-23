@@ -374,7 +374,7 @@ export function AnswerReview({answer, correctText, section, sections, scriptText
                     <span className="block text-xs text-gray-400">Match Score</span>
                 </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <h4 className="text-sm text-gray-400 mb-2 text-center">Your Answer</h4>
                     <p className="p-3 rounded-lg bg-gray-700 whitespace-pre-wrap">{answer || <span className="text-gray-500 italic">No answer</span>}</p>

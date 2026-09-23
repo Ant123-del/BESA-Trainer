@@ -16,6 +16,8 @@ export type User = {
     biWeeklyHours?: DayHours[] // current week (Sun-Sat) only - pruned on every clock-out
     lastCheckedIn?: Date | null // set by the root kiosk on clock-in, cleared on clock-out
     lastCheckedInActivities?: string[] // activities picked at clock-in - always set/cleared together with lastCheckedIn
+    questionProgress?: QuestionProgress[] // mirrors `progress`, but for question-set practice
+    customAnswers?: CustomAnswer[] // personalized answers, mirrors scriptPaths' "your own take" idea
 }
 
 //one calendar day's worked hours, recorded via the root kiosk's clock in/out flow.
@@ -87,3 +89,36 @@ export type SuccessResponse = {
 }
 
 export type FloorCode = "f1" | "f2" | "f3" | "b" | "e" | ""
+
+//a single Q&A pair within a QuestionSet - id is the stable key used for progress/custom-answer lookups,
+//so it has to survive edits to the question/answer text itself.
+export type Question = {
+    id: string
+    question: string
+    answer: string
+}
+
+//a shared, collaboratively-editable set of questions - any besa/besaLead account can create one and add
+//to/edit any set (see the Question Editor), same "shared resource" spirit as the video floors/scripts.
+export type QuestionSet = {
+    id: string
+    title: string
+    createdBy: string // uid, for display only - not an access gate
+    questions: Question[]
+}
+
+//mirrors Progress, but keyed by a question's string id instead of a video sectionTime.
+export type QuestionProgress = {
+    setId: string
+    practiceType: PracticeTypes
+    lastUpdated: Date
+    progress: {confidence: number, questionId: string}[]
+}
+
+//a user's own preferred answer for one question, overriding the set's answer until reverted - same idea
+//as CosScript's personalized-script override, but plain text (no Storage blob needed).
+export type CustomAnswer = {
+    setId: string
+    questionId: string
+    answer: string
+}

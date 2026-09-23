@@ -94,7 +94,7 @@ export default function Profile(): JSX.Element {
             <Header/>
             <div className="h-16 relative top-0 left-0 w-full"></div>
             <div className="w-5/6 max-w-3xl mx-auto py-10">
-                <h1 className="text-4xl tracking-wider mb-8">Profile</h1>
+                <h1 className="text-2xl sm:text-3xl md:text-4xl tracking-wider mb-8">Profile</h1>
 
                 {loading ?
                     <div className="flex justify-center py-20"><MoonLoader color="white" size={30}/></div>
@@ -146,7 +146,7 @@ export default function Profile(): JSX.Element {
 
             {deletePopup &&
                 <Loading onClose={deleting ? undefined : closeDeletePopup}>
-                    <div className="bg-gray-900 w-1/3 min-w-96 p-5 rounded-2xl text-center">
+                    <div className="bg-gray-900 w-11/12 sm:w-2/3 md:w-1/3 max-w-md p-5 rounded-2xl text-center">
                         <h3 className="text-2xl mb-1 text-red-500">Delete Your Account?</h3>
                         <p className="text-sm text-gray-400">
                             This will permanently delete your account, your progress, and every custom script you've made. This action cannot be undone.

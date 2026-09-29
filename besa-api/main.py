@@ -83,7 +83,7 @@ def get_current_user(cred: HTTPAuthorizationCredentials = Depends(security)):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired firebase token: : " + e, 
+            detail="Invalid or expired firebase token: " + str(e), 
             headers={"WWW-Authenticate": "Bearer"})
 
 
@@ -156,13 +156,8 @@ def _get_cached_roster() -> list:
     return [d.to_dict() or {} for d in docs]
 
 
-@app.get("/besa-roster")
-def besaRoster():
-    roster_docs = _get_cached_roster()
-    if not roster_docs:
-        raise HTTPException(status_code=503, detail="BESA roster cache is empty - ask someone with besa-app access to run sync_roster.py.")
-
-    #every active roster entry, tagged besaLead/besa based on its role field
+#every active roster entry, tagged besaLead/besa based on its role field
+def _active_roster(roster_docs: list) -> list:
     roster = []
     for data in roster_docs:
         if data.get(BESA_ROSTER_STATUS_FIELD) != BESA_ROSTER_ACTIVE_VALUE:
@@ -172,6 +167,15 @@ def besaRoster():
             continue
         tier = "besaLead" if data.get(BESA_ROSTER_ROLE_FIELD) == BESA_ROSTER_LEAD_VALUE else "besa"
         roster.append({"name": name, "tier": tier})
+    return roster
+
+
+@app.get("/besa-roster")
+def besaRoster():
+    roster_docs = _get_cached_roster()
+    if not roster_docs:
+        raise HTTPException(status_code=503, detail="BESA roster cache is empty - ask someone with besa-app access to run sync_roster.py.")
+    roster = _active_roster(roster_docs)
 
     #names already claimed by an account in this project get filtered out of the picker
     db = firestore.client()
@@ -183,6 +187,57 @@ def besaRoster():
 
     available = [r for r in roster if r["name"] not in claimed]
     return {"success": True, "roster": available}
+
+
+class CreateAccountRequest(BaseModel):
+    besaName: str | None = None
+    studentId: str | None = None
+
+
+#the only way a user doc gets created (Firestore rules deny client-side creates) - the browser makes the
+#Firebase Auth login, then calls this. The tier and admin flag come from the roster here, never from the
+#client, so nobody can sign themselves up as a besaLead/admin (or root, which is still hand-made only).
+@app.post("/create-account")
+def createAccount(request_data: CreateAccountRequest, user: dict = Depends(get_current_user)):
+    uid = user.get("uid")
+    db = firestore.client()
+    users_ref = db.collection("training_data").document("data_root").collection("users")
+    user_ref = users_ref.document(uid)
+
+    new_doc = {"uid": uid, "scriptPaths": [], "admin": False, "progress": [], "accountType": "user"}
+
+    if request_data.besaName is not None:
+        besa_name = request_data.besaName
+        student_id = (request_data.studentId or "").strip()
+        if not student_id:
+            raise HTTPException(status_code=400, detail="Please enter your school id.")
+
+        entry = next((r for r in _active_roster(_get_cached_roster()) if r["name"] == besa_name), None)
+        if entry is None:
+            raise HTTPException(status_code=400, detail="That name isn't on the active BESA roster.")
+
+        new_doc.update({
+            "accountType": entry["tier"],
+            "admin": entry["tier"] == "besaLead",
+            "besaName": besa_name,
+            "studentId": student_id,
+        })
+
+    #in a transaction so two people racing for the same roster name / school id can't both get it
+    @firestore.transactional
+    def create_in_transaction(transaction):
+        if user_ref.get(transaction=transaction).exists:
+            return False
+        if "besaName" in new_doc:
+            if list(users_ref.where("besaName", "==", new_doc["besaName"]).limit(1).get(transaction=transaction)):
+                raise HTTPException(status_code=409, detail="That BESA name has already been claimed by another account.")
+            if list(users_ref.where("studentId", "==", new_doc["studentId"]).limit(1).get(transaction=transaction)):
+                raise HTTPException(status_code=409, detail="That school id is already linked to another account.")
+        transaction.create(user_ref, new_doc)
+        return True
+
+    created = create_in_transaction(db.transaction())
+    return {"success": True, "created": created}
 
 
 class SetAdminStatusRequest(BaseModel):

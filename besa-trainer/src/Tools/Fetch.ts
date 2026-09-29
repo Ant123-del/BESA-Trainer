@@ -26,6 +26,37 @@ export async function getBesaRoster(): Promise<RosterEntry[] | void> {
     }
 }
 
+export type BesaSignupInfo = {besaName: string, studentId: string}
+
+//creates the signed-in user's Firestore user doc - the backend is the only thing allowed to (see
+//firestore.rules), and it decides the tier/admin flag from the roster itself. A no-op if the doc exists.
+export async function createAccount(besa?: BesaSignupInfo): Promise<{success: true, created: boolean} | {success: false, detail: string}> {
+    try {
+        const user = getAuth().currentUser
+        if (!user) {
+            return {success: false, detail: "Not logged in."}
+        }
+
+        const idToken = await user.getIdToken()
+        const response = await fetch(url + "create-account", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${idToken}`
+            },
+            body: JSON.stringify(besa ?? {})
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+            return {success: false, detail: typeof data.detail === "string" ? data.detail : `Request failed (${response.status})`}
+        }
+        return data
+    } catch (e) {
+        console.error(e)
+        return {success: false, detail: "Couldn't reach the server."}
+    }
+}
+
 export type BesaAccount = {
     uid: string
     email: string

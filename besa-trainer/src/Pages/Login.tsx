@@ -1,19 +1,17 @@
 import type { SyntheticEvent, JSX } from "react"
 import { useEffect, useState } from "react"
-import type { User as CustomUser } from "../Tools/types"
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
   signInWithEmailAndPassword,
   type User,
-  type UserCredential,
 } from "firebase/auth"
 import { Link, useNavigate } from "react-router-dom"
 import Header from "../Components/Header"
 import GoogleSignInButton from "../Components/GoogleSignInButton"
 import { mapFirebaseAuthError } from "../Tools/authErrors"
 import { getFirebaseAuth } from "../Tools/firebase"
-import { createUserDoc } from "../Tools/firestore"
+import { isSignupInProgress, signUp } from "../Tools/signup"
 
 //login prop comes from the router, switches between sign in vs sign up form (see App.tsx)
 export default function Login({ login }: { login: boolean }): JSX.Element {
@@ -23,7 +21,7 @@ export default function Login({ login }: { login: boolean }): JSX.Element {
         //getting state of logged in and if logged in, back out
         const auth = getFirebaseAuth()
         const unsub = onAuthStateChanged(auth, (user: User | null) => {
-            if (user?.uid) {
+            if (user?.uid && !isSignupInProgress()) {
                 navigate('/')
             }
         })
@@ -133,18 +131,8 @@ function EmailPasswordSignUp(): JSX.Element {
         setError(null)
         setBusy(true)
         try {
-        const auth = getFirebaseAuth()
-        //firebase email/password registration
-        const userCredential:UserCredential = await createUserWithEmailAndPassword(auth, email.trim(), password)
-            //after getting UID, create user account
-        const user: CustomUser = {
-            uid: userCredential.user.uid,
-            scriptPaths: [],
-            admin: false,
-            progress: [],
-            accountType: "user"
-        }
-        await createUserDoc(user)
+        //firebase email/password registration, then the backend creates the user doc
+        await signUp(() => createUserWithEmailAndPassword(getFirebaseAuth(), email.trim(), password), undefined, {newLoginOnly: true})
 
         navigate("/")
         } catch (err) {

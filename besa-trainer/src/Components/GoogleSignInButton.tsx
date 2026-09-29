@@ -1,19 +1,16 @@
 import type { JSX } from "react"
 import { useState } from "react"
-import { signInWithPopup, type Auth, type UserCredential } from "firebase/auth"
+import { signInWithPopup } from "firebase/auth"
 import { useNavigate } from "react-router-dom"
 import Image from "../imgs/Google.png"
 import { mapFirebaseAuthError } from "../Tools/authErrors"
 import { getFirebaseAuth, googleAuthProvider } from "../Tools/firebase"
-import type { AccountType, User as CustomUser } from "../Tools/types"
-import { createUserDoc, db } from "../Tools/firestore"
-import { doc, getDoc } from "firebase/firestore"
+import type { BesaSignupInfo } from "../Tools/Fetch"
+import { signUp } from "../Tools/signup"
 
-//when used from the BESA signup flow, the caller passes along whichever roster name/tier the user
-//already picked from the dropdown, so a fresh account picks it up the same way the email/password path does.
-type BesaSelection = {besaName: string, accountType: Extract<AccountType, "besa" | "besaLead">, studentId: string}
-
-export default function GoogleSignInButton({besaSelection}: {besaSelection?: BesaSelection}): JSX.Element {
+//when used from the BESA signup flow, the caller passes along whichever roster name the user already
+//picked from the dropdown, so a fresh account claims it the same way the email/password path does.
+export default function GoogleSignInButton({besaSelection}: {besaSelection?: BesaSignupInfo}): JSX.Element {
   //we are using navigate to redirect the user to the home page after they sign in
   const navigate = useNavigate()
   //busy is a boolean that is true if the user is signing in
@@ -25,26 +22,9 @@ export default function GoogleSignInButton({besaSelection}: {besaSelection?: Bes
     setError(null)
     setBusy(true)
     try {
-      //opens google login in a popup, firebase handles tokens after they finish
-      const auth: Auth = getFirebaseAuth()
-      const userCredential:UserCredential = await signInWithPopup(auth, googleAuthProvider) // This is the magic method that opens the google login popup
-      //Need to make sure account doesnt already exist.
-      const docRef = doc(db, "training_data", "data_root", "users", userCredential.user.uid)
-      const docSnap = await getDoc(docRef)
-      if(!docSnap.exists()) {
-        //if doesnt exists, makes new document - carrying over the BESA roster pick if one was made,
-        //otherwise this is just a regular account.
-        const user: CustomUser = {
-          uid: userCredential.user.uid,
-          progress: [],
-          admin: besaSelection?.accountType === "besaLead",
-          scriptPaths: [],
-          accountType: besaSelection?.accountType || "user",
-          ...(besaSelection && {besaName: besaSelection.besaName, studentId: besaSelection.studentId})
-        }
-        //Adds custom user data to database.
-        await createUserDoc(user)
-      }
+      //opens google login in a popup, then the backend creates the user doc if this is a new account -
+      //an existing account just signs in. The Google login may predate this app, so it's never deleted.
+      await signUp(() => signInWithPopup(getFirebaseAuth(), googleAuthProvider), besaSelection)
       navigate("/")
     } catch (e) {
       setError(mapFirebaseAuthError(e)) // Tracks error if there is any

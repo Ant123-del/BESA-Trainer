@@ -14,26 +14,16 @@ service cloud.firestore {
         get(/databases/$(database)/documents/training_data/data_root/users/$(request.auth.uid)).data.admin == true;
     }
 
-    // Fields only the backend may change after signup: account tier/admin (root is hand-made and gates the
+    // Fields only the backend may change: account tier/admin (root is hand-made and gates the
     // root admin login; admin is granted via /set-admin-status), roster identity, and kiosk clock/hours.
     function protectedUserFields() {
       return ['uid', 'accountType', 'admin', 'besaName', 'studentId',
               'biWeeklyHours', 'lastCheckedIn', 'lastCheckedInActivities'];
     }
 
-    // Signup (Login / BesaSignUp / GoogleSignInButton) writes the doc from the browser, so creation is
-    // allowed - but never as root, admin only ever as a besaLead, and with no hours/clock state yet.
-    function validNewUser(userId) {
-      let data = request.resource.data;
-      return data.uid == userId
-        && data.accountType in ['user', 'besa', 'besaLead']
-        && data.get('admin', false) == (data.accountType == 'besaLead')
-        && !data.keys().hasAny(['biWeeklyHours', 'lastCheckedIn', 'lastCheckedInActivities']);
-    }
-
     match /training_data/data_root/users/{userId} {
       allow read: if signedIn() && request.auth.uid == userId;
-      allow create: if signedIn() && request.auth.uid == userId && validNewUser(userId);
+      // no client creates - besa-api's /create-account makes the doc, choosing tier/admin from the roster
       allow update: if signedIn() && request.auth.uid == userId
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(protectedUserFields());
       // root deletes go through /root-admin/delete-account so its passcode is wiped along with it

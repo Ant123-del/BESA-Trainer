@@ -1,14 +1,13 @@
 import { useEffect, useState, type SyntheticEvent, type JSX } from "react"
-import { createUserWithEmailAndPassword, onAuthStateChanged, type User, type UserCredential } from "firebase/auth"
+import { createUserWithEmailAndPassword, onAuthStateChanged, type User } from "firebase/auth"
 import { Link, useNavigate } from "react-router-dom"
 import { MoonLoader } from "react-spinners"
 import Header from "../Components/Header"
 import GoogleSignInButton from "../Components/GoogleSignInButton"
 import { mapFirebaseAuthError } from "../Tools/authErrors"
 import { getFirebaseAuth } from "../Tools/firebase"
-import { createUserDoc } from "../Tools/firestore"
+import { isSignupInProgress, signUp } from "../Tools/signup"
 import { getBesaRoster, type RosterEntry } from "../Tools/Fetch"
-import type { User as CustomUser } from "../Tools/types"
 
 //the alternate signup area for BESA members - reachable from the regular /signup page. Loads the
 //roster of not-yet-claimed BESA names from besa-api (which itself cross-references besa-app's roster
@@ -29,7 +28,7 @@ export default function BesaSignUp(): JSX.Element {
     useEffect(() => {
         const auth = getFirebaseAuth()
         const unsub = onAuthStateChanged(auth, (user: User | null) => {
-            if (user?.uid) {
+            if (user?.uid && !isSignupInProgress()) {
                 navigate('/')
             }
         })
@@ -61,18 +60,9 @@ export default function BesaSignUp(): JSX.Element {
         setError(null)
         setBusy(true)
         try {
-            const auth = getFirebaseAuth()
-            const userCredential: UserCredential = await createUserWithEmailAndPassword(auth, email.trim(), password)
-            const user: CustomUser = {
-                uid: userCredential.user.uid,
-                scriptPaths: [],
-                admin: selected.tier === "besaLead",
-                progress: [],
-                accountType: selected.tier,
-                besaName: selected.name,
-                studentId: studentId.trim()
-            }
-            await createUserDoc(user)
+            //the backend re-checks the name against the roster and sets the tier/admin flag itself
+            await signUp(() => createUserWithEmailAndPassword(getFirebaseAuth(), email.trim(), password),
+                {besaName: selected.name, studentId: studentId.trim()}, {newLoginOnly: true})
             navigate("/")
         } catch (err) {
             setError(mapFirebaseAuthError(err))
@@ -176,7 +166,7 @@ export default function BesaSignUp(): JSX.Element {
                 </p>
                 <div className="separator">OR</div>
                 {selected && studentId.trim() ?
-                    <GoogleSignInButton besaSelection={{besaName: selected.name, accountType: selected.tier, studentId: studentId.trim()}}/>
+                    <GoogleSignInButton besaSelection={{besaName: selected.name, studentId: studentId.trim()}}/>
                     :
                     <p className="text-center text-xs text-gray-500 mt-5">Select your name and enter your school id above to sign up with Google.</p>
                 }

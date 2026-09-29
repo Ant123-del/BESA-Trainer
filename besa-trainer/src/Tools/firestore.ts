@@ -9,19 +9,6 @@ const app = getFirebaseApp()
 export const db = getFirestore(app)
 
 
-//gets run everytime a new user is created
-export async function createUserDoc (user:User): Promise<void> {
-    try {
-        //adding document to database
-        const userDocRef = doc(db, "training_data", "data_root", "users", user.uid);
-    
-        await setDoc(userDocRef, user, { merge: true });
-        console.log("Document successfully written inside data_root for UID: ", user.uid);
-    } catch (e) {
-        console.error("Error adding document: ", e)
-    }
-}
-
 //getting userData
 export async function getUserDataById(uid: string): Promise<User | null> {
     try {

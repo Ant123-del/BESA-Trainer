@@ -303,11 +303,25 @@ export async function getCurrentSessions(): Promise<KioskSession[] | void> {
     }
 }
 
+//one day's hours as the backend sends them - same shape as DayHours, but with ISO-string dates
+export type ApiDayHours = {
+    date: string
+    hours: number
+    activities: string[]
+    autoClockedOut?: boolean
+    editedByAdmin?: boolean
+    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean}[]
+}
+
+//a member who's clocked in right now and hasn't clocked out yet
+export type ApiOpenSession = {clockIn: string, activities: string[]}
+
 export type MemberHours = {
     uid: string
     besaName?: string
     studentId?: string
-    hours: {date: string, hours: number, activities: string[], autoClockedOut?: boolean}[]
+    hours: ApiDayHours[]
+    openSession?: ApiOpenSession | null
 }
 
 //---- Root admin login: passcode-gated session on top of the signed-in root kiosk account ----
@@ -506,7 +520,7 @@ export async function removeActivityType(name: string): Promise<string[] | void>
 //past their 8pm auto-clockout window, closing the session (crediting hours via their besa-app office
 //hours schedule) if so. Called from Profile.tsx on load so a member sees an up-to-date week even if
 //nobody ever hit the root kiosk's Current Sessions/all-hours views after they forgot to clock out.
-export async function checkAutoClockout(): Promise<{success: boolean, biWeeklyHours: {date: string, hours: number, activities: string[], autoClockedOut?: boolean}[]} | void> {
+export async function checkAutoClockout(): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null} | void> {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -523,7 +537,7 @@ export async function checkAutoClockout(): Promise<{success: boolean, biWeeklyHo
             console.error(response.status)
             return
         }
-        return await response.json() as {success: boolean, biWeeklyHours: {date: string, hours: number, activities: string[], autoClockedOut?: boolean}[]}
+        return await response.json() as {success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null}
     } catch (e) {
         console.error(e)
     }

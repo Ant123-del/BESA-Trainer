@@ -304,10 +304,13 @@ def _find_besa_by_student_id(db, student_id: str):
 
 #prunes biWeeklyHours to the current week (relative to `now`), then merges this session's hours into
 #(or creates) the entry for checked_in_at's calendar day. Shared by manual clock-out and auto-clockout.
+#Each day also keeps its individual sessions (arrive/leave time + activities) so the hours table can show
+#when someone was actually there - entries written before sessions existed just have none.
 def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False):
     elapsed_hours = max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
     current_week_start = _week_start(now)
+    session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out}
 
     pruned = [e for e in existing if e.get("date") and e["date"].astimezone(PACIFIC) >= current_week_start]
 
@@ -316,10 +319,11 @@ def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: d
     for e in pruned:
         if e["date"].astimezone(PACIFIC).date() == entry_day.date():
             new_hours.append({
-                "date": e["date"],
+                **e,
                 "hours": e.get("hours", 0) + elapsed_hours,
                 "activities": sorted(set((e.get("activities") or []) + activities)),
                 "autoClockedOut": bool(e.get("autoClockedOut")) or auto_clocked_out,
+                "sessions": (e.get("sessions") or []) + [session],
             })
             merged = True
         else:
@@ -330,8 +334,35 @@ def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: d
             "hours": elapsed_hours,
             "activities": activities,
             "autoClockedOut": auto_clocked_out,
+            "sessions": [session],
         })
     return new_hours, elapsed_hours
+
+
+def _serialize_hours_entry(e: dict) -> dict:
+    return {
+        "date": e["date"].isoformat(),
+        "hours": e.get("hours", 0),
+        "activities": e.get("activities") or [],
+        "autoClockedOut": bool(e.get("autoClockedOut")),
+        "editedByAdmin": bool(e.get("editedByAdmin")),
+        "sessions": [
+            {
+                "clockIn": s["clockIn"].isoformat(),
+                "clockOut": s["clockOut"].isoformat(),
+                "activities": s.get("activities") or [],
+                "autoClockedOut": bool(s.get("autoClockedOut")),
+            }
+            for s in (e.get("sessions") or []) if s.get("clockIn") and s.get("clockOut")
+        ],
+    }
+
+
+#the still-open session (clocked in, not out yet), so the table can show "9:02 AM - now"
+def _open_session(data: dict):
+    if not data.get("lastCheckedIn"):
+        return None
+    return {"clockIn": data["lastCheckedIn"].isoformat(), "activities": data.get("lastCheckedInActivities") or []}
 
 
 #besa-app roster docs are matched to our users by name (same linkage /besa-roster uses for claiming).
@@ -451,11 +482,8 @@ def checkAutoClockout(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="User not found.")
 
     data = _auto_clock_out_if_needed(target_ref, doc.to_dict() or {})
-    hours = [
-        {"date": e["date"].isoformat(), "hours": e.get("hours", 0), "activities": e.get("activities") or [], "autoClockedOut": bool(e.get("autoClockedOut"))}
-        for e in (data.get("biWeeklyHours") or [])
-    ]
-    return {"success": True, "biWeeklyHours": hours, "lastCheckedIn": None}
+    hours = [_serialize_hours_entry(e) for e in (data.get("biWeeklyHours") or []) if e.get("date")]
+    return {"success": True, "biWeeklyHours": hours, "openSession": _open_session(data)}
 
 
 @app.get("/current-sessions")
@@ -483,7 +511,7 @@ def currentSessions(root_user: dict = Depends(require_root)):
 def _current_week_hours(data: dict) -> list:
     current_week_start = _week_start(datetime.now(PACIFIC))
     return [
-        {"date": e["date"].isoformat(), "hours": e.get("hours", 0), "activities": e.get("activities") or [], "autoClockedOut": bool(e.get("autoClockedOut"))}
+        _serialize_hours_entry(e)
         for e in (data.get("biWeeklyHours") or [])
         if e.get("date") and e["date"].astimezone(PACIFIC) >= current_week_start
     ]
@@ -649,7 +677,8 @@ def allHours(root_user: dict = Depends(require_root_admin)):
             continue
         if data.get("lastCheckedIn"):
             data = _auto_clock_out_if_needed(u.reference, data)
-        members.append({"uid": u.id, "besaName": data.get("besaName"), "studentId": data.get("studentId"), "hours": _current_week_hours(data)})
+        members.append({"uid": u.id, "besaName": data.get("besaName"), "studentId": data.get("studentId"),
+                        "hours": _current_week_hours(data), "openSession": _open_session(data)})
     return {"success": True, "members": members}
 
 
@@ -684,10 +713,22 @@ def setDayHours(request_data: SetDayHoursRequest, root_user: dict = Depends(requ
         raise HTTPException(status_code=404, detail="No BESA account found with that id.")
 
     data = target_doc.to_dict() or {}
-    remaining = [e for e in (data.get("biWeeklyHours") or []) if not (e.get("date") and e["date"].astimezone(PACIFIC).date() == day)]
+    all_entries = data.get("biWeeklyHours") or []
+    is_day = lambda e: e.get("date") and e["date"].astimezone(PACIFIC).date() == day
+    existing = next((e for e in all_entries if is_day(e)), None)
+    remaining = [e for e in all_entries if not is_day(e)]
     if request_data.hours > 0 or request_data.activities:
-        #an admin-set entry is a reviewed number, so it no longer counts as an auto-clockout guess
-        remaining.append({"date": entry_day, "hours": request_data.hours, "activities": request_data.activities, "autoClockedOut": False})
+        #an admin-set entry is a reviewed number, so it no longer counts as an auto-clockout guess. The
+        #recorded arrive/leave sessions are kept as-is (they're what actually happened) and the day is
+        #flagged as edited, since its total may no longer match them.
+        remaining.append({
+            "date": entry_day,
+            "hours": request_data.hours,
+            "activities": request_data.activities,
+            "autoClockedOut": False,
+            "editedByAdmin": True,
+            "sessions": (existing or {}).get("sessions") or [],
+        })
 
     target_ref.update({"biWeeklyHours": remaining})
     return {"success": True, "hours": _current_week_hours({**data, "biWeeklyHours": remaining})}

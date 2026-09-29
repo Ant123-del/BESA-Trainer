@@ -11,22 +11,37 @@ import { mapFirebaseAuthError } from "../Tools/authErrors"
 import type { User as CustomUser, DayHours } from "../Tools/types"
 import {
     changeRootAdminPasscode, checkAutoClockout, deleteRootAccount, getActivityTypes, getAllHours,
-    getRootAdminToken, rootAdminLogout, setMemberDayHours, type MemberHours
+    getRootAdminToken, rootAdminLogout, setMemberDayHours, type ApiDayHours, type ApiOpenSession, type MemberHours
 } from "../Tools/Fetch"
-import WeeklyHoursTable, { type WeeklyHoursEntry } from "../Components/WeeklyHoursTable"
+import WeeklyHoursTable, { type OpenSession, type WeeklyHoursEntry } from "../Components/WeeklyHoursTable"
 import RootAdminLogin from "../Components/RootAdminLogin"
 
-type RawDayHours = DayHours | {date: string, hours: number, activities: string[], autoClockedOut?: boolean}
+type RawDayHours = DayHours | ApiDayHours
 
-//DayHours.date comes back from Firestore as a Timestamp (has .toDate()), not a plain JS Date -
-//normalize both that and the backend's ISO-string dates (root's /all-hours) to the same shape.
+//dates read straight off the user doc are Firestore Timestamps (have .toDate()), not plain JS Dates -
+//normalize both that and the backend's ISO strings (/all-hours, /check-auto-clockout) to a Date.
+function toDate(value: unknown): Date {
+    return typeof value === "string" ? new Date(value) : (value as {toDate: () => Date}).toDate()
+}
+
 function toWeeklyHoursEntries(entries: RawDayHours[]): WeeklyHoursEntry[] {
     return entries.map(e => ({
         hours: e.hours,
         activities: e.activities,
         autoClockedOut: e.autoClockedOut,
-        date: typeof e.date === "string" ? new Date(e.date) : (e.date as unknown as {toDate: () => Date}).toDate(),
+        editedByAdmin: e.editedByAdmin,
+        date: toDate(e.date),
+        sessions: (e.sessions || []).map(s => ({
+            clockIn: toDate(s.clockIn),
+            clockOut: toDate(s.clockOut),
+            activities: s.activities || [],
+            autoClockedOut: s.autoClockedOut,
+        })),
     }))
+}
+
+function toOpenSession(session: ApiOpenSession | null | undefined): OpenSession | null {
+    return session ? {clockIn: new Date(session.clockIn), activities: session.activities} : null
 }
 
 //YYYY-MM-DD in the browser's local calendar (the kiosk runs in Pacific, same as the backend).
@@ -58,6 +73,8 @@ export default function Profile(): JSX.Element {
     //overrides userData.biWeeklyHours once the auto-clockout self-check comes back, so a forgotten
     //session that gets closed out mid-visit shows up without needing a manual refresh.
     const [ownHours, setOwnHours] = useState<RawDayHours[] | null>(null)
+    //undefined until that check answers - until then the open visit comes off the user doc directly
+    const [ownOpenSession, setOwnOpenSession] = useState<OpenSession | null | undefined>(undefined)
 
     const isRoot = userData?.accountType === "root"
 
@@ -76,7 +93,11 @@ export default function Profile(): JSX.Element {
                 setUserData(data)
                 setLoading(false)
                 if (data?.accountType === "besa" || data?.accountType === "besaLead") {
-                    checkAutoClockout().then(result => result && setOwnHours(result.biWeeklyHours))
+                    checkAutoClockout().then(result => {
+                        if (!result) return
+                        setOwnHours(result.biWeeklyHours)
+                        setOwnOpenSession(toOpenSession(result.openSession))
+                    })
                 }
             })
         })
@@ -204,6 +225,7 @@ export default function Profile(): JSX.Element {
                                             <div key={member.uid}>
                                                 <p className="font-semibold mb-2">{member.besaName || "(no name on file)"}</p>
                                                 <WeeklyHoursTable entries={toWeeklyHoursEntries(member.hours)}
+                                                    openSession={toOpenSession(member.openSession)}
                                                     onEditDay={(day) => setEditing({member, day})}/>
                                             </div>
                                         ))}
@@ -215,7 +237,10 @@ export default function Profile(): JSX.Element {
                         {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&
                             <section className="bg-gray-800 rounded-2xl p-6">
                                 <h2 className="text-2xl tracking-wide mb-4">My Hours (This Week)</h2>
-                                <WeeklyHoursTable entries={toWeeklyHoursEntries(ownHours ?? userData.biWeeklyHours ?? [])}/>
+                                <WeeklyHoursTable entries={toWeeklyHoursEntries(ownHours ?? userData.biWeeklyHours ?? [])}
+                                    openSession={ownOpenSession !== undefined ? ownOpenSession
+                                        : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || []}
+                                        : null}/>
                             </section>
                         }
                     </div>

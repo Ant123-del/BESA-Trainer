@@ -1,10 +1,25 @@
 import type { JSX } from "react"
 
+export type WeeklyHoursSession = {
+    clockIn: Date
+    clockOut: Date
+    activities: string[]
+    autoClockedOut?: boolean
+}
+
 export type WeeklyHoursEntry = {
     date: Date
     hours: number
     activities: string[]
     autoClockedOut?: boolean
+    editedByAdmin?: boolean
+    sessions?: WeeklyHoursSession[]
+}
+
+//someone clocked in right now - shown on its day as "9:02 AM - now" (no hours yet until they clock out)
+export type OpenSession = {
+    clockIn: Date
+    activities: string[]
 }
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
@@ -20,37 +35,71 @@ function sameDay(a: Date, b: Date): boolean {
     return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
-//CruzPay-styled current-week table (Date | Activities | Hours + a totals row), themed for this app's
-//dark UI - always shows all 7 days of the current Sun-Sat week, even ones with no hours logged yet.
-//Passing onEditDay adds an Edit column (root admin's Profile view) - it gets the day plus whatever's logged.
-export default function WeeklyHoursTable({entries, onEditDay}: {
-    entries: WeeklyHoursEntry[], onEditDay?: (day: WeeklyHoursEntry) => void
+//always Pacific, same as the kiosk and the backend's week boundaries, whatever the viewer's own timezone
+function formatTime(date: Date): string {
+    return date.toLocaleTimeString("en-US", {hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles"})
+}
+
+function Badge({label, title, className}: {label: string, title: string, className: string}) {
+    return <span title={title} className={"text-[10px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap " + className}>{label}</span>
+}
+
+//CruzPay-styled current-week table (Date | Time & Activities | Hours + a totals row), themed for this app's
+//dark UI - always shows all 7 days of the current Sun-Sat week, even ones with no hours logged yet. Each
+//visit that day gets its own arrive-leave line with the activities picked at clock-in; days logged before
+//visits were tracked just show their activities. Passing onEditDay adds an Edit column (root admin's
+//Profile view) - it gets the day plus whatever's logged.
+export default function WeeklyHoursTable({entries, openSession, onEditDay}: {
+    entries: WeeklyHoursEntry[], openSession?: OpenSession | null, onEditDay?: (day: WeeklyHoursEntry) => void
 }): JSX.Element {
     const weekStart = startOfWeek(new Date())
     const days = Array.from({length: 7}, (_, i) => {
         const date = new Date(weekStart)
         date.setDate(date.getDate() + i)
         const entry = entries.find(e => sameDay(e.date, date))
-        return {date, hours: entry?.hours || 0, activities: entry?.activities || [], autoClockedOut: entry?.autoClockedOut}
+        return {
+            date,
+            hours: entry?.hours || 0,
+            activities: entry?.activities || [],
+            autoClockedOut: entry?.autoClockedOut,
+            editedByAdmin: entry?.editedByAdmin,
+            sessions: [...(entry?.sessions || [])].sort((a, b) => a.clockIn.getTime() - b.clockIn.getTime()),
+            open: openSession && sameDay(openSession.clockIn, date) ? openSession : null,
+        }
     })
     const total = days.reduce((sum, d) => sum + d.hours, 0)
-    const cols = onEditDay ? "grid-cols-[7rem_1fr_4rem_3.5rem]" : "grid-cols-[7rem_1fr_5rem]"
+    const cols = onEditDay
+        ? "grid-cols-[5rem_1fr_3rem_3.25rem] sm:grid-cols-[7rem_1fr_4rem_3.5rem]"
+        : "grid-cols-[5rem_1fr_3.5rem] sm:grid-cols-[7rem_1fr_5rem]"
 
     return (
         <div className="rounded-xl overflow-hidden border border-gray-700">
             <div className={"grid " + cols + " bg-amber-500 text-black text-sm font-semibold"}>
                 <div className="p-2 px-3">Date</div>
-                <div className="p-2 px-3">Activities</div>
+                <div className="p-2 px-3">Time & Activities</div>
                 <div className="p-2 px-3 text-right">Hours</div>
                 {onEditDay && <div/>}
             </div>
             {days.map((d, i) => (
                 <div key={i} className={"grid " + cols + " text-sm " + (i % 2 === 0 ? "bg-gray-800" : "bg-gray-800/60")}>
-                    <div className="p-2 px-3 text-gray-300">{DAY_LABELS[d.date.getDay()]} {(d.date.getMonth() + 1).toString().padStart(2, "0")}/{d.date.getDate().toString().padStart(2, "0")}</div>
-                    <div className="p-2 px-3 text-gray-400">{d.activities.length > 0 ? d.activities.join(", ") : "—"}</div>
-                    <div className="p-2 px-3 text-right flex items-center justify-end gap-1">
-                        {d.autoClockedOut &&
-                            <span title="Automatically clocked out - this account forgot to clock out that day" className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-600 text-black font-semibold">AUTO</span>
+                    <div className="p-2 px-3 text-gray-300">
+                        {DAY_LABELS[d.date.getDay()]} <span className="whitespace-nowrap">{(d.date.getMonth() + 1).toString().padStart(2, "0")}/{d.date.getDate().toString().padStart(2, "0")}</span>
+                    </div>
+                    <div className="p-2 px-3 text-gray-400 flex flex-col gap-1 min-w-0">
+                        {d.sessions.map((s, j) => (
+                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut}/>
+                        ))}
+                        {d.open && <SessionLine clockIn={d.open.clockIn} activities={d.open.activities}/>}
+                        {d.sessions.length === 0 && !d.open &&
+                            <span>{d.activities.length > 0 ? d.activities.join(", ") : "—"}</span>
+                        }
+                    </div>
+                    <div className="p-2 px-3 text-right flex flex-wrap items-center justify-end gap-1 content-center">
+                        {d.editedByAdmin &&
+                            <Badge label="EDITED" title="A root admin edited this day's hours - the total may not match the times shown" className="bg-sky-600 text-black"/>
+                        }
+                        {d.autoClockedOut && !d.sessions.some(s => s.autoClockedOut) &&
+                            <Badge label="AUTO" title="Automatically clocked out - this account forgot to clock out that day" className="bg-yellow-600 text-black"/>
                         }
                         {d.hours || ""}
                     </div>
@@ -66,6 +115,26 @@ export default function WeeklyHoursTable({entries, onEditDay}: {
                 <div className="p-2 px-3 text-right">{total}</div>
                 {onEditDay && <div/>}
             </div>
+        </div>
+    )
+}
+
+//"9:02 AM - 11:30 AM  Tours, Other" - clockOut omitted means they're still clocked in
+function SessionLine({clockIn, clockOut, activities, autoClockedOut}: {
+    clockIn: Date, clockOut?: Date, activities: string[], autoClockedOut?: boolean
+}) {
+    return (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="text-gray-200 whitespace-nowrap">
+                {formatTime(clockIn)} – {clockOut ? formatTime(clockOut) : "now"}
+            </span>
+            {!clockOut &&
+                <Badge label="HERE" title="Currently clocked in" className="bg-green-600 text-black"/>
+            }
+            {autoClockedOut &&
+                <Badge label="AUTO" title="Forgot to clock out - leave time is their scheduled office-hours end (or 8 PM)" className="bg-yellow-600 text-black"/>
+            }
+            {activities.length > 0 && <span className="text-gray-400">{activities.join(", ")}</span>}
         </div>
     )
 }

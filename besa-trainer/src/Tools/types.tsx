@@ -26,6 +26,16 @@ export type DayHours = {
     activities: string[] // activity type names worked that day
     date: Date // the calendar day this entry is for (clock-in date, not clock-out date)
     autoClockedOut?: boolean // true if this day's hours (or part of them) came from a forgotten-checkout auto-clockout, not a manual one
+    editedByAdmin?: boolean // root admin overwrote this day's hours/activities, so the total may not match the sessions
+    sessions?: HoursSession[] // each clock-in/out that day - missing on entries recorded before sessions were tracked
+}
+
+//one kiosk visit: when they arrived, when they left (or were auto-clocked-out), and what they came to do.
+export type HoursSession = {
+    clockIn: Date
+    clockOut: Date
+    activities: string[]
+    autoClockedOut?: boolean
 }
 
 //will be used to keep track of personalized vll scripts

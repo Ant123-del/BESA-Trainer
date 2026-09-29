@@ -279,28 +279,114 @@ export type MemberHours = {
     hours: {date: string, hours: number, activities: string[], autoClockedOut?: boolean}[]
 }
 
-//root only - every besa/besaLead member's current-week hours, for root's Profile view.
-export async function getAllHours(): Promise<MemberHours[] | void> {
+//---- Root admin login: passcode-gated session on top of the signed-in root kiosk account ----
+
+//the short-lived session token /root-admin/login hands back - kept in sessionStorage (not localStorage)
+//so it dies with the tab, and dropped client-side once expired so the UI re-prompts for the passcode.
+const ROOT_ADMIN_TOKEN_KEY = "rootAdminSession"
+
+export function getRootAdminToken(): string | null {
     try {
-        const auth = getAuth()
-        const user = auth.currentUser
+        const raw = sessionStorage.getItem(ROOT_ADMIN_TOKEN_KEY)
+        if (!raw) return null
+        const {token, expiresAt} = JSON.parse(raw) as {token: string, expiresAt: string}
+        if (new Date(expiresAt) <= new Date()) {
+            sessionStorage.removeItem(ROOT_ADMIN_TOKEN_KEY)
+            return null
+        }
+        return token
+    } catch {
+        return null
+    }
+}
+
+export function clearRootAdminToken() {
+    try {
+        sessionStorage.removeItem(ROOT_ADMIN_TOKEN_KEY)
+    } catch { /* storage unavailable - nothing to clear */ }
+}
+
+function saveRootAdminToken(token: string, expiresAt: string) {
+    try {
+        sessionStorage.setItem(ROOT_ADMIN_TOKEN_KEY, JSON.stringify({token, expiresAt}))
+    } catch { /* storage unavailable - session just won't survive a reload */ }
+}
+
+//shared by every root-admin call - attaches both the Firebase ID token and the admin session token,
+//and turns any non-2xx into {success: false, detail} (a 403 also means the session expired server-side).
+async function rootAdminRequest<T>(path: string, init: {method?: string, body?: unknown} = {}): Promise<(T & {success: true}) | {success: false, detail: string, status?: number}> {
+    try {
+        const user = getAuth().currentUser
         if (!user) {
-            return console.error("not logged in")
+            return {success: false, detail: "Not logged in."}
         }
 
         const idToken = await user.getIdToken()
-        const response = await fetch(url + "all-hours", {
-            headers: {"Authorization": `Bearer ${idToken}`}
+        const headers: Record<string, string> = {"Authorization": `Bearer ${idToken}`}
+        const adminToken = getRootAdminToken()
+        if (adminToken) headers["X-Root-Admin-Token"] = adminToken
+        if (init.body !== undefined) headers["Content-Type"] = "application/json"
+
+        const response = await fetch(url + path, {
+            method: init.method || "GET",
+            headers,
+            body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
         })
+        const data = await response.json().catch(() => ({}))
         if (!response.ok) {
-            console.error(response.status)
-            return
+            if (response.status === 403) clearRootAdminToken()
+            const detail = typeof data.detail === "string" ? data.detail : `Request failed (${response.status})`
+            return {success: false, detail, status: response.status}
         }
-        const data = await response.json() as {success: boolean, members: MemberHours[]}
-        return data.members
+        if (data.adminToken && data.expiresAt) saveRootAdminToken(data.adminToken, data.expiresAt)
+        return data
     } catch (e) {
         console.error(e)
+        return {success: false, detail: "Couldn't reach the server."}
     }
+}
+
+//root only - whether this root account has set up its admin passcode yet.
+export function getRootAdminStatus() {
+    return rootAdminRequest<{passcodeSet: boolean}>("root-admin/status")
+}
+
+//root only - first-time passcode setup (fails if one already exists); starts an admin session.
+export function setupRootAdminPasscode(passcode: string) {
+    return rootAdminRequest<{adminToken: string, expiresAt: string}>("root-admin/setup", {method: "POST", body: {passcode}})
+}
+
+//root only - checks the passcode and starts an admin session.
+export function rootAdminLogin(passcode: string) {
+    return rootAdminRequest<{adminToken: string, expiresAt: string}>("root-admin/login", {method: "POST", body: {passcode}})
+}
+
+//root only - ends the admin session on both sides.
+export async function rootAdminLogout() {
+    await rootAdminRequest("root-admin/logout", {method: "POST"})
+    clearRootAdminToken()
+}
+
+//root admin only - replaces the passcode (the current admin session proves they knew the old one).
+export function changeRootAdminPasscode(newPasscode: string) {
+    return rootAdminRequest<{adminToken: string, expiresAt: string}>("root-admin/change", {method: "POST", body: {newPasscode}})
+}
+
+//root admin only - deletes the root account (and its passcode) server-side.
+export async function deleteRootAccount() {
+    const result = await rootAdminRequest("root-admin/delete-account", {method: "POST"})
+    if (result.success) clearRootAdminToken()
+    return result
+}
+
+//root admin only - overwrites one day's hours for a member (0 hours + no activities clears the day).
+export function setMemberDayHours(targetUid: string, date: string, hours: number, activities: string[]) {
+    return rootAdminRequest<{hours: MemberHours["hours"]}>("root-admin/set-day-hours", {method: "POST", body: {targetUid, date, hours, activities}})
+}
+
+//root admin only - every besa/besaLead member's current-week hours, for root's Profile view.
+export function getAllHours() {
+    return rootAdminRequest<{members: MemberHours[]}>("all-hours")
 }
 
 //any signed-in account - the shared list of activity names the kiosk's Clock In chips are built from.

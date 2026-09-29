@@ -1,14 +1,18 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, Header, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Literal
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_cls
 from zoneinfo import ZoneInfo
 from google import genai
 import os
 import base64
+import bcrypt
+import hashlib
+import hmac
+import secrets
 
 import firebase_admin
 from firebase_admin import credentials, storage, auth, firestore
@@ -16,6 +20,7 @@ from firebase_admin import credentials, storage, auth, firestore
 from google.cloud.speech_v2 import SpeechClient
 from google.cloud.speech_v2.types import cloud_speech
 from google.api_core.client_options import ClientOptions
+from google.api_core.exceptions import Conflict
 from google.oauth2 import service_account as gcp_service_account
 
 from dotenv import load_dotenv
@@ -420,10 +425,168 @@ def currentSessions(root_user: dict = Depends(require_root)):
     return {"success": True, "sessions": sessions}
 
 
-@app.get("/all-hours")
-def allHours(root_user: dict = Depends(require_root)):
-    db = firestore.client()
+def _current_week_hours(data: dict) -> list:
     current_week_start = _week_start(datetime.now(PACIFIC))
+    return [
+        {"date": e["date"].isoformat(), "hours": e.get("hours", 0), "activities": e.get("activities") or [], "autoClockedOut": bool(e.get("autoClockedOut"))}
+        for e in (data.get("biWeeklyHours") or [])
+        if e.get("date") and e["date"].astimezone(PACIFIC) >= current_week_start
+    ]
+
+
+# ---- Root admin login (passcode on top of the already-signed-in root kiosk account) ----
+# The kiosk stays signed in all day, so being "root" alone only unlocks clock in/out. Anything sensitive
+# (viewing/editing everyone's hours, deleting the root account) additionally needs the root owner's
+# passcode. Its bcrypt hash lives in its own top-level collection, keyed by the root account's uid, that
+# only this backend (Admin SDK) ever touches - never under training_data/, which the client reads. Being
+# keyed by uid means a deleted-and-recreated root account starts with no passcode and has to set one up.
+ROOT_ADMIN_COLLECTION = "root_admin"
+ROOT_ADMIN_SESSION_MINUTES = 15
+ROOT_ADMIN_MAX_ATTEMPTS = 5
+ROOT_ADMIN_LOCKOUT_MINUTES = 5
+PASSCODE_MIN_LENGTH = 6
+PASSCODE_MAX_BYTES = 72  # bcrypt's hard input limit
+
+
+def _root_admin_ref(uid: str):
+    return firestore.client().collection(ROOT_ADMIN_COLLECTION).document(uid)
+
+
+def _hash_session_token(token: str) -> str:
+    #the session token is already 256 bits of randomness, so a fast hash is enough here - bcrypt is for
+    #the human-chosen passcode. Only the hash is stored so a leaked doc can't be replayed as a session.
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _start_admin_session(ref) -> dict:
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(PACIFIC) + timedelta(minutes=ROOT_ADMIN_SESSION_MINUTES)
+    ref.update({
+        "sessionTokenHash": _hash_session_token(token),
+        "sessionExpiresAt": expires_at,
+        "failedAttempts": 0,
+        "lockedUntil": None,
+    })
+    return {"success": True, "adminToken": token, "expiresAt": expires_at.isoformat()}
+
+
+def require_root_admin(root_user: dict = Depends(require_root), x_root_admin_token: str = Header(default="")):
+    doc = _root_admin_ref(root_user.get("uid")).get()
+    data = (doc.to_dict() or {}) if doc.exists else {}
+    stored_hash = data.get("sessionTokenHash")
+    expires_at = data.get("sessionExpiresAt")
+
+    if (not x_root_admin_token or not stored_hash or not expires_at
+            or expires_at < datetime.now(PACIFIC)
+            or not hmac.compare_digest(stored_hash, _hash_session_token(x_root_admin_token))):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin login required.")
+
+    return root_user
+
+
+def _validate_passcode(passcode: str):
+    if len(passcode) < PASSCODE_MIN_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Passcode must be at least {PASSCODE_MIN_LENGTH} characters.")
+    if len(passcode.encode()) > PASSCODE_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Passcode is too long.")
+
+
+class PasscodeRequest(BaseModel):
+    passcode: str
+
+
+@app.get("/root-admin/status")
+def rootAdminStatus(root_user: dict = Depends(require_root)):
+    doc = _root_admin_ref(root_user.get("uid")).get()
+    return {"success": True, "passcodeSet": doc.exists and bool((doc.to_dict() or {}).get("passcodeHash"))}
+
+
+@app.post("/root-admin/setup")
+def rootAdminSetup(request_data: PasscodeRequest, root_user: dict = Depends(require_root)):
+    _validate_passcode(request_data.passcode)
+    ref = _root_admin_ref(root_user.get("uid"))
+    passcode_hash = bcrypt.hashpw(request_data.passcode.encode(), bcrypt.gensalt()).decode()
+
+    #create() fails if the doc already exists - so two racing setups (or a replayed request) can't
+    #overwrite a passcode that's already been set. Changing it goes through /root-admin/change instead.
+    try:
+        ref.create({"passcodeHash": passcode_hash, "createdAt": datetime.now(PACIFIC), "failedAttempts": 0, "lockedUntil": None})
+    except Conflict:
+        raise HTTPException(status_code=409, detail="A passcode is already set up for this account.")
+
+    return _start_admin_session(ref)
+
+
+@app.post("/root-admin/login")
+def rootAdminLogin(request_data: PasscodeRequest, root_user: dict = Depends(require_root)):
+    ref = _root_admin_ref(root_user.get("uid"))
+    doc = ref.get()
+    data = (doc.to_dict() or {}) if doc.exists else {}
+    if not data.get("passcodeHash"):
+        raise HTTPException(status_code=404, detail="No passcode set up yet.")
+
+    now = datetime.now(PACIFIC)
+    locked_until = data.get("lockedUntil")
+    if locked_until and locked_until > now:
+        minutes_left = max(1, round((locked_until - now).total_seconds() / 60))
+        raise HTTPException(status_code=429, detail=f"Too many wrong attempts. Try again in {minutes_left} minute(s).")
+
+    if not bcrypt.checkpw(request_data.passcode.encode()[:PASSCODE_MAX_BYTES], data["passcodeHash"].encode()):
+        attempts = (data.get("failedAttempts") or 0) + 1
+        if attempts >= ROOT_ADMIN_MAX_ATTEMPTS:
+            ref.update({"failedAttempts": 0, "lockedUntil": now + timedelta(minutes=ROOT_ADMIN_LOCKOUT_MINUTES)})
+            raise HTTPException(status_code=429, detail=f"Too many wrong attempts. Try again in {ROOT_ADMIN_LOCKOUT_MINUTES} minute(s).")
+        ref.update({"failedAttempts": attempts})
+        raise HTTPException(status_code=401, detail=f"Incorrect passcode. {ROOT_ADMIN_MAX_ATTEMPTS - attempts} attempt(s) left.")
+
+    return _start_admin_session(ref)
+
+
+@app.post("/root-admin/logout")
+def rootAdminLogout(root_user: dict = Depends(require_root)):
+    ref = _root_admin_ref(root_user.get("uid"))
+    if ref.get().exists:
+        ref.update({"sessionTokenHash": None, "sessionExpiresAt": None})
+    return {"success": True}
+
+
+class ChangePasscodeRequest(BaseModel):
+    newPasscode: str
+
+
+@app.post("/root-admin/change")
+def rootAdminChange(request_data: ChangePasscodeRequest, root_user: dict = Depends(require_root_admin)):
+    _validate_passcode(request_data.newPasscode)
+    ref = _root_admin_ref(root_user.get("uid"))
+    ref.update({"passcodeHash": bcrypt.hashpw(request_data.newPasscode.encode(), bcrypt.gensalt()).decode()})
+    return _start_admin_session(ref)
+
+
+#deletes the root account server-side (Admin SDK) rather than via the client's deleteUser(), so the
+#passcode doc is guaranteed to go with it - the next root account then has to set up a fresh passcode.
+@app.post("/root-admin/delete-account")
+def rootAdminDeleteAccount(root_user: dict = Depends(require_root_admin)):
+    uid = root_user.get("uid")
+    db = firestore.client()
+    user_ref = db.collection("training_data").document("data_root").collection("users").document(uid)
+    user_doc = user_ref.get()
+
+    bucket = storage.bucket()
+    for cos_script in ((user_doc.to_dict() or {}).get("scriptPaths") or []) if user_doc.exists else []:
+        try:
+            bucket.blob(cos_script.get("path")).delete()
+        except Exception as e:
+            print(f"Failed to delete custom script blob: {e}")
+
+    _root_admin_ref(uid).delete()
+    user_ref.delete()
+    auth.delete_user(uid)
+    return {"success": True}
+
+
+@app.get("/all-hours")
+def allHours(root_user: dict = Depends(require_root_admin)):
+    db = firestore.client()
     members = []
     for u in db.collection("training_data").document("data_root").collection("users").stream():
         data = u.to_dict() or {}
@@ -431,13 +594,48 @@ def allHours(root_user: dict = Depends(require_root)):
             continue
         if data.get("lastCheckedIn"):
             data = _auto_clock_out_if_needed(u.reference, data)
-        hours = [
-            {"date": e["date"].isoformat(), "hours": e.get("hours", 0), "activities": e.get("activities") or [], "autoClockedOut": bool(e.get("autoClockedOut"))}
-            for e in (data.get("biWeeklyHours") or [])
-            if e.get("date") and e["date"].astimezone(PACIFIC) >= current_week_start
-        ]
-        members.append({"uid": u.id, "besaName": data.get("besaName"), "studentId": data.get("studentId"), "hours": hours})
+        members.append({"uid": u.id, "besaName": data.get("besaName"), "studentId": data.get("studentId"), "hours": _current_week_hours(data)})
     return {"success": True, "members": members}
+
+
+class SetDayHoursRequest(BaseModel):
+    targetUid: str
+    date: str  # YYYY-MM-DD, a day in the current Sun-Sat week
+    hours: float = Field(ge=0, le=24)
+    activities: list[str]
+
+
+#root admin only - overwrites (or clears, with 0 hours and no activities) one day's hours entry for a
+#besa/besaLead member. Restricted to the current week since older entries get pruned on the next clock-out.
+@app.post("/root-admin/set-day-hours")
+def setDayHours(request_data: SetDayHoursRequest, root_user: dict = Depends(require_root_admin)):
+    if (request_data.hours * 2) != int(request_data.hours * 2):
+        raise HTTPException(status_code=400, detail="Hours must be in 0.5 increments.")
+
+    try:
+        day = date_cls.fromisoformat(request_data.date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date.")
+
+    entry_day = datetime(day.year, day.month, day.day, tzinfo=PACIFIC)
+    week_start = _week_start(datetime.now(PACIFIC))
+    if not (week_start <= entry_day < week_start + timedelta(days=7)):
+        raise HTTPException(status_code=400, detail="Only days in the current week can be edited.")
+
+    db = firestore.client()
+    target_ref = db.collection("training_data").document("data_root").collection("users").document(request_data.targetUid)
+    target_doc = target_ref.get()
+    if not target_doc.exists or (target_doc.to_dict() or {}).get("accountType") not in ("besa", "besaLead"):
+        raise HTTPException(status_code=404, detail="No BESA account found with that id.")
+
+    data = target_doc.to_dict() or {}
+    remaining = [e for e in (data.get("biWeeklyHours") or []) if not (e.get("date") and e["date"].astimezone(PACIFIC).date() == day)]
+    if request_data.hours > 0 or request_data.activities:
+        #an admin-set entry is a reviewed number, so it no longer counts as an auto-clockout guess
+        remaining.append({"date": entry_day, "hours": request_data.hours, "activities": request_data.activities, "autoClockedOut": False})
+
+    target_ref.update({"biWeeklyHours": remaining})
+    return {"success": True, "hours": _current_week_hours({**data, "biWeeklyHours": remaining})}
 
 
 @app.get("/activity-types")

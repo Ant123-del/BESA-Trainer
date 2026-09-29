@@ -2,5 +2,8 @@
   "functions": {
     "source": "besa-api",
     "runtime": "python311"
+  },
+  "firestore": {
+    "rules": "firestore.rules"
   }
 }

@@ -22,7 +22,10 @@ function sameDay(a: Date, b: Date): boolean {
 
 //CruzPay-styled current-week table (Date | Activities | Hours + a totals row), themed for this app's
 //dark UI - always shows all 7 days of the current Sun-Sat week, even ones with no hours logged yet.
-export default function WeeklyHoursTable({entries}: {entries: WeeklyHoursEntry[]}): JSX.Element {
+//Passing onEditDay adds an Edit column (root admin's Profile view) - it gets the day plus whatever's logged.
+export default function WeeklyHoursTable({entries, onEditDay}: {
+    entries: WeeklyHoursEntry[], onEditDay?: (day: WeeklyHoursEntry) => void
+}): JSX.Element {
     const weekStart = startOfWeek(new Date())
     const days = Array.from({length: 7}, (_, i) => {
         const date = new Date(weekStart)
@@ -31,16 +34,18 @@ export default function WeeklyHoursTable({entries}: {entries: WeeklyHoursEntry[]
         return {date, hours: entry?.hours || 0, activities: entry?.activities || [], autoClockedOut: entry?.autoClockedOut}
     })
     const total = days.reduce((sum, d) => sum + d.hours, 0)
+    const cols = onEditDay ? "grid-cols-[7rem_1fr_4rem_3.5rem]" : "grid-cols-[7rem_1fr_5rem]"
 
     return (
         <div className="rounded-xl overflow-hidden border border-gray-700">
-            <div className="grid grid-cols-[7rem_1fr_5rem] bg-amber-500 text-black text-sm font-semibold">
+            <div className={"grid " + cols + " bg-amber-500 text-black text-sm font-semibold"}>
                 <div className="p-2 px-3">Date</div>
                 <div className="p-2 px-3">Activities</div>
                 <div className="p-2 px-3 text-right">Hours</div>
+                {onEditDay && <div/>}
             </div>
             {days.map((d, i) => (
-                <div key={i} className={"grid grid-cols-[7rem_1fr_5rem] text-sm " + (i % 2 === 0 ? "bg-gray-800" : "bg-gray-800/60")}>
+                <div key={i} className={"grid " + cols + " text-sm " + (i % 2 === 0 ? "bg-gray-800" : "bg-gray-800/60")}>
                     <div className="p-2 px-3 text-gray-300">{DAY_LABELS[d.date.getDay()]} {(d.date.getMonth() + 1).toString().padStart(2, "0")}/{d.date.getDate().toString().padStart(2, "0")}</div>
                     <div className="p-2 px-3 text-gray-400">{d.activities.length > 0 ? d.activities.join(", ") : "—"}</div>
                     <div className="p-2 px-3 text-right flex items-center justify-end gap-1">
@@ -49,11 +54,17 @@ export default function WeeklyHoursTable({entries}: {entries: WeeklyHoursEntry[]
                         }
                         {d.hours || ""}
                     </div>
+                    {onEditDay &&
+                        <div className="p-1 flex items-center justify-center">
+                            <button onClick={() => onEditDay(d)} className="text-xs px-2 py-1 rounded-full bg-gray-700 hover:bg-gray-600">Edit</button>
+                        </div>
+                    }
                 </div>
             ))}
-            <div className="grid grid-cols-[7rem_1fr_5rem] bg-amber-500 text-black text-sm font-semibold">
+            <div className={"grid " + cols + " bg-amber-500 text-black text-sm font-semibold"}>
                 <div className="p-2 px-3 col-span-2">Total</div>
                 <div className="p-2 px-3 text-right">{total}</div>
+                {onEditDay && <div/>}
             </div>
         </div>
     )

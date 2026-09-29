@@ -415,11 +415,13 @@ def _serialize_hours_entry(e: dict) -> dict:
     }
 
 
-#the still-open session (clocked in, not out yet), so the table can show "9:02 AM - now"
+#the still-open session (clocked in, not out yet), so the table can show "9:02 AM - now" and today's
+#live break status
 def _open_session(data: dict):
     if not data.get("lastCheckedIn"):
         return None
-    return {"clockIn": data["lastCheckedIn"].isoformat(), "activities": data.get("lastCheckedInActivities") or []}
+    return {"clockIn": data["lastCheckedIn"].isoformat(), "activities": data.get("lastCheckedInActivities") or [],
+            "break": _break_state(data, datetime.now(PACIFIC))}
 
 
 WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
@@ -442,8 +444,21 @@ def _office_hours(besa_name, roster_docs: list):
             for slot in day_data.get("timeSlots") or []:
                 if isinstance(slot, dict) and slot.get("start") and slot.get("end"):
                     slots.append({"start": slot["start"], "end": slot["end"]})
-        week.append({"day": day, "slots": sorted(slots, key=lambda sl: sl["start"])})
+        week.append({"day": day, "slots": sorted(slots, key=lambda sl: sl["start"]),
+                     "breakAllowanceMinutes": _break_allowance_minutes(_slots_hours(slots))})
     return week
+
+
+def _slots_hours(slots: list) -> float:
+    total_minutes = 0
+    for slot in slots:
+        try:
+            start = datetime.strptime(slot["start"], "%H:%M")
+            end = datetime.strptime(slot["end"], "%H:%M")
+        except ValueError:
+            continue
+        total_minutes += max(0, (end - start).total_seconds() / 60)
+    return total_minutes / 60
 
 
 #besa-app roster docs are matched to our users by name (same linkage /besa-roster uses for claiming).
@@ -479,8 +494,9 @@ def _get_office_hours_end(besa_name, checked_in_at: datetime):
 # A day's break allowance comes from that day's scheduled office hours on BESA Booking: +5 minutes per full
 # scheduled hour up to 15 (reached at hour 3), flat through hour 5, then +5 more for every full hour past 5
 # (1h=5, 2h=10, 3-5h=15, 6h=20, 7h=25...). The in-progress break lives on the user doc as breakStartedAt/
-# breakEndsAt, and breakUsedSeconds holds what's already been used this visit - all reset on clock in/out.
-BREAK_FIELDS_RESET = {"breakUsedSeconds": 0, "breakStartedAt": None, "breakEndsAt": None}
+# breakEndsAt, and breakUsedSeconds holds what's been used today so far - seeded at clock-in with break time
+# from earlier visits that day (breakCarriedSeconds), since the allowance is per day, not per visit.
+BREAK_FIELDS_RESET = {"breakUsedSeconds": 0, "breakCarriedSeconds": 0, "breakStartedAt": None, "breakEndsAt": None}
 SHORT_BREAK_SECONDS = 5 * 60
 
 
@@ -495,15 +511,7 @@ def _break_allowance_minutes(scheduled_hours: float) -> int:
 def _scheduled_hours_on(besa_name, day: datetime) -> float:
     week = _office_hours(besa_name, _get_roster()) or []
     day_name = WEEKDAYS[(day.weekday() + 1) % 7]
-    total_minutes = 0
-    for slot in next((d["slots"] for d in week if d["day"] == day_name), []):
-        try:
-            start = datetime.strptime(slot["start"], "%H:%M")
-            end = datetime.strptime(slot["end"], "%H:%M")
-        except ValueError:
-            continue
-        total_minutes += max(0, (end - start).total_seconds() / 60)
-    return total_minutes / 60
+    return _slots_hours(next((d["slots"] for d in week if d["day"] == day_name), []))
 
 
 #break time used this visit, including however much of an in-progress break has elapsed by `now`
@@ -514,6 +522,11 @@ def _break_used_seconds(data: dict, now: datetime) -> int:
         ends = _to_pacific(data["breakEndsAt"])
         used += max(0, int((min(now, ends) - started).total_seconds()))
     return used
+
+
+#just this visit's break time (excluding what was carried over from earlier visits today), for its session record
+def _visit_break_seconds(data: dict, now: datetime) -> int:
+    return max(0, _break_used_seconds(data, now) - (data.get("breakCarriedSeconds") or 0))
 
 
 def _break_state(data: dict, now: datetime) -> dict:
@@ -556,7 +569,7 @@ def _auto_clock_out_if_needed(target_ref, data: dict) -> dict:
     effective_end = office_end if office_end and office_end > checked_in_at else cutoff
 
     activities = data.get("lastCheckedInActivities") or []
-    break_seconds = _break_used_seconds(data, effective_end)
+    break_seconds = _visit_break_seconds(data, effective_end)
     new_hours, _ = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, effective_end, activities, now,
                                       auto_clocked_out=True, break_seconds=break_seconds)
 
@@ -585,7 +598,14 @@ def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root
         raise HTTPException(status_code=409, detail=f"{data.get('besaName')} is already clocked in.")
 
     now = datetime.now(PACIFIC)
-    target_ref.update({"lastCheckedIn": now, "lastCheckedInActivities": activities, **BREAK_FIELDS_RESET})
+    #the allowance is per day, so break time already taken on an earlier visit today still counts
+    taken_today = sum(
+        (sess.get("breakSeconds") or 0)
+        for e in (data.get("biWeeklyHours") or []) if e.get("date") and e["date"].astimezone(PACIFIC).date() == now.date()
+        for sess in (e.get("sessions") or [])
+    )
+    target_ref.update({"lastCheckedIn": now, "lastCheckedInActivities": activities, **BREAK_FIELDS_RESET,
+                       "breakUsedSeconds": taken_today, "breakCarriedSeconds": taken_today})
     return {"success": True, "besaName": data.get("besaName"), "clockedInAt": now.isoformat()}
 
 
@@ -608,7 +628,7 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
     checked_in_at = _to_pacific(last_checked_in)
     activities = data.get("lastCheckedInActivities") or []
     new_hours, elapsed_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now, activities, now,
-                                                  break_seconds=_break_used_seconds(data, now))
+                                                  break_seconds=_visit_break_seconds(data, now))
 
     target_ref.update({
         "biWeeklyHours": new_hours,

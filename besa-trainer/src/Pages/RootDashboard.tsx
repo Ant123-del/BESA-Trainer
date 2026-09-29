@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { MoonLoader } from "react-spinners"
 import Header from "../Components/Header"
 import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
+import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import {
     addActivityType, clockIn, clockOut, endBreak, getActivityTypes, getCurrentSessions,
     removeActivityType, startBreak, type KioskSession
@@ -248,39 +249,16 @@ function ActivityTypesPanel({activityTypes, setActivityTypes}: {
 }
 
 
-//"4:05" - minutes:seconds, for break countdowns and allowances
-function formatDuration(totalSeconds: number): string {
-    const seconds = Math.max(0, Math.round(totalSeconds))
-    return `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, "0")}`
-}
-
 //one clocked-in member in Current Sessions, with their break controls. Today's break allowance comes from
 //their BESA Booking office hours that day (see the backend's _break_allowance_minutes); they can take 5
 //minutes at a time or everything left at once, shown as {time left}/{today's total}.
 function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () => void}) {
     const brk = session.break
-    const [now, setNow] = useState(() => Date.now())
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState("")
-
-    //tick every second while on break so the countdown moves between the dashboard's 60s refreshes
-    useEffect(() => {
-        if (!brk.onBreak) return
-        const interval = setInterval(() => setNow(Date.now()), 1000)
-        return () => clearInterval(interval)
-    }, [brk.onBreak])
-
-    const breakEndsAt = brk.breakEndsAt ? new Date(brk.breakEndsAt).getTime() : null
-    const breakStartedAt = brk.breakStartedAt ? new Date(brk.breakStartedAt).getTime() : null
-    const breakLeft = breakEndsAt ? Math.max(0, (breakEndsAt - now) / 1000) : 0
-    const onBreak = brk.onBreak && breakLeft > 0
-    const used = onBreak && breakStartedAt
-        ? brk.usedBeforeBreakSeconds + (Math.min(now, breakEndsAt!) - breakStartedAt) / 1000
-        : brk.usedSeconds
-    const remaining = Math.max(0, brk.allowanceSeconds - used)
+    const {onBreak, breakLeft, breakRanOut, remaining, resetNow} = useLiveBreak(brk)!
 
     //the break ran out on its own - pull fresh state so the buttons come back
-    const breakRanOut = brk.onBreak && breakLeft === 0
     useEffect(() => {
         if (breakRanOut) onChanged()
     }, [breakRanOut, onChanged])
@@ -291,7 +269,7 @@ function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () 
         const result = await action()
         setBusy(false)
         if (result.success) {
-            setNow(Date.now())
+            resetNow()
             onChanged()
         } else {
             setError(result.detail || "Something went wrong.")

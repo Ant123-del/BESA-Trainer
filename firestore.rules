@@ -19,7 +19,7 @@ service cloud.firestore {
     function protectedUserFields() {
       return ['uid', 'accountType', 'admin', 'besaName', 'studentId',
               'biWeeklyHours', 'lastCheckedIn', 'lastCheckedInActivities',
-              'breakUsedSeconds', 'breakStartedAt', 'breakEndsAt'];
+              'breakUsedSeconds', 'breakCarriedSeconds', 'breakStartedAt', 'breakEndsAt'];
     }
 
     match /training_data/data_root/users/{userId} {

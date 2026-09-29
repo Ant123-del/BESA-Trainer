@@ -1,4 +1,6 @@
 import type { JSX } from "react"
+import type { BreakState, OfficeHoursWeek } from "../Tools/Fetch"
+import { formatDuration, useLiveBreak } from "../Tools/breaks"
 
 export type WeeklyHoursSession = {
     clockIn: Date
@@ -21,9 +23,11 @@ export type WeeklyHoursEntry = {
 export type OpenSession = {
     clockIn: Date
     activities: string[]
+    break?: BreakState // today's live break status, so the day's break line can tick during a break
 }
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
 
 function startOfWeek(date: Date): Date {
     const start = new Date(date)
@@ -49,11 +53,14 @@ function Badge({label, title, className}: {label: string, title: string, classNa
 //dark UI - always shows all 7 days of the current Sun-Sat week, even ones with no hours logged yet. Each
 //visit that day gets its own arrive-leave line with the activities picked at clock-in; days logged before
 //visits were tracked just show their activities. Passing onEditDay adds an Edit column (root admin's
-//Profile view) - it gets the day plus whatever's logged.
-export default function WeeklyHoursTable({entries, openSession, onEditDay}: {
-    entries: WeeklyHoursEntry[], openSession?: OpenSession | null, onEditDay?: (day: WeeklyHoursEntry) => void
+//Profile view) - it gets the day plus whatever's logged. Passing officeHours adds each day's break status
+//({left}/{total}, the total coming from that weekday's BESA Booking office hours) up through today.
+export default function WeeklyHoursTable({entries, openSession, officeHours, onEditDay}: {
+    entries: WeeklyHoursEntry[], openSession?: OpenSession | null, officeHours?: OfficeHoursWeek | null,
+    onEditDay?: (day: WeeklyHoursEntry) => void
 }): JSX.Element {
-    const weekStart = startOfWeek(new Date())
+    const today = new Date()
+    const weekStart = startOfWeek(today)
     const days = Array.from({length: 7}, (_, i) => {
         const date = new Date(weekStart)
         date.setDate(date.getDate() + i)
@@ -66,6 +73,8 @@ export default function WeeklyHoursTable({entries, openSession, onEditDay}: {
             editedByAdmin: entry?.editedByAdmin,
             sessions: [...(entry?.sessions || [])].sort((a, b) => a.clockIn.getTime() - b.clockIn.getTime()),
             open: openSession && sameDay(openSession.clockIn, date) ? openSession : null,
+            upToToday: date.getTime() <= today.getTime(),
+            breakAllowanceSeconds: (officeHours?.find(o => o.day === WEEKDAYS[date.getDay()])?.breakAllowanceMinutes || 0) * 60,
         }
     })
     const total = days.reduce((sum, d) => sum + d.hours, 0)
@@ -93,6 +102,11 @@ export default function WeeklyHoursTable({entries, openSession, onEditDay}: {
                         {d.open && <SessionLine clockIn={d.open.clockIn} activities={d.open.activities}/>}
                         {d.sessions.length === 0 && !d.open &&
                             <span>{d.activities.length > 0 ? d.activities.join(", ") : "—"}</span>
+                        }
+                        {officeHours && d.upToToday &&
+                            <BreakLine allowanceSeconds={d.breakAllowanceSeconds}
+                                takenSeconds={d.sessions.reduce((sum, s) => sum + (s.breakSeconds || 0), 0)}
+                                liveBreak={d.open?.break}/>
                         }
                     </div>
                     <div className="p-2 px-3 text-right flex flex-wrap items-center justify-end gap-1 content-center">
@@ -137,6 +151,30 @@ function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSecond
             }
             {activities.length > 0 && <span className="text-gray-400">{activities.join(", ")}</span>}
             {!!breakSeconds && <span className="text-sky-300/80 whitespace-nowrap">{Math.round(breakSeconds / 60)} min break</span>}
+        </div>
+    )
+}
+
+//"Breaks: 10:00 / 15:00 left" for one day. While someone's clocked in today, the live break state (which
+//already counts earlier visits today) drives it and ticks during a break; otherwise it's the day's total
+//allowance minus the break time recorded on its visits.
+function BreakLine({allowanceSeconds, takenSeconds, liveBreak}: {
+    allowanceSeconds: number, takenSeconds: number, liveBreak?: BreakState
+}) {
+    const live = useLiveBreak(liveBreak)
+    const allowance = live ? live.allowance : allowanceSeconds
+    const remaining = live ? live.remaining : Math.max(0, allowanceSeconds - takenSeconds)
+    if (allowance === 0 && takenSeconds === 0) return null
+
+    return (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+            <span className="text-sky-300/90">
+                Breaks: <span className="tabular-nums font-semibold">{formatDuration(remaining)}</span>
+                <span className="tabular-nums"> / {formatDuration(allowance)}</span> left
+            </span>
+            {live?.onBreak &&
+                <Badge label={`ON BREAK · ${formatDuration(live.breakLeft)}`} title="Currently on break" className="bg-sky-500 text-black tabular-nums"/>
+            }
         </div>
     )
 }

@@ -44,7 +44,7 @@ function toWeeklyHoursEntries(entries: RawDayHours[]): WeeklyHoursEntry[] {
 }
 
 function toOpenSession(session: ApiOpenSession | null | undefined): OpenSession | null {
-    return session ? {clockIn: new Date(session.clockIn), activities: session.activities} : null
+    return session ? {clockIn: new Date(session.clockIn), activities: session.activities, break: session.break} : null
 }
 
 //YYYY-MM-DD in the browser's local calendar (the kiosk runs in Pacific, same as the backend).
@@ -237,6 +237,7 @@ export default function Profile(): JSX.Element {
                                                 <HoursWithOfficeHours officeHours={member.officeHours ?? null}>
                                                     <WeeklyHoursTable entries={toWeeklyHoursEntries(member.hours)}
                                                         openSession={toOpenSession(member.openSession)}
+                                                        officeHours={member.officeHours}
                                                         onEditDay={(day) => setEditing({member, day})}/>
                                                 </HoursWithOfficeHours>
                                             </div>
@@ -252,6 +253,7 @@ export default function Profile(): JSX.Element {
                                 <OfficeTimeDisclaimer className="mb-4"/>
                                 <HoursWithOfficeHours officeHours={ownOfficeHours}>
                                     <WeeklyHoursTable entries={toWeeklyHoursEntries(ownHours ?? userData.biWeeklyHours ?? [])}
+                                        officeHours={ownOfficeHours}
                                         openSession={ownOpenSession !== undefined ? ownOpenSession
                                             : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || []}
                                             : null}/>

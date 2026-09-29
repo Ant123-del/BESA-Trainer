@@ -364,11 +364,11 @@ export type ApiDayHours = {
 }
 
 //a member who's clocked in right now and hasn't clocked out yet
-export type ApiOpenSession = {clockIn: string, activities: string[]}
+export type ApiOpenSession = {clockIn: string, activities: string[], break?: BreakState}
 
 //scheduled office hours from the BESA booking roster, Sun-Sat, times as "HH:MM" (24h, Pacific) -
 //null when this member's name isn't in the roster at all
-export type OfficeHoursWeek = {day: string, slots: {start: string, end: string}[]}[]
+export type OfficeHoursWeek = {day: string, slots: {start: string, end: string}[], breakAllowanceMinutes?: number}[]
 
 export type MemberHours = {
     uid: string

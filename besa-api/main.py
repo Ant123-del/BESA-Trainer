@@ -293,6 +293,13 @@ def _week_start(dt: datetime) -> datetime:
     return start_of_day - timedelta(days=(local.weekday() + 1) % 7)
 
 
+#Firestore hands timestamps back as DatetimeWithNanoseconds, and .astimezone() on one yields a broken copy
+#(missing its internal _nanosecond) that crashes when written back to Firestore. Anything read from a doc
+#that gets stored again (e.g. lastCheckedIn -> a session's clockIn) must go through this first.
+def _to_pacific(dt: datetime) -> datetime:
+    return datetime.fromtimestamp(dt.timestamp(), tz=PACIFIC)
+
+
 def _find_besa_by_student_id(db, student_id: str):
     users_ref = db.collection("training_data").document("data_root").collection("users")
     for u in users_ref.stream():
@@ -404,7 +411,7 @@ def _auto_clock_out_if_needed(target_ref, data: dict) -> dict:
     if not last_checked_in:
         return data
 
-    checked_in_at = last_checked_in.astimezone(PACIFIC)
+    checked_in_at = _to_pacific(last_checked_in)
     now = datetime.now(PACIFIC)
     cutoff = checked_in_at.replace(hour=20, minute=0, second=0, microsecond=0)
     if now < cutoff:
@@ -461,7 +468,7 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
         raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't currently clocked in.")
 
     now = datetime.now(PACIFIC)
-    checked_in_at = last_checked_in.astimezone(PACIFIC)
+    checked_in_at = _to_pacific(last_checked_in)
     activities = data.get("lastCheckedInActivities") or []
     new_hours, elapsed_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now, activities, now)
 

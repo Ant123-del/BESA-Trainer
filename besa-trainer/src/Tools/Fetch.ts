@@ -272,11 +272,61 @@ export async function clockOut(studentId: string): Promise<{success: boolean, be
     }
 }
 
+//today's break allowance for a clocked-in member (from their office hours that day) and how much is left
+export type BreakState = {
+    scheduledHours: number
+    allowanceSeconds: number
+    usedSeconds: number
+    remainingSeconds: number
+    onBreak: boolean
+    breakStartedAt: string | null
+    usedBeforeBreakSeconds: number
+    breakEndsAt: string | null
+}
+
 export type KioskSession = {
     uid: string
     besaName?: string
     activities: string[]
     clockedInAt: string
+    break: BreakState
+}
+
+//root only - starts a break for a clocked-in member: "short" = 5 minutes (or whatever's left, if less),
+//"all" = the rest of today's allowance in one go.
+export async function startBreak(targetUid: string, mode: "short" | "all"): Promise<{success: boolean, detail?: string}> {
+    return kioskPost("break/start", {targetUid, mode})
+}
+
+//root only - ends a member's break early; only the time actually taken is used up.
+export async function endBreak(targetUid: string): Promise<{success: boolean, detail?: string}> {
+    return kioskPost("break/end", {targetUid})
+}
+
+async function kioskPost(path: string, body: unknown): Promise<{success: boolean, detail?: string}> {
+    try {
+        const user = getAuth().currentUser
+        if (!user) {
+            return {success: false, detail: "Not logged in."}
+        }
+        const idToken = await user.getIdToken()
+        const response = await fetch(url + path, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${idToken}`
+            },
+            body: JSON.stringify(body)
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+            return {success: false, detail: typeof data.detail === "string" ? data.detail : `Request failed (${response.status})`}
+        }
+        return data
+    } catch (e) {
+        console.error(e)
+        return {success: false, detail: "Couldn't reach the server."}
+    }
 }
 
 //root only - everyone currently clocked in, for the Clock Out panel's "Current Sessions" list.
@@ -310,7 +360,7 @@ export type ApiDayHours = {
     activities: string[]
     autoClockedOut?: boolean
     editedByAdmin?: boolean
-    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean}[]
+    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number}[]
 }
 
 //a member who's clocked in right now and hasn't clocked out yet

@@ -5,6 +5,7 @@ export type WeeklyHoursSession = {
     clockOut: Date
     activities: string[]
     autoClockedOut?: boolean
+    breakSeconds?: number
 }
 
 export type WeeklyHoursEntry = {
@@ -87,7 +88,7 @@ export default function WeeklyHoursTable({entries, openSession, onEditDay}: {
                     </div>
                     <div className="p-2 px-3 text-gray-400 flex flex-col gap-1 min-w-0">
                         {d.sessions.map((s, j) => (
-                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut}/>
+                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds}/>
                         ))}
                         {d.open && <SessionLine clockIn={d.open.clockIn} activities={d.open.activities}/>}
                         {d.sessions.length === 0 && !d.open &&
@@ -120,8 +121,8 @@ export default function WeeklyHoursTable({entries, openSession, onEditDay}: {
 }
 
 //"9:02 AM - 11:30 AM  Tours, Other" - clockOut omitted means they're still clocked in
-function SessionLine({clockIn, clockOut, activities, autoClockedOut}: {
-    clockIn: Date, clockOut?: Date, activities: string[], autoClockedOut?: boolean
+function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds}: {
+    clockIn: Date, clockOut?: Date, activities: string[], autoClockedOut?: boolean, breakSeconds?: number
 }) {
     return (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -135,6 +136,7 @@ function SessionLine({clockIn, clockOut, activities, autoClockedOut}: {
                 <Badge label="AUTO" title="Forgot to clock out - leave time is their scheduled office-hours end (or 8 PM)" className="bg-yellow-600 text-black"/>
             }
             {activities.length > 0 && <span className="text-gray-400">{activities.join(", ")}</span>}
+            {!!breakSeconds && <span className="text-sky-300/80 whitespace-nowrap">{Math.round(breakSeconds / 60)} min break</span>}
         </div>
     )
 }

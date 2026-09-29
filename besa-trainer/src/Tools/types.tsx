@@ -36,6 +36,7 @@ export type HoursSession = {
     clockOut: Date
     activities: string[]
     autoClockedOut?: boolean
+    breakSeconds?: number // break time taken during this visit
 }
 
 //will be used to keep track of personalized vll scripts

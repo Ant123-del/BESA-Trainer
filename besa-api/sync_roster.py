@@ -7,8 +7,9 @@ second Admin SDK app authenticated as besa-app's own service account. That works
 this script does) but gets PERMISSION_DENIED when called from within Cloud Run in this GCP org, even
 with the correct IAM role granted on the service account - almost certainly an org policy restricting
 cross-project service account usage that neither project's owner can self-serve around. Since local
-runs work, someone with access to both projects runs this script periodically instead, and the deployed
-app just reads the mirror - see the comment above _get_cached_roster() in main.py.
+runs work, this script was the workaround - but the deployed app now reads /Besas live over Firestore's
+public REST API instead (see _get_roster() in main.py), and only falls back to this mirror if besa-app
+can't be reached. Running this is optional: it just keeps that fallback fresh.
 
 Usage:
     python3 sync_roster.py

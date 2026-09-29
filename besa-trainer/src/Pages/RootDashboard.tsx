@@ -3,8 +3,8 @@ import { MoonLoader } from "react-spinners"
 import Header from "../Components/Header"
 import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
 import {
-    addActivityType, clockIn, clockOut, getActivityTypes, getCurrentSessions,
-    removeActivityType, type KioskSession
+    addActivityType, clockIn, clockOut, endBreak, getActivityTypes, getCurrentSessions,
+    removeActivityType, startBreak, type KioskSession
 } from "../Tools/Fetch"
 
 //the shared kiosk's home screen (root accountType only, see Home.tsx) - clock BESA members in/out by
@@ -33,7 +33,7 @@ export default function RootDashboard() {
             <div className="h-16 relative top-0 left-0 w-full"></div>
             <div className="w-5/6 max-w-3xl mx-auto py-10 flex flex-col gap-8">
                 <ClockInPanel activityTypes={activityTypes} onClockedIn={refreshSessions}/>
-                <ClockOutPanel sessions={sessions} onClockedOut={refreshSessions}/>
+                <ClockOutPanel sessions={sessions} onChanged={refreshSessions}/>
                 <ActivityTypesPanel activityTypes={activityTypes} setActivityTypes={setActivityTypes}/>
             </div>
         </div>
@@ -118,7 +118,7 @@ function ClockInPanel({activityTypes, onClockedIn}: {activityTypes: string[] | n
     )
 }
 
-function ClockOutPanel({sessions, onClockedOut}: {sessions: KioskSession[] | null, onClockedOut: () => void}) {
+function ClockOutPanel({sessions, onChanged}: {sessions: KioskSession[] | null, onChanged: () => void}) {
     const [studentId, setStudentId] = useState("")
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState<{text: string, error: boolean} | null>(null)
@@ -131,7 +131,7 @@ function ClockOutPanel({sessions, onClockedOut}: {sessions: KioskSession[] | nul
         if (result?.success) {
             setMessage({text: `Clocked out ${result.besaName || ""} - ${result.hoursThisSession} hour(s) this session.`, error: false})
             setStudentId("")
-            onClockedOut()
+            onChanged()
         } else {
             setMessage({text: result?.detail || "Something went wrong.", error: true})
         }
@@ -166,16 +166,7 @@ function ClockOutPanel({sessions, onClockedOut}: {sessions: KioskSession[] | nul
                 <p className="text-gray-500 italic text-sm">Nobody is currently clocked in.</p>
                 :
                 <div className="flex flex-col gap-2">
-                    {sessions.map(s => (
-                        <div key={s.uid} className="bg-gray-700 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap">
-                            <span className="font-semibold">{s.besaName || "(no name on file)"}</span>
-                            <div className="flex flex-wrap gap-1">
-                                {s.activities.map(a => (
-                                    <span key={a} className="text-xs px-2 py-0.5 rounded-full bg-amber-500 text-black">{a}</span>
-                                ))}
-                            </div>
-                        </div>
-                    ))}
+                    {sessions.map(s => <SessionRow key={s.uid} session={s} onChanged={onChanged}/>)}
                 </div>
             }
         </section>
@@ -253,5 +244,104 @@ function ActivityTypesPanel({activityTypes, setActivityTypes}: {
                 </button>
             </div>
         </section>
+    )
+}
+
+
+//"4:05" - minutes:seconds, for break countdowns and allowances
+function formatDuration(totalSeconds: number): string {
+    const seconds = Math.max(0, Math.round(totalSeconds))
+    return `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, "0")}`
+}
+
+//one clocked-in member in Current Sessions, with their break controls. Today's break allowance comes from
+//their BESA Booking office hours that day (see the backend's _break_allowance_minutes); they can take 5
+//minutes at a time or everything left at once, shown as {time left}/{today's total}.
+function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () => void}) {
+    const brk = session.break
+    const [now, setNow] = useState(() => Date.now())
+    const [busy, setBusy] = useState(false)
+    const [error, setError] = useState("")
+
+    //tick every second while on break so the countdown moves between the dashboard's 60s refreshes
+    useEffect(() => {
+        if (!brk.onBreak) return
+        const interval = setInterval(() => setNow(Date.now()), 1000)
+        return () => clearInterval(interval)
+    }, [brk.onBreak])
+
+    const breakEndsAt = brk.breakEndsAt ? new Date(brk.breakEndsAt).getTime() : null
+    const breakStartedAt = brk.breakStartedAt ? new Date(brk.breakStartedAt).getTime() : null
+    const breakLeft = breakEndsAt ? Math.max(0, (breakEndsAt - now) / 1000) : 0
+    const onBreak = brk.onBreak && breakLeft > 0
+    const used = onBreak && breakStartedAt
+        ? brk.usedBeforeBreakSeconds + (Math.min(now, breakEndsAt!) - breakStartedAt) / 1000
+        : brk.usedSeconds
+    const remaining = Math.max(0, brk.allowanceSeconds - used)
+
+    //the break ran out on its own - pull fresh state so the buttons come back
+    const breakRanOut = brk.onBreak && breakLeft === 0
+    useEffect(() => {
+        if (breakRanOut) onChanged()
+    }, [breakRanOut, onChanged])
+
+    async function run(action: () => Promise<{success: boolean, detail?: string}>) {
+        setBusy(true)
+        setError("")
+        const result = await action()
+        setBusy(false)
+        if (result.success) {
+            setNow(Date.now())
+            onChanged()
+        } else {
+            setError(result.detail || "Something went wrong.")
+        }
+    }
+
+    return (
+        <div className={"rounded-xl p-3 flex flex-col gap-2 " + (onBreak ? "bg-sky-900/60 border border-sky-700" : "bg-gray-700")}>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+                <span className="font-semibold">{session.besaName || "(no name on file)"}</span>
+                <div className="flex flex-wrap gap-1">
+                    {session.activities.map(a => (
+                        <span key={a} className="text-xs px-2 py-0.5 rounded-full bg-amber-500 text-black">{a}</span>
+                    ))}
+                </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 flex-wrap text-sm">
+                {brk.allowanceSeconds === 0 ?
+                    <span className="text-gray-400">No break time today (no office hours on BESA Booking)</span>
+                    :
+                    <span className="text-gray-300">
+                        Breaks: <span className="font-semibold text-white tabular-nums">{formatDuration(remaining)}</span>
+                        <span className="text-gray-400 tabular-nums"> / {formatDuration(brk.allowanceSeconds)}</span> left
+                    </span>
+                }
+                {onBreak ?
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs px-2 py-0.5 rounded bg-sky-500 text-black font-semibold tabular-nums">ON BREAK · {formatDuration(breakLeft)}</span>
+                        <button onClick={() => void run(() => endBreak(session.uid))} disabled={busy}
+                            className="text-xs px-3 py-1.5 rounded-full bg-gray-600 hover:bg-gray-500 disabled:opacity-40">
+                            End Break
+                        </button>
+                    </div>
+                    : remaining > 0 &&
+                    <div className="flex items-center gap-2">
+                        <button onClick={() => void run(() => startBreak(session.uid, "short"))} disabled={busy}
+                            className="text-xs px-3 py-1.5 rounded-full bg-sky-700 hover:bg-sky-800 disabled:opacity-40">
+                            {remaining >= 300 ? "5 Min Break" : `Break (${formatDuration(remaining)})`}
+                        </button>
+                        {remaining > 300 &&
+                            <button onClick={() => void run(() => startBreak(session.uid, "all"))} disabled={busy}
+                                className="text-xs px-3 py-1.5 rounded-full bg-sky-700 hover:bg-sky-800 disabled:opacity-40">
+                                Take All ({formatDuration(remaining)})
+                            </button>
+                        }
+                    </div>
+                }
+            </div>
+            {error && <p className="text-red-400 text-xs">{error}</p>}
+        </div>
     )
 }

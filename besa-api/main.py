@@ -13,6 +13,7 @@ import bcrypt
 import hashlib
 import hmac
 import secrets
+import requests
 
 import firebase_admin
 from firebase_admin import credentials, storage, auth, firestore
@@ -134,26 +135,74 @@ def require_root(user: dict = Depends(get_current_user)):
 
 
 # ---- BESA roster (besa-app project) ----
-# besa-app is a separate Firebase project holding the club's own member roster at /Besas/{id}. We used
-# to reach across projects live (a second, named Admin SDK app talking directly to besa-app), but that
-# path is blocked in this GCP org - the besa-app service account gets PERMISSION_DENIED from Cloud Run
-# even with the correct IAM role granted, which points at an org policy (e.g. a cross-project service
-# account restriction) neither project owner can self-serve around. Instead, someone with access to
-# both projects runs sync_roster.py locally (same script, same machine, same auth that already proves
-# this works outside Cloud Run) to mirror the roster into this project's own Firestore, and everything
-# below just reads that local mirror. Each cached doc: {name, role, status, officeHours}.
+# besa-app is a separate Firebase project (BESA Booking) holding the club's own member roster at
+# /Besas/{id}, including each member's officeHours. Its Admin SDK path is blocked from Cloud Run in this
+# GCP org (cross-project service account restriction), but /Besas is publicly readable - the booking site
+# itself reads it to show office hours - so it's read live over Firestore's public REST API with no
+# credentials at all. That way office-hour edits on BESA Booking show up here within a minute instead of
+# waiting on someone to run sync_roster.py. The old mirror (training_data/data_root/besa_roster_cache,
+# still filled by sync_roster.py) is only a fallback for when besa-app can't be reached.
 BESA_ROSTER_NAME_FIELD = os.getenv("BESA_ROSTER_NAME_FIELD", "name")
 BESA_ROSTER_ROLE_FIELD = os.getenv("BESA_ROSTER_ROLE_FIELD", "role")
 BESA_ROSTER_LEAD_VALUE = os.getenv("BESA_ROSTER_LEAD_VALUE", "BESA Lead")
 BESA_ROSTER_STATUS_FIELD = os.getenv("BESA_ROSTER_STATUS_FIELD", "status")
 BESA_ROSTER_ACTIVE_VALUE = os.getenv("BESA_ROSTER_ACTIVE_VALUE", "active")
 BESA_ROSTER_CACHE_COLLECTION = "besa_roster_cache"
+BESA_APP_PROJECT_ID = os.getenv("BESA_APP_PROJECT_ID", "besa-app")
+BESA_ROSTER_COLLECTION = os.getenv("BESA_ROSTER_COLLECTION", "Besas")
+ROSTER_TTL_SECONDS = 60
+
+_roster_cache = {"docs": None, "fetched_at": 0.0}
 
 
-def _get_cached_roster() -> list:
-    db = firestore.client()
-    docs = db.collection("training_data").document("data_root").collection(BESA_ROSTER_CACHE_COLLECTION).stream()
-    return [d.to_dict() or {} for d in docs]
+#Firestore REST encodes every field as {"<type>Value": ...} - unwrap to plain Python values
+def _decode_firestore_value(value: dict):
+    if "mapValue" in value:
+        return {k: _decode_firestore_value(v) for k, v in (value["mapValue"].get("fields") or {}).items()}
+    if "arrayValue" in value:
+        return [_decode_firestore_value(v) for v in (value["arrayValue"].get("values") or [])]
+    if "integerValue" in value:
+        return int(value["integerValue"])
+    if "nullValue" in value:
+        return None
+    for key in ("stringValue", "booleanValue", "doubleValue", "timestampValue", "referenceValue"):
+        if key in value:
+            return value[key]
+    return None
+
+
+def _fetch_live_roster() -> list:
+    base = f"https://firestore.googleapis.com/v1/projects/{BESA_APP_PROJECT_ID}/databases/(default)/documents/{BESA_ROSTER_COLLECTION}"
+    docs, page_token = [], None
+    while True:
+        params = {"pageSize": 300, **({"pageToken": page_token} if page_token else {})}
+        response = requests.get(base, params=params, timeout=10)
+        response.raise_for_status()
+        body = response.json()
+        for d in body.get("documents") or []:
+            docs.append({k: _decode_firestore_value(v) for k, v in (d.get("fields") or {}).items()})
+        page_token = body.get("nextPageToken")
+        if not page_token:
+            return docs
+
+
+#the roster, live from besa-app (cached per instance for ROSTER_TTL_SECONDS). Each doc is besa-app's own
+#shape - {name, role, status, officeHours, ...}.
+def _get_roster() -> list:
+    now = time.monotonic()
+    if _roster_cache["docs"] is not None and now - _roster_cache["fetched_at"] < ROSTER_TTL_SECONDS:
+        return _roster_cache["docs"]
+    try:
+        docs = _fetch_live_roster()
+        _roster_cache.update({"docs": docs, "fetched_at": now})
+        return docs
+    except Exception as e:
+        print(f"Live besa-app roster read failed, using mirror instead: {e}")
+        if _roster_cache["docs"] is not None:
+            return _roster_cache["docs"]
+        db = firestore.client()
+        mirror = db.collection("training_data").document("data_root").collection(BESA_ROSTER_CACHE_COLLECTION).stream()
+        return [d.to_dict() or {} for d in mirror]
 
 
 #every active roster entry, tagged besaLead/besa based on its role field
@@ -172,9 +221,9 @@ def _active_roster(roster_docs: list) -> list:
 
 @app.get("/besa-roster")
 def besaRoster():
-    roster_docs = _get_cached_roster()
+    roster_docs = _get_roster()
     if not roster_docs:
-        raise HTTPException(status_code=503, detail="BESA roster cache is empty - ask someone with besa-app access to run sync_roster.py.")
+        raise HTTPException(status_code=503, detail="Couldn't load the BESA roster right now.")
     roster = _active_roster(roster_docs)
 
     #names already claimed by an account in this project get filtered out of the picker
@@ -212,7 +261,7 @@ def createAccount(request_data: CreateAccountRequest, user: dict = Depends(get_c
         if not student_id:
             raise HTTPException(status_code=400, detail="Please enter your school id.")
 
-        entry = next((r for r in _active_roster(_get_cached_roster()) if r["name"] == besa_name), None)
+        entry = next((r for r in _active_roster(_get_roster()) if r["name"] == besa_name), None)
         if entry is None:
             raise HTTPException(status_code=400, detail="That name isn't on the active BESA roster.")
 
@@ -313,11 +362,11 @@ def _find_besa_by_student_id(db, student_id: str):
 #(or creates) the entry for checked_in_at's calendar day. Shared by manual clock-out and auto-clockout.
 #Each day also keeps its individual sessions (arrive/leave time + activities) so the hours table can show
 #when someone was actually there - entries written before sessions existed just have none.
-def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False):
+def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0):
     elapsed_hours = max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
     current_week_start = _week_start(now)
-    session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out}
+    session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out, "breakSeconds": break_seconds}
 
     pruned = [e for e in existing if e.get("date") and e["date"].astimezone(PACIFIC) >= current_week_start]
 
@@ -359,6 +408,7 @@ def _serialize_hours_entry(e: dict) -> dict:
                 "clockOut": s["clockOut"].isoformat(),
                 "activities": s.get("activities") or [],
                 "autoClockedOut": bool(s.get("autoClockedOut")),
+                "breakSeconds": s.get("breakSeconds") or 0,
             }
             for s in (e.get("sessions") or []) if s.get("clockIn") and s.get("clockOut")
         ],
@@ -404,7 +454,7 @@ def _get_office_hours_end(besa_name, checked_in_at: datetime):
     if not besa_name:
         return None
 
-    roster_doc = next((d for d in _get_cached_roster() if d.get(BESA_ROSTER_NAME_FIELD) == besa_name), None)
+    roster_doc = next((d for d in _get_roster() if d.get(BESA_ROSTER_NAME_FIELD) == besa_name), None)
     if roster_doc is None:
         return None
 
@@ -423,6 +473,67 @@ def _get_office_hours_end(besa_name, checked_in_at: datetime):
             candidate_ends.append(end_dt)
 
     return max(candidate_ends) if candidate_ends else None
+
+
+# ---- Breaks (taken from the root kiosk's Current Sessions list) ----
+# A day's break allowance comes from that day's scheduled office hours on BESA Booking: +5 minutes per full
+# scheduled hour up to 15 (reached at hour 3), flat through hour 5, then +5 more for every full hour past 5
+# (1h=5, 2h=10, 3-5h=15, 6h=20, 7h=25...). The in-progress break lives on the user doc as breakStartedAt/
+# breakEndsAt, and breakUsedSeconds holds what's already been used this visit - all reset on clock in/out.
+BREAK_FIELDS_RESET = {"breakUsedSeconds": 0, "breakStartedAt": None, "breakEndsAt": None}
+SHORT_BREAK_SECONDS = 5 * 60
+
+
+def _break_allowance_minutes(scheduled_hours: float) -> int:
+    whole_hours = int(scheduled_hours)
+    minutes = 5 * min(whole_hours, 3)
+    if whole_hours > 5:
+        minutes += 5 * (whole_hours - 5)
+    return minutes
+
+
+def _scheduled_hours_on(besa_name, day: datetime) -> float:
+    week = _office_hours(besa_name, _get_roster()) or []
+    day_name = WEEKDAYS[(day.weekday() + 1) % 7]
+    total_minutes = 0
+    for slot in next((d["slots"] for d in week if d["day"] == day_name), []):
+        try:
+            start = datetime.strptime(slot["start"], "%H:%M")
+            end = datetime.strptime(slot["end"], "%H:%M")
+        except ValueError:
+            continue
+        total_minutes += max(0, (end - start).total_seconds() / 60)
+    return total_minutes / 60
+
+
+#break time used this visit, including however much of an in-progress break has elapsed by `now`
+def _break_used_seconds(data: dict, now: datetime) -> int:
+    used = data.get("breakUsedSeconds") or 0
+    if data.get("breakStartedAt") and data.get("breakEndsAt"):
+        started = _to_pacific(data["breakStartedAt"])
+        ends = _to_pacific(data["breakEndsAt"])
+        used += max(0, int((min(now, ends) - started).total_seconds()))
+    return used
+
+
+def _break_state(data: dict, now: datetime) -> dict:
+    checked_in_at = _to_pacific(data["lastCheckedIn"])
+    scheduled = _scheduled_hours_on(data.get("besaName"), checked_in_at)
+    allowance = _break_allowance_minutes(scheduled) * 60
+    used = _break_used_seconds(data, now)
+    ends = _to_pacific(data["breakEndsAt"]) if data.get("breakEndsAt") else None
+    on_break = bool(ends and now < ends)
+    return {
+        "scheduledHours": round(scheduled, 2),
+        "allowanceSeconds": allowance,
+        "usedSeconds": used,
+        "remainingSeconds": max(0, allowance - used),
+        "onBreak": on_break,
+        #with these two the kiosk can tick the countdown locally: used = before + (now - startedAt)
+        "breakStartedAt": _to_pacific(data["breakStartedAt"]).isoformat() if on_break else None,
+        "usedBeforeBreakSeconds": (data.get("breakUsedSeconds") or 0) if on_break else used,
+        "breakEndsAt": ends.isoformat() if on_break else None,
+    }
 
 
 #if someone forgot to clock out and it's now past 8pm of the day they clocked in, close their session
@@ -445,14 +556,13 @@ def _auto_clock_out_if_needed(target_ref, data: dict) -> dict:
     effective_end = office_end if office_end and office_end > checked_in_at else cutoff
 
     activities = data.get("lastCheckedInActivities") or []
-    new_hours, _ = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, effective_end, activities, now, auto_clocked_out=True)
+    break_seconds = _break_used_seconds(data, effective_end)
+    new_hours, _ = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, effective_end, activities, now,
+                                      auto_clocked_out=True, break_seconds=break_seconds)
 
-    target_ref.update({
-        "biWeeklyHours": new_hours,
-        "lastCheckedIn": None,
-        "lastCheckedInActivities": [],
-    })
-    return {**data, "biWeeklyHours": new_hours, "lastCheckedIn": None, "lastCheckedInActivities": []}
+    update = {"biWeeklyHours": new_hours, "lastCheckedIn": None, "lastCheckedInActivities": [], **BREAK_FIELDS_RESET}
+    target_ref.update(update)
+    return {**data, **update}
 
 
 class ClockInRequest(BaseModel):
@@ -475,7 +585,7 @@ def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root
         raise HTTPException(status_code=409, detail=f"{data.get('besaName')} is already clocked in.")
 
     now = datetime.now(PACIFIC)
-    target_ref.update({"lastCheckedIn": now, "lastCheckedInActivities": activities})
+    target_ref.update({"lastCheckedIn": now, "lastCheckedInActivities": activities, **BREAK_FIELDS_RESET})
     return {"success": True, "besaName": data.get("besaName"), "clockedInAt": now.isoformat()}
 
 
@@ -497,12 +607,14 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
     now = datetime.now(PACIFIC)
     checked_in_at = _to_pacific(last_checked_in)
     activities = data.get("lastCheckedInActivities") or []
-    new_hours, elapsed_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now, activities, now)
+    new_hours, elapsed_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now, activities, now,
+                                                  break_seconds=_break_used_seconds(data, now))
 
     target_ref.update({
         "biWeeklyHours": new_hours,
         "lastCheckedIn": None,
         "lastCheckedInActivities": [],
+        **BREAK_FIELDS_RESET,
     })
     return {"success": True, "besaName": data.get("besaName"), "hoursThisSession": elapsed_hours}
 
@@ -518,7 +630,7 @@ def checkAutoClockout(user: dict = Depends(get_current_user)):
     data = _auto_clock_out_if_needed(target_ref, doc.to_dict() or {})
     hours = [_serialize_hours_entry(e) for e in (data.get("biWeeklyHours") or []) if e.get("date")]
     return {"success": True, "biWeeklyHours": hours, "openSession": _open_session(data),
-            "officeHours": _office_hours(data.get("besaName"), _get_cached_roster())}
+            "officeHours": _office_hours(data.get("besaName"), _get_roster())}
 
 
 @app.get("/current-sessions")
@@ -539,8 +651,64 @@ def currentSessions(root_user: dict = Depends(require_root)):
             "besaName": data.get("besaName"),
             "activities": data.get("lastCheckedInActivities") or [],
             "clockedInAt": data["lastCheckedIn"].isoformat(),
+            "break": _break_state(data, datetime.now(PACIFIC)),
         })
     return {"success": True, "sessions": sessions}
+
+
+def _clocked_in_besa(db, target_uid: str):
+    target_ref = db.collection("training_data").document("data_root").collection("users").document(target_uid)
+    doc = target_ref.get()
+    data = (doc.to_dict() or {}) if doc.exists else {}
+    if data.get("accountType") not in ("besa", "besaLead"):
+        raise HTTPException(status_code=404, detail="No BESA account found with that id.")
+    data = _auto_clock_out_if_needed(target_ref, data)
+    if not data.get("lastCheckedIn"):
+        raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't currently clocked in.")
+    return target_ref, data
+
+
+class StartBreakRequest(BaseModel):
+    targetUid: str
+    mode: Literal["short", "all"]  # "short" = 5 minutes (or whatever's left, if less), "all" = everything left
+
+
+@app.post("/break/start")
+def startBreak(request_data: StartBreakRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _clocked_in_besa(db, request_data.targetUid)
+    now = datetime.now(PACIFIC)
+    state = _break_state(data, now)
+    if state["onBreak"]:
+        raise HTTPException(status_code=409, detail=f"{data.get('besaName')} is already on break.")
+    if state["remainingSeconds"] <= 0:
+        detail = "No break time scheduled today (no office hours on BESA Booking)." if state["allowanceSeconds"] == 0 else "No break time left today."
+        raise HTTPException(status_code=409, detail=detail)
+
+    duration = min(SHORT_BREAK_SECONDS, state["remainingSeconds"]) if request_data.mode == "short" else state["remainingSeconds"]
+    target_ref.update({
+        #fold any earlier (finished) break into the used total before starting this one
+        "breakUsedSeconds": state["usedSeconds"],
+        "breakStartedAt": now,
+        "breakEndsAt": now + timedelta(seconds=duration),
+    })
+    return {"success": True, "besaName": data.get("besaName"), "breakSeconds": duration}
+
+
+class EndBreakRequest(BaseModel):
+    targetUid: str
+
+
+@app.post("/break/end")
+def endBreak(request_data: EndBreakRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _clocked_in_besa(db, request_data.targetUid)
+    now = datetime.now(PACIFIC)
+    if not _break_state(data, now)["onBreak"]:
+        raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't on break.")
+    #only the time actually taken counts - the rest stays available for later
+    target_ref.update({"breakUsedSeconds": _break_used_seconds(data, now), "breakStartedAt": None, "breakEndsAt": None})
+    return {"success": True, "besaName": data.get("besaName")}
 
 
 def _current_week_hours(data: dict) -> list:
@@ -705,7 +873,7 @@ def rootAdminDeleteAccount(root_user: dict = Depends(require_root_admin)):
 @app.get("/all-hours")
 def allHours(root_user: dict = Depends(require_root_admin)):
     db = firestore.client()
-    roster_docs = _get_cached_roster()
+    roster_docs = _get_roster()
     members = []
     for u in db.collection("training_data").document("data_root").collection("users").stream():
         data = u.to_dict() or {}

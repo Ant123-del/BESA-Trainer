@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { MoonLoader } from "react-spinners"
 import Header from "../Components/Header"
+import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
 import {
     addActivityType, clockIn, clockOut, getActivityTypes, getCurrentSessions,
     removeActivityType, type KioskSession
@@ -62,8 +63,11 @@ function ClockInPanel({activityTypes, onClockedIn}: {activityTypes: string[] | n
         setSelected(prev => prev.includes(name) ? prev.filter(a => a !== name) : [...prev, name])
     }
 
+    //every clock-in has to say what they came in to work on
+    const canSubmit = !!studentId.trim() && selected.length > 0
+
     async function handleSubmit() {
-        if (!studentId.trim()) return
+        if (!canSubmit) return
         setBusy(true)
         setMessage(null)
         const result = await clockIn(studentId.trim(), selected)
@@ -81,6 +85,7 @@ function ClockInPanel({activityTypes, onClockedIn}: {activityTypes: string[] | n
     return (
         <section className="bg-gray-800 rounded-2xl p-6">
             <h2 className="text-2xl tracking-wide mb-4 text-center">Clock In</h2>
+            <OfficeTimeDisclaimer className="mb-4 text-center"/>
             <label className="block text-sm text-gray-400 mb-1">Enter School Id</label>
             <input
                 value={studentId}
@@ -88,7 +93,7 @@ function ClockInPanel({activityTypes, onClockedIn}: {activityTypes: string[] | n
                 placeholder="Ex: 1234567"
                 className="w-full p-3 rounded-xl bg-gray-700 text-white mb-4"
             />
-            <label className="block text-sm text-gray-400 mb-2 text-center">Activities Intended</label>
+            <label className="block text-sm text-gray-400 mb-2 text-center">Activities Intended <span className="text-red-400">*</span></label>
             <div className="flex flex-wrap gap-2 justify-center mb-4">
                 {activityTypes === null ?
                     <MoonLoader color="white" size={20}/>
@@ -97,10 +102,13 @@ function ClockInPanel({activityTypes, onClockedIn}: {activityTypes: string[] | n
                     ))
                 }
             </div>
+            {selected.length === 0 && activityTypes !== null &&
+                <p className="text-xs text-gray-400 text-center mb-3">Pick at least one activity you intend to work on to clock in.</p>
+            }
             {message && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
             <button
                 onClick={() => void handleSubmit()}
-                disabled={busy || !studentId.trim()}
+                disabled={busy || !canSubmit}
                 className="w-full py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
                 {busy && <MoonLoader color="white" size={16}/>}

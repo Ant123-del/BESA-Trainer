@@ -11,10 +11,12 @@ import { mapFirebaseAuthError } from "../Tools/authErrors"
 import type { User as CustomUser, DayHours } from "../Tools/types"
 import {
     changeRootAdminPasscode, checkAutoClockout, deleteRootAccount, getActivityTypes, getAllHours,
-    getRootAdminToken, rootAdminLogout, setMemberDayHours, type ApiDayHours, type ApiOpenSession, type MemberHours
+    getRootAdminToken, rootAdminLogout, setMemberDayHours, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeHoursWeek
 } from "../Tools/Fetch"
 import WeeklyHoursTable, { type OpenSession, type WeeklyHoursEntry } from "../Components/WeeklyHoursTable"
 import RootAdminLogin from "../Components/RootAdminLogin"
+import OfficeHoursTable from "../Components/OfficeHoursTable"
+import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
 
 type RawDayHours = DayHours | ApiDayHours
 
@@ -75,6 +77,8 @@ export default function Profile(): JSX.Element {
     const [ownHours, setOwnHours] = useState<RawDayHours[] | null>(null)
     //undefined until that check answers - until then the open visit comes off the user doc directly
     const [ownOpenSession, setOwnOpenSession] = useState<OpenSession | null | undefined>(undefined)
+    //their BESA booking schedule, from the same check - undefined while loading
+    const [ownOfficeHours, setOwnOfficeHours] = useState<OfficeHoursWeek | null | undefined>(undefined)
 
     const isRoot = userData?.accountType === "root"
 
@@ -94,9 +98,13 @@ export default function Profile(): JSX.Element {
                 setLoading(false)
                 if (data?.accountType === "besa" || data?.accountType === "besaLead") {
                     checkAutoClockout().then(result => {
-                        if (!result) return
+                        if (!result) {
+                            setOwnOfficeHours(null)
+                            return
+                        }
                         setOwnHours(result.biWeeklyHours)
                         setOwnOpenSession(toOpenSession(result.openSession))
+                        setOwnOfficeHours(result.officeHours ?? null)
                     })
                 }
             })
@@ -177,7 +185,7 @@ export default function Profile(): JSX.Element {
         <div className="bg-gray-900 w-full min-h-screen text-white">
             <Header/>
             <div className="h-16 relative top-0 left-0 w-full"></div>
-            <div className="w-5/6 max-w-3xl mx-auto py-10">
+            <div className="w-5/6 max-w-5xl mx-auto py-10">
                 <div className="flex items-center justify-between gap-4 flex-wrap mb-8">
                     <h1 className="text-2xl sm:text-3xl md:text-4xl tracking-wider">Profile</h1>
                     {isRoot && adminUnlocked &&
@@ -215,6 +223,7 @@ export default function Profile(): JSX.Element {
                         {isRoot &&
                             <section className="bg-gray-800 rounded-2xl p-6">
                                 <h2 className="text-2xl tracking-wide mb-4">Everyone's Hours (This Week)</h2>
+                                <OfficeTimeDisclaimer className="mb-4"/>
                                 {allHours === null ?
                                     <div className="flex justify-center py-10"><MoonLoader color="white" size={24}/></div>
                                     : allHours.length === 0 ?
@@ -224,9 +233,11 @@ export default function Profile(): JSX.Element {
                                         {allHours.map(member => (
                                             <div key={member.uid}>
                                                 <p className="font-semibold mb-2">{member.besaName || "(no name on file)"}</p>
-                                                <WeeklyHoursTable entries={toWeeklyHoursEntries(member.hours)}
-                                                    openSession={toOpenSession(member.openSession)}
-                                                    onEditDay={(day) => setEditing({member, day})}/>
+                                                <HoursWithOfficeHours officeHours={member.officeHours ?? null}>
+                                                    <WeeklyHoursTable entries={toWeeklyHoursEntries(member.hours)}
+                                                        openSession={toOpenSession(member.openSession)}
+                                                        onEditDay={(day) => setEditing({member, day})}/>
+                                                </HoursWithOfficeHours>
                                             </div>
                                         ))}
                                     </div>
@@ -237,10 +248,13 @@ export default function Profile(): JSX.Element {
                         {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&
                             <section className="bg-gray-800 rounded-2xl p-6">
                                 <h2 className="text-2xl tracking-wide mb-4">My Hours (This Week)</h2>
-                                <WeeklyHoursTable entries={toWeeklyHoursEntries(ownHours ?? userData.biWeeklyHours ?? [])}
-                                    openSession={ownOpenSession !== undefined ? ownOpenSession
-                                        : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || []}
-                                        : null}/>
+                                <OfficeTimeDisclaimer className="mb-4"/>
+                                <HoursWithOfficeHours officeHours={ownOfficeHours}>
+                                    <WeeklyHoursTable entries={toWeeklyHoursEntries(ownHours ?? userData.biWeeklyHours ?? [])}
+                                        openSession={ownOpenSession !== undefined ? ownOpenSession
+                                            : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || []}
+                                            : null}/>
+                                </HoursWithOfficeHours>
                             </section>
                         }
                     </div>
@@ -292,6 +306,16 @@ export default function Profile(): JSX.Element {
                     </div>
                 </Loading>
             }
+        </div>
+    )
+}
+
+//logged hours with the BESA booking schedule beside them on wide screens, stacked underneath on phones
+function HoursWithOfficeHours({officeHours, children}: {officeHours: OfficeHoursWeek | null | undefined, children: JSX.Element}) {
+    return (
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_15rem] items-start">
+            {children}
+            <OfficeHoursTable officeHours={officeHours}/>
         </div>
     )
 }

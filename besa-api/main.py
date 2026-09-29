@@ -372,6 +372,30 @@ def _open_session(data: dict):
     return {"clockIn": data["lastCheckedIn"].isoformat(), "activities": data.get("lastCheckedInActivities") or []}
 
 
+WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+
+
+#a member's scheduled office hours from the BESA booking roster, Sun-Sat, as
+#[{"day": "monday", "slots": [{"start": "10:00", "end": "13:00"}, ...]}, ...] - None if their name isn't
+#in the roster cache at all (vs. every day empty, which means they just have nothing scheduled).
+def _office_hours(besa_name, roster_docs: list):
+    roster_doc = next((d for d in roster_docs if besa_name and d.get(BESA_ROSTER_NAME_FIELD) == besa_name), None)
+    if roster_doc is None:
+        return None
+
+    office_hours = roster_doc.get("officeHours") or {}
+    week = []
+    for day in WEEKDAYS:
+        day_data = office_hours.get(day) or {}
+        slots = []
+        if day_data.get("available", True):
+            for slot in day_data.get("timeSlots") or []:
+                if isinstance(slot, dict) and slot.get("start") and slot.get("end"):
+                    slots.append({"start": slot["start"], "end": slot["end"]})
+        week.append({"day": day, "slots": sorted(slots, key=lambda sl: sl["start"])})
+    return week
+
+
 #besa-app roster docs are matched to our users by name (same linkage /besa-roster uses for claiming).
 #Each roster doc's officeHours looks like {"monday": {"available": bool, "timeSlots":
 #[{"start": "HH:MM", "end": "HH:MM", "id": ...}, ...]}, ...} - picks the latest slot end on the
@@ -438,6 +462,9 @@ class ClockInRequest(BaseModel):
 
 @app.post("/clock-in")
 def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root)):
+    activities = [a for a in request_data.activities if a.strip()]
+    if not activities:
+        raise HTTPException(status_code=400, detail="Pick at least one activity you intend to work on.")
     db = firestore.client()
     target_ref, data = _find_besa_by_student_id(db, request_data.studentId)
     if target_ref is None:
@@ -448,7 +475,7 @@ def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root
         raise HTTPException(status_code=409, detail=f"{data.get('besaName')} is already clocked in.")
 
     now = datetime.now(PACIFIC)
-    target_ref.update({"lastCheckedIn": now, "lastCheckedInActivities": request_data.activities})
+    target_ref.update({"lastCheckedIn": now, "lastCheckedInActivities": activities})
     return {"success": True, "besaName": data.get("besaName"), "clockedInAt": now.isoformat()}
 
 
@@ -490,7 +517,8 @@ def checkAutoClockout(user: dict = Depends(get_current_user)):
 
     data = _auto_clock_out_if_needed(target_ref, doc.to_dict() or {})
     hours = [_serialize_hours_entry(e) for e in (data.get("biWeeklyHours") or []) if e.get("date")]
-    return {"success": True, "biWeeklyHours": hours, "openSession": _open_session(data)}
+    return {"success": True, "biWeeklyHours": hours, "openSession": _open_session(data),
+            "officeHours": _office_hours(data.get("besaName"), _get_cached_roster())}
 
 
 @app.get("/current-sessions")
@@ -677,6 +705,7 @@ def rootAdminDeleteAccount(root_user: dict = Depends(require_root_admin)):
 @app.get("/all-hours")
 def allHours(root_user: dict = Depends(require_root_admin)):
     db = firestore.client()
+    roster_docs = _get_cached_roster()
     members = []
     for u in db.collection("training_data").document("data_root").collection("users").stream():
         data = u.to_dict() or {}
@@ -685,7 +714,8 @@ def allHours(root_user: dict = Depends(require_root_admin)):
         if data.get("lastCheckedIn"):
             data = _auto_clock_out_if_needed(u.reference, data)
         members.append({"uid": u.id, "besaName": data.get("besaName"), "studentId": data.get("studentId"),
-                        "hours": _current_week_hours(data), "openSession": _open_session(data)})
+                        "hours": _current_week_hours(data), "openSession": _open_session(data),
+                        "officeHours": _office_hours(data.get("besaName"), roster_docs)})
     return {"success": True, "members": members}
 
 

@@ -1,19 +1,14 @@
-import type { SyntheticEvent, JSX } from "react"
-import { useEffect, useState } from "react"
-import {
-  createUserWithEmailAndPassword,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  type User,
-} from "firebase/auth"
+import type { JSX } from "react"
+import { useEffect } from "react"
+import { onAuthStateChanged, type User } from "firebase/auth"
 import { Link, useNavigate } from "react-router-dom"
 import Header from "../Components/Header"
 import GoogleSignInButton from "../Components/GoogleSignInButton"
-import { mapFirebaseAuthError } from "../Tools/authErrors"
 import { getFirebaseAuth } from "../Tools/firebase"
-import { isSignupInProgress, signUp } from "../Tools/signup"
+import { isSignupInProgress } from "../Tools/signup"
 
-//login prop comes from the router, switches between sign in vs sign up form (see App.tsx)
+//login prop comes from the router, switches between the /signup and /signin wording (see App.tsx).
+//Google is the only way in - the same button signs in an existing account or creates a new one.
 export default function Login({ login }: { login: boolean }): JSX.Element {
     const navigate = useNavigate()
 
@@ -31,178 +26,27 @@ export default function Login({ login }: { login: boolean }): JSX.Element {
     return (
         <>
         <Header/>
-        {/*I know code a little wobby sobby but bare with me*/}
-        {login ? <EmailPasswordSignUp /> : <EmailPasswordSignIn />}
+        <div className="w-screen h-screen flex items-center justify-center bg-gray-900">
+            <div className="w-11/12 sm:w-3/4 md:w-2/4 mx-auto bg-white rounded-2xl p-5 text-black">
+                <h2 className="mb-2 text-center text-3xl font-bold">{login ? "Sign Up" : "Sign In"}</h2>
+                <p className="mb-2 text-center text-xs text-gray-600">
+                    {login ? "Create your account with your Google account." : "Sign in with your Google account."}
+                </p>
+                <GoogleSignInButton />
+                <p className="text-center mt-8 mb-2 text-gray-700">
+                    {login ? "Have an account? " : "Don't have an account? "}
+                    <Link to={login ? "/signin" : "/signup"} className="text-blue-900">
+                        {login ? "Sign in" : "Create one"}
+                    </Link>
+                </p>
+                <p className="text-center mb-3 text-gray-700">
+                    Are you a BESA?{" "}
+                    <Link to="/signup-besa" className="text-blue-900 font-semibold">
+                        Sign Up as BESA
+                    </Link>
+                </p>
+            </div>
+        </div>
         </>
-    )
-}
-
-//this one is the /signin route, firebase signInWithEmailAndPassword for people who already registered
-function EmailPasswordSignIn(): JSX.Element {
-    const navigate = useNavigate()
-    const [email, setEmail] = useState("")
-    const [password, setPassword] = useState("")
-    const [error, setError] = useState<string | null>(null)
-    const [busy, setBusy] = useState(false)
-
-    async function onSubmit(e: SyntheticEvent<HTMLFormElement>): Promise<void> {
-        e.preventDefault()
-        setError(null)
-        setBusy(true)
-        try {
-        const auth = getFirebaseAuth()
-        //firebase email/password login
-        await signInWithEmailAndPassword(auth, email.trim(), password)
-        navigate("/")
-        } catch (err) {
-        setError(mapFirebaseAuthError(err))
-        } finally {
-        setBusy(false)
-        }
-    }
-
-    return (
-        <div className="w-screen h-screen flex items-center justify-center bg-gray-900">
-        <form
-            className="w-11/12 sm:w-3/4 md:w-2/4 mx-auto bg-white rounded-2xl p-5 text-black"
-            onSubmit={(e) => void onSubmit(e)}
-        >
-            <h2 className="mb-2 text-center text-3xl font-bold">Sign In</h2>
-            <div className="w-full sm:w-3/4 mx-auto">
-            {/*regular sign in inputs*/}
-            <input
-                type="email"
-                name="email"
-                autoComplete="email"
-                required
-                placeholder="Enter your email..."
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="block my-10 w-full p-3 rounded-xl bg-gray-600 focus:border-amber-500 focus:border-2 text-white"
-            />
-            <input
-                type="password"
-                name="password"
-                autoComplete="current-password"
-                required
-                placeholder="Enter your password..."
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="block mb-10 w-full p-3 rounded-xl bg-gray-600 text-white"
-            />
-            </div>
-            {error ? (
-            <p className="mb-4 text-center text-sm text-red-600" role="alert">
-                {error}
-            </p>
-            ) : null}
-            <button
-            type="submit"
-            disabled={busy}
-            className="py-5 px-2 my-5 bg-blue-900 rounded-2xl text-white font-[500] w-full sm:w-3/4 mx-auto block cursor-pointer hover:brightness-75 active:brightness-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-            {busy ? "Signing in…" : "Submit"}
-            </button>
-            <p className="text-center mb-5 text-gray-700">
-            Don't have an account?
-            <Link to="/signup" className="text-blue-900">
-                Create one
-            </Link>
-            </p>
-            <div className="separator">OR</div>
-            {/*google auth in its own component*/}
-            <GoogleSignInButton />
-        </form>
-        </div>
-    )
-}
-
-//this one is the /signup route, firebase createUserWithEmailAndPassword for brand new accounts
-function EmailPasswordSignUp(): JSX.Element {
-
-    const navigate = useNavigate()
-    const [email, setEmail] = useState("")
-    const [password, setPassword] = useState("")
-    const [error, setError] = useState<string | null>(null)
-    const [busy, setBusy] = useState(false)
-
-    async function onSubmit(e: SyntheticEvent<HTMLFormElement>): Promise<void> {
-        e.preventDefault()
-        setError(null)
-        setBusy(true)
-        try {
-        //firebase email/password registration, then the backend creates the user doc
-        await signUp(() => createUserWithEmailAndPassword(getFirebaseAuth(), email.trim(), password), undefined, {newLoginOnly: true})
-
-        navigate("/")
-        } catch (err) {
-        setError(mapFirebaseAuthError(err))
-        } finally {
-        setBusy(false)
-        }
-    }
-
-    return (
-        <div className="w-screen h-screen flex items-center justify-center bg-gray-900">
-        <form
-            className="w-11/12 sm:w-3/4 md:w-2/4 mx-auto bg-white rounded-2xl p-5 text-black"
-            onSubmit={(e) => void onSubmit(e)}
-        >
-            <h2 className="mb-2 text-center text-3xl font-bold">Sign Up</h2>
-            <p className="mb-2 text-center text-xs text-gray-600">
-            Password must be at least 6 characters (Firebase default).
-            </p>
-            <div className="w-full sm:w-3/4 mx-auto">
-            {/*sign up inputs*/}
-            <input
-                type="email"
-                name="email"
-                autoComplete="email"
-                required
-                placeholder="Enter your email..."
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="block my-10 w-full p-3 rounded-xl bg-gray-600 focus:border-amber-500 focus:border-2 text-white"
-            />
-            <input
-                type="password"
-                name="password"
-                autoComplete="new-password"
-                required
-                minLength={6}
-                placeholder="Choose a password (min. 6 characters)"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="block mb-10 w-full p-3 rounded-xl bg-gray-600 text-white"
-            />
-            </div>
-            {error ? (
-            <p className="mb-4 text-center text-sm text-red-600" role="alert">
-                {error}
-            </p>
-            ) : null}
-            <button
-            type="submit"
-            disabled={busy}
-            className="py-5 px-2 my-5 bg-blue-900 rounded-2xl text-white font-[500] w-full sm:w-3/4 mx-auto block cursor-pointer hover:brightness-75 active:brightness-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-            {busy ? "Creating account…" : "Submit"}
-            </button>
-            <p className="text-center mb-5 text-gray-700">
-            Have an account?{" "}
-            <Link to="/signin" className="text-blue-900">
-                Sign in
-            </Link>
-            </p>
-            <div className="separator">OR</div>
-            <GoogleSignInButton />
-            <p className="text-center mt-5 text-gray-700">
-            Are you a BESA?{" "}
-            <Link to="/signup-besa" className="text-blue-900 font-semibold">
-                Sign Up as BESA
-            </Link>
-            </p>
-        </form>
-        </div>
     )
 }

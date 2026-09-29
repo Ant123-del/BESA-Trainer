@@ -1,29 +1,23 @@
-import { useEffect, useState, type SyntheticEvent, type JSX } from "react"
-import { createUserWithEmailAndPassword, onAuthStateChanged, type User } from "firebase/auth"
+import { useEffect, useState, type JSX } from "react"
+import { onAuthStateChanged, type User } from "firebase/auth"
 import { Link, useNavigate } from "react-router-dom"
 import { MoonLoader } from "react-spinners"
 import Header from "../Components/Header"
 import GoogleSignInButton from "../Components/GoogleSignInButton"
-import { mapFirebaseAuthError } from "../Tools/authErrors"
 import { getFirebaseAuth } from "../Tools/firebase"
-import { isSignupInProgress, signUp } from "../Tools/signup"
+import { isSignupInProgress } from "../Tools/signup"
 import { getBesaRoster, type RosterEntry } from "../Tools/Fetch"
 
 //the alternate signup area for BESA members - reachable from the regular /signup page. Loads the
 //roster of not-yet-claimed BESA names from besa-api (which itself cross-references besa-app's roster
-//against who's already claimed a name here), lets the signer pick theirs, then either creates an
-//email/password account or hands the pick off to GoogleSignInButton.
+//against who's already claimed a name here), lets the signer pick theirs, then hands the pick off to
+//GoogleSignInButton - Google is the only way to create an account.
 export default function BesaSignUp(): JSX.Element {
     const navigate = useNavigate()
     const [roster, setRoster] = useState<RosterEntry[] | null>(null)
     const [rosterError, setRosterError] = useState(false)
     const [selectedName, setSelectedName] = useState("")
     const [studentId, setStudentId] = useState("")
-
-    const [email, setEmail] = useState("")
-    const [password, setPassword] = useState("")
-    const [error, setError] = useState<string | null>(null)
-    const [busy, setBusy] = useState(false)
 
     useEffect(() => {
         const auth = getFirebaseAuth()
@@ -47,38 +41,11 @@ export default function BesaSignUp(): JSX.Element {
 
     const selected = roster?.find(r => r.name === selectedName) || null
 
-    async function onSubmit(e: SyntheticEvent<HTMLFormElement>): Promise<void> {
-        e.preventDefault()
-        if (!selected) {
-            setError("Please select your name from the list first.")
-            return
-        }
-        if (!studentId.trim()) {
-            setError("Please enter your school id.")
-            return
-        }
-        setError(null)
-        setBusy(true)
-        try {
-            //the backend re-checks the name against the roster and sets the tier/admin flag itself
-            await signUp(() => createUserWithEmailAndPassword(getFirebaseAuth(), email.trim(), password),
-                {besaName: selected.name, studentId: studentId.trim()}, {newLoginOnly: true})
-            navigate("/")
-        } catch (err) {
-            setError(mapFirebaseAuthError(err))
-        } finally {
-            setBusy(false)
-        }
-    }
-
     return (
         <>
         <Header/>
         <div className="w-screen min-h-screen flex items-center justify-center bg-gray-900 py-10">
-            <form
-                className="w-11/12 sm:w-3/4 md:w-2/4 mx-auto bg-white rounded-2xl p-5 text-black"
-                onSubmit={(e) => void onSubmit(e)}
-            >
+            <div className="w-11/12 sm:w-3/4 md:w-2/4 mx-auto bg-white rounded-2xl p-5 text-black">
                 <h2 className="mb-2 text-center text-3xl font-bold">Sign Up as BESA</h2>
                 <p className="mb-5 text-center text-xs text-gray-600">
                     Pick your name from the BESA roster below to link your account to your BESA info.
@@ -124,47 +91,7 @@ export default function BesaSignUp(): JSX.Element {
                         className="block my-5 w-full p-3 rounded-xl bg-gray-600 focus:border-amber-500 focus:border-2 text-white"
                     />
 
-                    <input
-                        type="email"
-                        name="email"
-                        autoComplete="email"
-                        required
-                        placeholder="Enter your email..."
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="block my-10 w-full p-3 rounded-xl bg-gray-600 focus:border-amber-500 focus:border-2 text-white"
-                    />
-                    <input
-                        type="password"
-                        name="password"
-                        autoComplete="new-password"
-                        required
-                        minLength={6}
-                        placeholder="Choose a password (min. 6 characters)"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="block mb-10 w-full p-3 rounded-xl bg-gray-600 text-white"
-                    />
                 </div>
-                {error ? (
-                    <p className="mb-4 text-center text-sm text-red-600" role="alert">
-                        {error}
-                    </p>
-                ) : null}
-                <button
-                    type="submit"
-                    disabled={busy || !selected || !studentId.trim()}
-                    className="py-5 px-2 my-5 bg-blue-900 rounded-2xl text-white font-[500] w-full sm:w-3/4 mx-auto block cursor-pointer hover:brightness-75 active:brightness-50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                    {busy ? "Creating account…" : "Submit"}
-                </button>
-                <p className="text-center mb-5 text-gray-700">
-                    Have an account?{" "}
-                    <Link to="/signin" className="text-blue-900">
-                        Sign in
-                    </Link>
-                </p>
-                <div className="separator">OR</div>
                 {selected && studentId.trim() ?
                     <GoogleSignInButton besaSelection={{besaName: selected.name, studentId: studentId.trim()}}/>
                     :
@@ -176,7 +103,13 @@ export default function BesaSignUp(): JSX.Element {
                         Sign up as a regular user
                     </Link>
                 </p>
-            </form>
+                <p className="text-center mt-5 text-gray-700">
+                    Have an account?{" "}
+                    <Link to="/signin" className="text-blue-900">
+                        Sign in
+                    </Link>
+                </p>
+            </div>
         </div>
         </>
     )

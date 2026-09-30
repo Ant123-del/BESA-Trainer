@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { MoonLoader } from "react-spinners"
 import Header from "../Components/Header"
 import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
+import BreakCriteria from "../Components/BreakCriteria"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import {
     addActivityType, clockIn, clockOut, endBreak, getActivityTypes, getCurrentSessions,
@@ -161,6 +162,7 @@ function ClockOutPanel({sessions, onChanged}: {sessions: KioskSession[] | null, 
 
             <hr className="border-gray-700 mb-4"/>
             <h3 className="text-lg tracking-wide mb-3">Current Sessions</h3>
+            <BreakCriteria className="mb-3"/>
             {sessions === null ?
                 <div className="flex justify-center py-6"><MoonLoader color="white" size={24}/></div>
                 : sessions.length === 0 ?

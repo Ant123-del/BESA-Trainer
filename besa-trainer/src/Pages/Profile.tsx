@@ -17,6 +17,7 @@ import WeeklyHoursTable, { type OpenSession, type WeeklyHoursEntry } from "../Co
 import RootAdminLogin from "../Components/RootAdminLogin"
 import OfficeHoursTable from "../Components/OfficeHoursTable"
 import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
+import BreakCriteria from "../Components/BreakCriteria"
 
 type RawDayHours = DayHours | ApiDayHours
 
@@ -224,7 +225,8 @@ export default function Profile(): JSX.Element {
                         {isRoot &&
                             <section className="bg-gray-800 rounded-2xl p-6">
                                 <h2 className="text-2xl tracking-wide mb-4">Everyone's Hours (This Week)</h2>
-                                <OfficeTimeDisclaimer className="mb-4"/>
+                                <OfficeTimeDisclaimer className="mb-2"/>
+                                <BreakCriteria className="mb-4"/>
                                 {allHours === null ?
                                     <div className="flex justify-center py-10"><MoonLoader color="white" size={24}/></div>
                                     : allHours.length === 0 ?
@@ -250,7 +252,8 @@ export default function Profile(): JSX.Element {
                         {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&
                             <section className="bg-gray-800 rounded-2xl p-6">
                                 <h2 className="text-2xl tracking-wide mb-4">My Hours (This Week)</h2>
-                                <OfficeTimeDisclaimer className="mb-4"/>
+                                <OfficeTimeDisclaimer className="mb-2"/>
+                                <BreakCriteria className="mb-4"/>
                                 <HoursWithOfficeHours officeHours={ownOfficeHours}>
                                     <WeeklyHoursTable entries={toWeeklyHoursEntries(ownHours ?? userData.biWeeklyHours ?? [])}
                                         officeHours={ownOfficeHours}

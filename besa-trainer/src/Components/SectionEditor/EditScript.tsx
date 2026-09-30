@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { Fill, Floor, Marker, Script, SuccessResponse } from "../../Tools/types";
 import { doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 import { db } from "../../Tools/firestore";
-import { CreateScript, getScript } from "../../Tools/Fetch";
+import { CreateScript, getScript, reconcileProgress } from "../../Tools/Fetch";
 import { getStorage, ref, uploadBytes } from "firebase/storage";
 import { getVtt, type Line, BLANK_PLACEHOLDER, locateBlankRanges } from "../../Tools/ScriptDecoder";
 import { Loading } from "./Edit";
@@ -65,12 +65,73 @@ function getFillSection(sentenceStart: number, markers: Marker[]): Marker | unde
     return [...markers].sort((a, b) => a.markTime - b.markTime).find(m => m.markTime > sentenceStart)
 }
 
-export default function EditScript ({selected} : {selected:Floor}) {
+//a "<Section Name>" typed on its own line in the script is shorthand for adding a section marker right there -
+//it's resolved on save (see resolveSectionTags) and then stripped back out of the script.
+const SECTION_TAG = /^[ \t]*<([^<>/\n][^<>\n]*)>[ \t]*$/gm
+
+type SectionTag = {name: string, lineStart: number, lineEnd: number}
+
+function findSectionTags(text: string): SectionTag[] {
+    const tags: SectionTag[] = []
+    for (const match of text.matchAll(SECTION_TAG)) {
+        const name = match[1].trim()
+        if (!name) continue
+        const lineStart = match.index!
+        let lineEnd = lineStart + match[0].length
+        if (text[lineEnd] === "\n") lineEnd += 1 //take the tag's own line break with it
+        tags.push({name, lineStart, lineEnd})
+    }
+    return tags
+}
+
+//turns every "<Section Name>" line into a new marker and removes those lines from the script. A marker sits at
+//the end of the last script line above its tag, so its "New Section" divider lands exactly where the tag was
+//typed (same placement the dividers already use). Returns errors instead if any tag can't be placed.
+function resolveSectionTags(text: string, markers: Marker[]): {stripped: string, newMarkers: Marker[], errors: string[]} {
+    const tags = findSectionTags(text)
+    let stripped = ""
+    let cursor = 0
+    const tagOffsets: {name: string, offset: number}[] = []
+    for (const tag of tags) {
+        stripped += text.slice(cursor, tag.lineStart)
+        tagOffsets.push({name: tag.name, offset: stripped.length})
+        cursor = tag.lineEnd
+    }
+    stripped += text.slice(cursor)
+
+    const located = locateLines(stripped, getVtt(stripped))
+    const newMarkers: Marker[] = []
+    const errors: string[] = []
+    for (const {name, offset} of tagOffsets) {
+        const above = located.filter(l => l.end <= offset)
+        if (above.length === 0) {
+            errors.push(`<${name}> needs at least one line of script above it.`)
+            continue
+        }
+        const markTime = above[above.length - 1].line.end
+        const sameName = [...markers, ...newMarkers].find(m => m.markerName === name)
+        const sameSpot = [...markers, ...newMarkers].find(m => m.markTime === markTime)
+        if (sameName && sameName.markTime === markTime) {
+            continue //already added (e.g. a save that got partway before) - nothing to do
+        }
+        if (sameName) {
+            errors.push(`A section named "${name}" already exists.`)
+        } else if (sameSpot) {
+            errors.push(`<${name}> is in the same spot as section "${sameSpot.markerName}".`)
+        } else {
+            newMarkers.push({markerName: name, markTime})
+        }
+    }
+    return {stripped, newMarkers, errors}
+}
+
+export default function EditScript ({selected, setFloor} : {selected: Floor, setFloor: Dispatch<SetStateAction<Floor | null>>}) {
     const [script, setScript] = useState<Script | null>(null)
     const [initialScript, setInitialScript] = useState("")
     const [textArea, setTextArea] = useState("")
     const [aiLoading, setAILoading] = useState(false)
     const [changeLoading, setChangeLoading] = useState(false)
+    const [sectionTagErrors, setSectionTagErrors] = useState<string[]>([])
 
     //fill (highlighter) editor mode
     const [fill, setFill] = useState<Fill | null>(null)
@@ -173,13 +234,32 @@ export default function EditScript ({selected} : {selected:Floor}) {
     //false if no change has been made
 
     async function handleChanges() {
+        //any "<Section Name>" lines become real sections first - if one can't be placed, nothing is saved
+        //so the tags stay in the editor to fix
+        const {stripped, newMarkers, errors} = resolveSectionTags(textArea, selected.markers)
+        setSectionTagErrors(errors)
+        if (errors.length > 0) {
+            return
+        }
+
         setChangeLoading(true)
         try {
+            if (newMarkers.length > 0) {
+                //markers before the script, so a failed upload can simply be retried - already-added tags are skipped
+                const updatedMarkers = [...selected.markers, ...newMarkers]
+                const floorRef = doc(db, "training_data", "floors", selected.floorCode, selected.id)
+                await updateDoc(floorRef, {markers: updatedMarkers})
+                setFloor(prev => prev ? {...prev, markers: updatedMarkers} : prev)
+                //same as adding a marker in the video editor - keep everyone's progress lined up with the markers
+                reconcileProgress(selected.id, updatedMarkers.map(m => m.markTime))
+            }
+
             const storage = getStorage()
             const scriptRef = ref(storage, "scripts/" + script?.id)
-            const scriptBlob = new Blob([textArea], {type: "text/vtt"})
+            const scriptBlob = new Blob([stripped], {type: "text/vtt"})
             await uploadBytes(scriptRef, scriptBlob)
-            setInitialScript(textArea)
+            setTextArea(stripped)
+            setInitialScript(stripped)
         } catch (e) {
             console.error(e)
         } finally {
@@ -338,6 +418,7 @@ export default function EditScript ({selected} : {selected:Floor}) {
     }
 
     const changed = initialScript == textArea
+    const pendingSectionTags = findSectionTags(textArea)
 
     return (
         <div className="w-5/6 mx-auto">
@@ -403,6 +484,16 @@ export default function EditScript ({selected} : {selected:Floor}) {
                         ))}
                     </div>
                 </div>
+                <p className="text-sm text-gray-200 mt-2">
+                    Tip: to add a section, type <span className="font-mono text-amber-300">&lt;Section Name&gt;</span> on its own line
+                    right after the section's last line - it becomes a section marker there when you save.
+                </p>
+                {pendingSectionTags.length > 0 &&
+                    <p className="text-sm text-amber-300 mt-1">
+                        New section{pendingSectionTags.length > 1 ? "s" : ""} to add on save: {pendingSectionTags.map(t => t.name).join(", ")}
+                    </p>
+                }
+                {sectionTagErrors.map((err, i) => <p key={i} className="text-sm text-red-300 mt-1">{err}</p>)}
                 <button className={"p-2 w-full bg-blue-800 mt-2 rounded-full hover:bg-blue-900" + (changed ? " brightness-50" : "")}
                     disabled={changed}
                     onClick={handleChanges}

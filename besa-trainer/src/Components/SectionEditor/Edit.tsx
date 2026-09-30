@@ -374,7 +374,7 @@ function ManageVideo({otherVideos, setUploaded, setOtherVideos}: {otherVideos:Fl
                     
                     {selected && <VideoEditor floor={selected} setFloor={(setSelected)}/>}
                     {/* This is the section where script editing will be held */}
-                    <EditScript selected={selected}/>
+                    <EditScript selected={selected} setFloor={setSelected}/>
                 </div>
 
             </div>) : (<div>

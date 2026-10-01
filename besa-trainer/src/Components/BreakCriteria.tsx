@@ -10,8 +10,15 @@ export default function BreakCriteria({className = ""}: {className?: string}): J
             <ul className="list-disc pl-4 flex flex-col gap-0.5">
                 <li>
                     <span className="font-semibold">What counts as a break:</span> any time spent on something not
-                    BESA-related - including vibe coding and being on your phone. Going to the bathroom does not count
-                    as a break.
+                    BESA-related, such as being on your phone. Going to the bathroom does not count as a break.
+                </li>
+                <li>
+                    <span className="font-semibold">Vibe coding by itself is not a break.</span> But if you start
+                    vibe coding and then look at your phone while you wait, that time counts as a break.
+                </li>
+                <li>
+                    <span className="font-semibold">Breaks may not be allowed at certain times</span> - such as
+                    during tours or Baskin events - unless authorized.
                 </li>
                 <li>
                     <span className="font-semibold">Breaks count toward your hours</span> - break time is included in

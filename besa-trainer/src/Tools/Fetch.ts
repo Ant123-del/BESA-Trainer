@@ -245,7 +245,8 @@ export async function clockIn(studentId: string, activities: string[]): Promise<
 }
 
 //root only - closes the besa/besaLead account's session with this studentId and records the hours.
-export async function clockOut(studentId: string): Promise<{success: boolean, besaName?: string, hoursThisSession?: number, detail?: string} | void> {
+//missedTour: their tour didn't happen - the backend credits at least half an hour (BESAs only, not leads)
+export async function clockOut(studentId: string, missedTour = false): Promise<{success: boolean, besaName?: string, hoursThisSession?: number, detail?: string} | void> {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -260,7 +261,7 @@ export async function clockOut(studentId: string): Promise<{success: boolean, be
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${idToken}`
             },
-            body: JSON.stringify({studentId})
+            body: JSON.stringify({studentId, missedTour})
         })
         const data = await response.json() as {success: boolean, besaName?: string, hoursThisSession?: number, detail?: string}
         if (!response.ok) {
@@ -360,7 +361,7 @@ export type ApiDayHours = {
     activities: string[]
     autoClockedOut?: boolean
     editedByAdmin?: boolean
-    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number}[]
+    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, missedTour?: boolean}[]
 }
 
 //a member who's clocked in right now and hasn't clocked out yet

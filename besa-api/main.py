@@ -362,11 +362,14 @@ def _find_besa_by_student_id(db, student_id: str):
 #(or creates) the entry for checked_in_at's calendar day. Shared by manual clock-out and auto-clockout.
 #Each day also keeps its individual sessions (arrive/leave time + activities) so the hours table can show
 #when someone was actually there - entries written before sessions existed just have none.
-def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0):
+def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, missed_tour: bool = False):
     elapsed_hours = max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5)
+    if missed_tour:
+        elapsed_hours = max(elapsed_hours, MISSED_TOUR_MIN_HOURS)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
     current_week_start = _week_start(now)
-    session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out, "breakSeconds": break_seconds}
+    session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out,
+               "breakSeconds": break_seconds, "missedTour": missed_tour}
 
     pruned = [e for e in existing if e.get("date") and e["date"].astimezone(PACIFIC) >= current_week_start]
 
@@ -395,6 +398,10 @@ def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: d
     return new_hours, elapsed_hours
 
 
+#a BESA (not BESA Lead) whose tour didn't happen is clocked out with at least this much credit for the visit
+MISSED_TOUR_MIN_HOURS = 0.5
+
+
 def _serialize_hours_entry(e: dict) -> dict:
     return {
         "date": e["date"].isoformat(),
@@ -409,6 +416,7 @@ def _serialize_hours_entry(e: dict) -> dict:
                 "activities": s.get("activities") or [],
                 "autoClockedOut": bool(s.get("autoClockedOut")),
                 "breakSeconds": s.get("breakSeconds") or 0,
+                "missedTour": bool(s.get("missedTour")),
             }
             for s in (e.get("sessions") or []) if s.get("clockIn") and s.get("clockOut")
         ],
@@ -611,6 +619,7 @@ def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root
 
 class ClockOutRequest(BaseModel):
     studentId: str
+    missedTour: bool = False  # their tour didn't happen - credit at least MISSED_TOUR_MIN_HOURS (BESAs only)
 
 
 @app.post("/clock-out")
@@ -623,12 +632,14 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
     last_checked_in = data.get("lastCheckedIn")
     if not last_checked_in:
         raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't currently clocked in.")
+    if request_data.missedTour and data.get("accountType") != "besa":
+        raise HTTPException(status_code=403, detail="Missed tour credit is only for BESAs, not BESA Leads.")
 
     now = datetime.now(PACIFIC)
     checked_in_at = _to_pacific(last_checked_in)
     activities = data.get("lastCheckedInActivities") or []
     new_hours, elapsed_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now, activities, now,
-                                                  break_seconds=_visit_break_seconds(data, now))
+                                                  break_seconds=_visit_break_seconds(data, now), missed_tour=request_data.missedTour)
 
     target_ref.update({
         "biWeeklyHours": new_hours,

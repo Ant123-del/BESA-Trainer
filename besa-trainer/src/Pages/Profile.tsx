@@ -40,6 +40,7 @@ function toWeeklyHoursEntries(entries: RawDayHours[]): WeeklyHoursEntry[] {
             activities: s.activities || [],
             autoClockedOut: s.autoClockedOut,
             breakSeconds: s.breakSeconds,
+            missedTour: s.missedTour,
         })),
     }))
 }

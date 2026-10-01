@@ -2,12 +2,15 @@ import type { JSX } from "react"
 
 //what counts as a break and how the daily allowance works - shown where breaks are taken (the kiosk's
 //Current Sessions) and where they're reported (the hours tables). Keep the allowance wording in sync with
-//the backend's _break_allowance_minutes.
+//the backend's _break_allowance_minutes. Collapsed by default so it doesn't crowd the kiosk/hours views.
 export default function BreakCriteria({className = ""}: {className?: string}): JSX.Element {
     return (
-        <div className={"text-xs text-sky-200/90 bg-sky-900/30 border border-sky-700/50 rounded-lg p-2 px-3 " + className}>
-            <p className="font-semibold mb-1">How breaks work</p>
-            <ul className="list-disc pl-4 flex flex-col gap-0.5">
+        <details className={"group text-xs text-sky-200/90 bg-sky-900/30 border border-sky-700/50 rounded-lg p-2 px-3 " + className}>
+            <summary className="font-semibold cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden flex items-center gap-1.5">
+                <span className="inline-block transition-transform group-open:rotate-90">▶</span>
+                How breaks work
+            </summary>
+            <ul className="list-disc pl-4 flex flex-col gap-0.5 mt-1.5">
                 <li>
                     <span className="font-semibold">What counts as a break:</span> any time spent on something not
                     BESA-related, such as being on your phone. Going to the bathroom does not count as a break.
@@ -19,6 +22,10 @@ export default function BreakCriteria({className = ""}: {className?: string}): J
                 <li>
                     <span className="font-semibold">Breaks may not be allowed at certain times</span> - such as
                     during tours or Baskin events - unless authorized.
+                </li>
+                <li>
+                    <span className="font-semibold">Out of break time?</span> If you've used up your break time and
+                    still need to attend to something, clock out of the system.
                 </li>
                 <li>
                     <span className="font-semibold">Breaks count toward your hours</span> - break time is included in
@@ -34,6 +41,6 @@ export default function BreakCriteria({className = ""}: {className?: string}): J
                     and shown as time left / today's total.
                 </li>
             </ul>
-        </div>
+        </details>
     )
 }

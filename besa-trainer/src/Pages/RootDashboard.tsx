@@ -125,13 +125,13 @@ function ClockOutPanel({sessions, onChanged}: {sessions: KioskSession[] | null, 
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState<{text: string, error: boolean} | null>(null)
 
-    async function handleSubmit() {
+    async function handleSubmit(missedTour = false) {
         if (!studentId.trim()) return
         setBusy(true)
         setMessage(null)
-        const result = await clockOut(studentId.trim())
+        const result = await clockOut(studentId.trim(), missedTour)
         if (result?.success) {
-            setMessage({text: `Clocked out ${result.besaName || ""} - ${result.hoursThisSession} hour(s) this session.`, error: false})
+            setMessage({text: `Clocked out ${result.besaName || ""}${missedTour ? " (missed tour)" : ""} - ${result.hoursThisSession} hour(s) this session.`, error: false})
             setStudentId("")
             onChanged()
         } else {
@@ -154,11 +154,22 @@ function ClockOutPanel({sessions, onChanged}: {sessions: KioskSession[] | null, 
             <button
                 onClick={() => void handleSubmit()}
                 disabled={busy || !studentId.trim()}
-                className="w-full py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 mb-6"
+                className="w-full py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
                 {busy && <MoonLoader color="white" size={16}/>}
                 Submit
             </button>
+            <button
+                onClick={() => void handleSubmit(true)}
+                disabled={busy || !studentId.trim()}
+                className="w-full py-3 rounded-full bg-amber-600 hover:bg-amber-700 text-black font-semibold disabled:opacity-40 disabled:cursor-not-allowed mt-3"
+            >
+                Missed Tour
+            </button>
+            <p className="text-xs text-gray-400 text-center mt-2 mb-6">
+                Missed Tour: for BESAs (not BESA Leads) whose tour didn't happen. Clocks them out and credits at least
+                half an hour for this visit, no matter how long they were here.
+            </p>
 
             <hr className="border-gray-700 mb-4"/>
             <h3 className="text-lg tracking-wide mb-3">Current Sessions</h3>

@@ -37,7 +37,7 @@ export type HoursSession = {
     activities: string[]
     autoClockedOut?: boolean
     breakSeconds?: number // break time taken during this visit
-    missedTour?: boolean // clocked out via Missed Tour - credited at least half an hour
+    canceledTour?: boolean // logged out via Canceled Tour - the whole day was set to 30 minutes
 }
 
 //will be used to keep track of personalized vll scripts

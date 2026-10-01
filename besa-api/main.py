@@ -362,14 +362,12 @@ def _find_besa_by_student_id(db, student_id: str):
 #(or creates) the entry for checked_in_at's calendar day. Shared by manual clock-out and auto-clockout.
 #Each day also keeps its individual sessions (arrive/leave time + activities) so the hours table can show
 #when someone was actually there - entries written before sessions existed just have none.
-def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, missed_tour: bool = False):
+def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False):
     elapsed_hours = max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5)
-    if missed_tour:
-        elapsed_hours = max(elapsed_hours, MISSED_TOUR_MIN_HOURS)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
     current_week_start = _week_start(now)
     session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out,
-               "breakSeconds": break_seconds, "missedTour": missed_tour}
+               "breakSeconds": break_seconds, "canceledTour": canceled_tour}
 
     pruned = [e for e in existing if e.get("date") and e["date"].astimezone(PACIFIC) >= current_week_start]
 
@@ -395,11 +393,20 @@ def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: d
             "autoClockedOut": auto_clocked_out,
             "sessions": [session],
         })
+    if canceled_tour:
+        #the whole day becomes exactly CANCELED_TOUR_DAY_HOURS, however long they'd been here
+        new_hours = [
+            {**e, "hours": CANCELED_TOUR_DAY_HOURS, "canceledTour": True}
+            if e["date"].astimezone(PACIFIC).date() == entry_day.date() else e
+            for e in new_hours
+        ]
+        elapsed_hours = CANCELED_TOUR_DAY_HOURS
     return new_hours, elapsed_hours
 
 
-#a BESA (not BESA Lead) whose tour didn't happen is clocked out with at least this much credit for the visit
-MISSED_TOUR_MIN_HOURS = 0.5
+#a BESA (not BESA Lead) whose tour was canceled gets logged out with the whole day set to exactly this much
+CANCELED_TOUR_DAY_HOURS = 0.5
+TOUR_ACTIVITY = "Tours"
 
 
 def _serialize_hours_entry(e: dict) -> dict:
@@ -409,6 +416,7 @@ def _serialize_hours_entry(e: dict) -> dict:
         "activities": e.get("activities") or [],
         "autoClockedOut": bool(e.get("autoClockedOut")),
         "editedByAdmin": bool(e.get("editedByAdmin")),
+        "canceledTour": bool(e.get("canceledTour")),
         "sessions": [
             {
                 "clockIn": s["clockIn"].isoformat(),
@@ -416,7 +424,7 @@ def _serialize_hours_entry(e: dict) -> dict:
                 "activities": s.get("activities") or [],
                 "autoClockedOut": bool(s.get("autoClockedOut")),
                 "breakSeconds": s.get("breakSeconds") or 0,
-                "missedTour": bool(s.get("missedTour")),
+                "canceledTour": bool(s.get("canceledTour")),
             }
             for s in (e.get("sessions") or []) if s.get("clockIn") and s.get("clockOut")
         ],
@@ -619,7 +627,6 @@ def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root
 
 class ClockOutRequest(BaseModel):
     studentId: str
-    missedTour: bool = False  # their tour didn't happen - credit at least MISSED_TOUR_MIN_HOURS (BESAs only)
 
 
 @app.post("/clock-out")
@@ -632,14 +639,12 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
     last_checked_in = data.get("lastCheckedIn")
     if not last_checked_in:
         raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't currently clocked in.")
-    if request_data.missedTour and data.get("accountType") != "besa":
-        raise HTTPException(status_code=403, detail="Missed tour credit is only for BESAs, not BESA Leads.")
 
     now = datetime.now(PACIFIC)
     checked_in_at = _to_pacific(last_checked_in)
     activities = data.get("lastCheckedInActivities") or []
     new_hours, elapsed_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now, activities, now,
-                                                  break_seconds=_visit_break_seconds(data, now), missed_tour=request_data.missedTour)
+                                                  break_seconds=_visit_break_seconds(data, now))
 
     target_ref.update({
         "biWeeklyHours": new_hours,
@@ -683,6 +688,7 @@ def currentSessions(root_user: dict = Depends(require_root)):
             "activities": data.get("lastCheckedInActivities") or [],
             "clockedInAt": data["lastCheckedIn"].isoformat(),
             "break": _break_state(data, datetime.now(PACIFIC)),
+            "canCancelTour": _can_cancel_tour(data),
         })
     return {"success": True, "sessions": sessions}
 
@@ -697,6 +703,33 @@ def _clocked_in_besa(db, target_uid: str):
     if not data.get("lastCheckedIn"):
         raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't currently clocked in.")
     return target_ref, data
+
+
+#Canceled Tour is only for regular BESAs (not BESA Leads) who came in only for a tour
+def _can_cancel_tour(data: dict) -> bool:
+    activities = data.get("lastCheckedInActivities") or []
+    return data.get("accountType") == "besa" and len(activities) > 0 and all(a == TOUR_ACTIVITY for a in activities)
+
+
+class CanceledTourRequest(BaseModel):
+    targetUid: str
+
+
+#root only - their tour was canceled: log them out for the day and set the day's hours to exactly 30 minutes
+@app.post("/canceled-tour")
+def canceledTour(request_data: CanceledTourRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _clocked_in_besa(db, request_data.targetUid)
+    if not _can_cancel_tour(data):
+        raise HTTPException(status_code=403, detail="Canceled Tour is only for BESAs (not BESA Leads) who clocked in only for Tours.")
+
+    now = datetime.now(PACIFIC)
+    checked_in_at = _to_pacific(data["lastCheckedIn"])
+    new_hours, day_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now,
+                                              data.get("lastCheckedInActivities") or [], now,
+                                              break_seconds=_visit_break_seconds(data, now), canceled_tour=True)
+    target_ref.update({"biWeeklyHours": new_hours, "lastCheckedIn": None, "lastCheckedInActivities": [], **BREAK_FIELDS_RESET})
+    return {"success": True, "besaName": data.get("besaName"), "dayHours": day_hours}
 
 
 class StartBreakRequest(BaseModel):

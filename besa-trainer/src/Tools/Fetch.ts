@@ -245,8 +245,7 @@ export async function clockIn(studentId: string, activities: string[]): Promise<
 }
 
 //root only - closes the besa/besaLead account's session with this studentId and records the hours.
-//missedTour: their tour didn't happen - the backend credits at least half an hour (BESAs only, not leads)
-export async function clockOut(studentId: string, missedTour = false): Promise<{success: boolean, besaName?: string, hoursThisSession?: number, detail?: string} | void> {
+export async function clockOut(studentId: string): Promise<{success: boolean, besaName?: string, hoursThisSession?: number, detail?: string} | void> {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -261,7 +260,7 @@ export async function clockOut(studentId: string, missedTour = false): Promise<{
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${idToken}`
             },
-            body: JSON.stringify({studentId, missedTour})
+            body: JSON.stringify({studentId})
         })
         const data = await response.json() as {success: boolean, besaName?: string, hoursThisSession?: number, detail?: string}
         if (!response.ok) {
@@ -291,6 +290,12 @@ export type KioskSession = {
     activities: string[]
     clockedInAt: string
     break: BreakState
+    canCancelTour: boolean // regular BESA who clocked in only for Tours - gets the Canceled Tour option
+}
+
+//root only - their tour was canceled: logs them out for the day and sets the day's hours to 30 minutes
+export async function canceledTour(targetUid: string): Promise<{success: boolean, detail?: string}> {
+    return kioskPost("canceled-tour", {targetUid})
 }
 
 //root only - starts a break for a clocked-in member: "short" = 5 minutes (or whatever's left, if less),
@@ -361,7 +366,8 @@ export type ApiDayHours = {
     activities: string[]
     autoClockedOut?: boolean
     editedByAdmin?: boolean
-    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, missedTour?: boolean}[]
+    canceledTour?: boolean
+    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean}[]
 }
 
 //a member who's clocked in right now and hasn't clocked out yet

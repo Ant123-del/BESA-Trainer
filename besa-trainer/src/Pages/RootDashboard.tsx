@@ -4,8 +4,11 @@ import Header from "../Components/Header"
 import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
 import BreakCriteria from "../Components/BreakCriteria"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
+import { Loading } from "../Components/SectionEditor/Edit"
+
+const CANCELED_TOUR_WARNING = "This logs them out for the rest of the day and sets today's hours to 30 minutes - even if they've already been in the office longer."
 import {
-    addActivityType, clockIn, clockOut, endBreak, getActivityTypes, getCurrentSessions,
+    addActivityType, canceledTour, clockIn, clockOut, endBreak, getActivityTypes, getCurrentSessions,
     removeActivityType, startBreak, type KioskSession
 } from "../Tools/Fetch"
 
@@ -125,13 +128,13 @@ function ClockOutPanel({sessions, onChanged}: {sessions: KioskSession[] | null, 
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState<{text: string, error: boolean} | null>(null)
 
-    async function handleSubmit(missedTour = false) {
+    async function handleSubmit() {
         if (!studentId.trim()) return
         setBusy(true)
         setMessage(null)
-        const result = await clockOut(studentId.trim(), missedTour)
+        const result = await clockOut(studentId.trim())
         if (result?.success) {
-            setMessage({text: `Clocked out ${result.besaName || ""}${missedTour ? " (missed tour)" : ""} - ${result.hoursThisSession} hour(s) this session.`, error: false})
+            setMessage({text: `Clocked out ${result.besaName || ""} - ${result.hoursThisSession} hour(s) this session.`, error: false})
             setStudentId("")
             onChanged()
         } else {
@@ -154,22 +157,11 @@ function ClockOutPanel({sessions, onChanged}: {sessions: KioskSession[] | null, 
             <button
                 onClick={() => void handleSubmit()}
                 disabled={busy || !studentId.trim()}
-                className="w-full py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                className="w-full py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 mb-6"
             >
                 {busy && <MoonLoader color="white" size={16}/>}
                 Submit
             </button>
-            <button
-                onClick={() => void handleSubmit(true)}
-                disabled={busy || !studentId.trim()}
-                className="w-full py-3 rounded-full bg-amber-600 hover:bg-amber-700 text-black font-semibold disabled:opacity-40 disabled:cursor-not-allowed mt-3"
-            >
-                Missed Tour
-            </button>
-            <p className="text-xs text-gray-400 text-center mt-2 mb-6">
-                Missed Tour: for BESAs (not BESA Leads) whose tour didn't happen. Clocks them out and credits at least
-                half an hour for this visit, no matter how long they were here.
-            </p>
 
             <hr className="border-gray-700 mb-4"/>
             <h3 className="text-lg tracking-wide mb-3">Current Sessions</h3>
@@ -269,6 +261,7 @@ function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () 
     const brk = session.break
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState("")
+    const [confirmCancelTour, setConfirmCancelTour] = useState(false)
     const {onBreak, breakLeft, breakRanOut, remaining, resetNow} = useLiveBreak(brk)!
 
     //the break ran out on its own - pull fresh state so the buttons come back
@@ -332,7 +325,39 @@ function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () 
                     </div>
                 }
             </div>
+            {session.canCancelTour &&
+                <div className="flex items-center gap-2 flex-wrap border-t border-gray-600 pt-2">
+                    <button onClick={() => setConfirmCancelTour(true)} disabled={busy}
+                        className="text-xs px-3 py-1.5 rounded-full bg-red-800 hover:bg-red-900 disabled:opacity-40 whitespace-nowrap">
+                        Canceled Tour
+                    </button>
+                    <span className="text-xs text-yellow-300/90 flex-1 min-w-[12rem]">⚠ {CANCELED_TOUR_WARNING}</span>
+                </div>
+            }
             {error && <p className="text-red-400 text-xs">{error}</p>}
+
+            {confirmCancelTour &&
+                <Loading onClose={busy ? undefined : () => setConfirmCancelTour(false)}>
+                    <div className="bg-gray-900 w-11/12 sm:w-2/3 md:w-1/3 max-w-md p-5 rounded-2xl text-center">
+                        <h3 className="text-2xl mb-2 text-red-500">Canceled Tour?</h3>
+                        <p className="text-sm text-gray-300 mb-1">
+                            {session.besaName || "This BESA"} will be logged out for the day.
+                        </p>
+                        <p className="text-sm text-yellow-300/90">⚠ {CANCELED_TOUR_WARNING}</p>
+                        <button
+                            onClick={() => void run(() => canceledTour(session.uid)).then(() => setConfirmCancelTour(false))}
+                            disabled={busy}
+                            className="rounded-full w-full mt-4 p-2 bg-red-800 hover:bg-red-900 disabled:opacity-40 flex items-center justify-center gap-2">
+                            {busy && <MoonLoader color="white" size={16}/>}
+                            Yes, log them out with 30 minutes
+                        </button>
+                        <button onClick={() => setConfirmCancelTour(false)} disabled={busy}
+                            className="rounded-full w-full mt-3 border-solid border-2 border-gray-400 hover:bg-gray-800 p-2 disabled:opacity-40">
+                            Cancel
+                        </button>
+                    </div>
+                </Loading>
+            }
         </div>
     )
 }

@@ -8,7 +8,7 @@ export type WeeklyHoursSession = {
     activities: string[]
     autoClockedOut?: boolean
     breakSeconds?: number
-    missedTour?: boolean
+    canceledTour?: boolean
 }
 
 export type WeeklyHoursEntry = {
@@ -98,7 +98,7 @@ export default function WeeklyHoursTable({entries, openSession, officeHours, onE
                     </div>
                     <div className="p-2 px-3 text-gray-400 flex flex-col gap-1 min-w-0">
                         {d.sessions.map((s, j) => (
-                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} missedTour={s.missedTour}/>
+                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} canceledTour={s.canceledTour}/>
                         ))}
                         {d.open && <SessionLine clockIn={d.open.clockIn} activities={d.open.activities}/>}
                         {d.sessions.length === 0 && !d.open &&
@@ -136,8 +136,8 @@ export default function WeeklyHoursTable({entries, openSession, officeHours, onE
 }
 
 //"9:02 AM - 11:30 AM  Tours, Other" - clockOut omitted means they're still clocked in
-function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, missedTour}: {
-    clockIn: Date, clockOut?: Date, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, missedTour?: boolean
+function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, canceledTour}: {
+    clockIn: Date, clockOut?: Date, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean
 }) {
     return (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -147,8 +147,8 @@ function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSecond
             {!clockOut &&
                 <Badge label="HERE" title="Currently clocked in" className="bg-green-600 text-black"/>
             }
-            {missedTour &&
-                <Badge label="MISSED TOUR" title="Tour didn't happen - credited at least half an hour for this visit" className="bg-amber-500 text-black"/>
+            {canceledTour &&
+                <Badge label="CANCELED TOUR" title="Tour was canceled - logged out and the day was set to 30 minutes" className="bg-red-400 text-black"/>
             }
             {autoClockedOut &&
                 <Badge label="AUTO" title="Forgot to clock out - leave time is their scheduled office-hours end (or 8 PM)" className="bg-yellow-600 text-black"/>

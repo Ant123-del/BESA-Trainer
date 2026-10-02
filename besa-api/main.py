@@ -358,18 +358,18 @@ def _find_besa_by_student_id(db, student_id: str):
     return None, None
 
 
-#prunes biWeeklyHours to the current week (relative to `now`), then merges this session's hours into
+#prunes biWeeklyHours to the last HOURS_WEEKS_KEPT weeks (relative to `now`), then merges this session's hours into
 #(or creates) the entry for checked_in_at's calendar day. Shared by manual clock-out and auto-clockout.
 #Each day also keeps its individual sessions (arrive/leave time + activities) so the hours table can show
 #when someone was actually there - entries written before sessions existed just have none.
 def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False):
     elapsed_hours = max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
-    current_week_start = _week_start(now)
+    keep_from = _week_start(now) - timedelta(weeks=HOURS_WEEKS_KEPT - 1)
     session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out,
                "breakSeconds": break_seconds, "canceledTour": canceled_tour}
 
-    pruned = [e for e in existing if e.get("date") and e["date"].astimezone(PACIFIC) >= current_week_start]
+    pruned = [e for e in existing if e.get("date") and e["date"].astimezone(PACIFIC) >= keep_from]
 
     merged = False
     new_hours = []
@@ -441,65 +441,125 @@ def _open_session(data: dict):
 
 
 WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+#how many Sun-Sat weeks of hours are kept and shown (last week + this week, flipped through as a carousel)
+HOURS_WEEKS_KEPT = 2
 
 
-#a member's scheduled office hours from the BESA booking roster, Sun-Sat, as
-#[{"day": "monday", "slots": [{"start": "10:00", "end": "13:00"}, ...]}, ...] - None if their name isn't
-#in the roster cache at all (vs. every day empty, which means they just have nothing scheduled).
-def _office_hours(besa_name, roster_docs: list):
-    roster_doc = next((d for d in roster_docs if besa_name and d.get(BESA_ROSTER_NAME_FIELD) == besa_name), None)
-    if roster_doc is None:
+def _hhmm_to_minutes(value) -> int | None:
+    try:
+        h, m = str(value).split(":")
+        return int(h) * 60 + int(m)
+    except (ValueError, AttributeError):
         return None
 
-    office_hours = roster_doc.get("officeHours") or {}
-    week = []
-    for day in WEEKDAYS:
-        day_data = office_hours.get(day) or {}
-        slots = []
-        if day_data.get("available", True):
-            for slot in day_data.get("timeSlots") or []:
-                if isinstance(slot, dict) and slot.get("start") and slot.get("end"):
-                    slots.append({"start": slot["start"], "end": slot["end"]})
-        week.append({"day": day, "slots": sorted(slots, key=lambda sl: sl["start"]),
-                     "breakAllowanceMinutes": _break_allowance_minutes(_slots_hours(slots))})
-    return week
+
+def _minutes_to_hhmm(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
-def _slots_hours(slots: list) -> float:
-    total_minutes = 0
-    for slot in slots:
-        try:
-            start = datetime.strptime(slot["start"], "%H:%M")
-            end = datetime.strptime(slot["end"], "%H:%M")
-        except ValueError:
+def _clean_slots(raw_slots) -> list:
+    slots = []
+    for slot in raw_slots or []:
+        if not isinstance(slot, dict):
             continue
-        total_minutes += max(0, (end - start).total_seconds() / 60)
-    return total_minutes / 60
+        start, end = _hhmm_to_minutes(slot.get("start")), _hhmm_to_minutes(slot.get("end"))
+        if start is not None and end is not None and end > start:
+            slots.append((start, end))
+    return sorted(slots)
 
 
-#besa-app roster docs are matched to our users by name (same linkage /besa-roster uses for claiming).
-#Each roster doc's officeHours looks like {"monday": {"available": bool, "timeSlots":
-#[{"start": "HH:MM", "end": "HH:MM", "id": ...}, ...]}, ...} - picks the latest slot end on the
-#check-in's weekday that's still after the check-in time (covers someone with multiple slots that day).
-def _get_office_hours_end(besa_name, checked_in_at: datetime):
-    if not besa_name:
-        return None
+def _roster_doc_for(besa_name, roster_docs: list):
+    return next((d for d in roster_docs if besa_name and d.get(BESA_ROSTER_NAME_FIELD) == besa_name), None)
 
-    roster_doc = next((d for d in _get_roster() if d.get(BESA_ROSTER_NAME_FIELD) == besa_name), None)
+
+#one date's actual office hours on BESA Booking. Three layers, in order:
+#  officeHours        - the weekly recurring schedule ({"monday": {"available", "timeSlots"}, ...})
+#  tempAdjustments    - [{date: "YYYY-MM-DD", timeSlots, reason?}] replaces that one date's hours outright
+#  tempUnavailability - [{date, allDay, start?, end?, reason?}] removes time from that date (all of it if allDay)
+#Returns the effective slots plus what changed, so the views can say why a day differs from the usual week.
+def _office_day(roster_doc: dict, day: date_cls) -> dict:
+    key = day.isoformat()
+    weekday = WEEKDAYS[(day.weekday() + 1) % 7]
+
+    temp = next((a for a in roster_doc.get("tempAdjustments") or [] if isinstance(a, dict) and a.get("date") == key), None)
+    if temp is not None:
+        base = _clean_slots(temp.get("timeSlots"))
+    else:
+        weekly = (roster_doc.get("officeHours") or {}).get(weekday) or {}
+        base = _clean_slots(weekly.get("timeSlots")) if weekly.get("available", True) else []
+
+    slots = list(base)
+    unavailable = {}
+    for u in roster_doc.get("tempUnavailability") or []:
+        if not isinstance(u, dict) or u.get("date") != key:
+            continue
+        if u.get("allDay"):
+            u_start, u_end = 0, 24 * 60
+        else:
+            u_start, u_end = _hhmm_to_minutes(u.get("start")), _hhmm_to_minutes(u.get("end"))
+            if u_start is None or u_end is None or u_end <= u_start:
+                continue
+        #only list unavailability that actually cuts into their office hours that day (deduped - the booking
+        #site sometimes stores the same block twice, once by hand and once from the calendar)
+        if not any(u_start < e and u_end > st for st, e in base):
+            continue
+        sig = (bool(u.get("allDay")), u_start, u_end)
+        if sig in unavailable:
+            if not unavailable[sig]["reason"]:
+                unavailable[sig]["reason"] = u.get("reason") or ""  #prefer whichever copy says why
+            continue
+        unavailable[sig] = {"allDay": bool(u.get("allDay")), "start": None if u.get("allDay") else _minutes_to_hhmm(u_start),
+                            "end": None if u.get("allDay") else _minutes_to_hhmm(u_end), "reason": u.get("reason") or ""}
+        trimmed = []
+        for st, e in slots:
+            if u_end <= st or u_start >= e:
+                trimmed.append((st, e))
+                continue
+            if st < u_start:
+                trimmed.append((st, u_start))
+            if u_end < e:
+                trimmed.append((u_end, e))
+        slots = trimmed
+
+    scheduled_hours = sum(e - st for st, e in slots) / 60
+    return {
+        "date": key,
+        "day": weekday,
+        "slots": [{"start": _minutes_to_hhmm(st), "end": _minutes_to_hhmm(e)} for st, e in slots],
+        "temporary": temp is not None,
+        "temporaryReason": (temp or {}).get("reason") or "",
+        "unavailable": sorted(unavailable.values(), key=lambda u: u["start"] or ""),
+        "scheduledHours": round(scheduled_hours, 2),
+        "breakAllowanceMinutes": _break_allowance_minutes(scheduled_hours),
+    }
+
+
+#the member's effective office hours for every day shown in the hours carousel (last week + this week) -
+#None if their name isn't on the BESA Booking roster at all.
+def _office_schedule(besa_name, roster_docs: list):
+    roster_doc = _roster_doc_for(besa_name, roster_docs)
     if roster_doc is None:
         return None
+    first_day = (_week_start(datetime.now(PACIFIC)) - timedelta(weeks=HOURS_WEEKS_KEPT - 1)).date()
+    return [_office_day(roster_doc, first_day + timedelta(days=i)) for i in range(7 * HOURS_WEEKS_KEPT)]
 
-    office_hours = roster_doc.get("officeHours") or {}
-    day_name = checked_in_at.strftime("%A").lower()
-    day_slots = (office_hours.get(day_name) or {}).get("timeSlots") or []
+
+def _office_day_for(besa_name, day: datetime):
+    roster_doc = _roster_doc_for(besa_name, _get_roster())
+    return _office_day(roster_doc, day.date()) if roster_doc else None
+
+
+#latest office-hours slot end on the check-in's date that's still after the check-in time (covers someone with
+#multiple slots that day) - uses that date's effective hours, so temp hours/unavailability are respected.
+def _get_office_hours_end(besa_name, checked_in_at: datetime):
+    office_day = _office_day_for(besa_name, checked_in_at)
+    if office_day is None:
+        return None
 
     candidate_ends = []
-    for slot in day_slots:
-        try:
-            end_time = datetime.strptime(slot["end"], "%H:%M").time()
-        except (KeyError, ValueError, TypeError):
-            continue
-        end_dt = checked_in_at.replace(hour=end_time.hour, minute=end_time.minute, second=0, microsecond=0)
+    for slot in office_day["slots"]:
+        end_minutes = _hhmm_to_minutes(slot["end"])
+        end_dt = checked_in_at.replace(hour=end_minutes // 60, minute=end_minutes % 60, second=0, microsecond=0)
         if end_dt > checked_in_at:
             candidate_ends.append(end_dt)
 
@@ -525,9 +585,8 @@ def _break_allowance_minutes(scheduled_hours: float) -> int:
 
 
 def _scheduled_hours_on(besa_name, day: datetime) -> float:
-    week = _office_hours(besa_name, _get_roster()) or []
-    day_name = WEEKDAYS[(day.weekday() + 1) % 7]
-    return _slots_hours(next((d["slots"] for d in week if d["day"] == day_name), []))
+    office_day = _office_day_for(besa_name, day)
+    return office_day["scheduledHours"] if office_day else 0.0
 
 
 #break time used this visit, including however much of an in-progress break has elapsed by `now`
@@ -666,7 +725,7 @@ def checkAutoClockout(user: dict = Depends(get_current_user)):
     data = _auto_clock_out_if_needed(target_ref, doc.to_dict() or {})
     hours = [_serialize_hours_entry(e) for e in (data.get("biWeeklyHours") or []) if e.get("date")]
     return {"success": True, "biWeeklyHours": hours, "openSession": _open_session(data),
-            "officeHours": _office_hours(data.get("besaName"), _get_roster())}
+            "officeSchedule": _office_schedule(data.get("besaName"), _get_roster())}
 
 
 @app.get("/current-sessions")
@@ -775,12 +834,12 @@ def endBreak(request_data: EndBreakRequest, root_user: dict = Depends(require_ro
     return {"success": True, "besaName": data.get("besaName")}
 
 
-def _current_week_hours(data: dict) -> list:
-    current_week_start = _week_start(datetime.now(PACIFIC))
+def _shown_weeks_hours(data: dict) -> list:
+    shown_from = _week_start(datetime.now(PACIFIC)) - timedelta(weeks=HOURS_WEEKS_KEPT - 1)
     return [
         _serialize_hours_entry(e)
         for e in (data.get("biWeeklyHours") or [])
-        if e.get("date") and e["date"].astimezone(PACIFIC) >= current_week_start
+        if e.get("date") and e["date"].astimezone(PACIFIC) >= shown_from
     ]
 
 
@@ -946,8 +1005,8 @@ def allHours(root_user: dict = Depends(require_root_admin)):
         if data.get("lastCheckedIn"):
             data = _auto_clock_out_if_needed(u.reference, data)
         members.append({"uid": u.id, "besaName": data.get("besaName"), "studentId": data.get("studentId"),
-                        "hours": _current_week_hours(data), "openSession": _open_session(data),
-                        "officeHours": _office_hours(data.get("besaName"), roster_docs)})
+                        "hours": _shown_weeks_hours(data), "openSession": _open_session(data),
+                        "officeSchedule": _office_schedule(data.get("besaName"), roster_docs)})
     return {"success": True, "members": members}
 
 
@@ -971,9 +1030,9 @@ def setDayHours(request_data: SetDayHoursRequest, root_user: dict = Depends(requ
         raise HTTPException(status_code=400, detail="Invalid date.")
 
     entry_day = datetime(day.year, day.month, day.day, tzinfo=PACIFIC)
-    week_start = _week_start(datetime.now(PACIFIC))
-    if not (week_start <= entry_day < week_start + timedelta(days=7)):
-        raise HTTPException(status_code=400, detail="Only days in the current week can be edited.")
+    this_week_start = _week_start(datetime.now(PACIFIC))
+    if not (this_week_start - timedelta(weeks=HOURS_WEEKS_KEPT - 1) <= entry_day < this_week_start + timedelta(days=7)):
+        raise HTTPException(status_code=400, detail="Only days in last week or this week can be edited.")
 
     db = firestore.client()
     target_ref = db.collection("training_data").document("data_root").collection("users").document(request_data.targetUid)
@@ -1000,7 +1059,7 @@ def setDayHours(request_data: SetDayHoursRequest, root_user: dict = Depends(requ
         })
 
     target_ref.update({"biWeeklyHours": remaining})
-    return {"success": True, "hours": _current_week_hours({**data, "biWeeklyHours": remaining})}
+    return {"success": True, "hours": _shown_weeks_hours({**data, "biWeeklyHours": remaining})}
 
 
 @app.get("/activity-types")

@@ -1,6 +1,7 @@
 import type { JSX } from "react"
-import type { BreakState, OfficeHoursWeek } from "../Tools/Fetch"
+import type { BreakState, OfficeScheduleDay } from "../Tools/Fetch"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
+import { sameDay, startOfWeek, toDateKey } from "../Tools/dates"
 
 export type WeeklyHoursSession = {
     clockIn: Date
@@ -28,18 +29,6 @@ export type OpenSession = {
 }
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
-
-function startOfWeek(date: Date): Date {
-    const start = new Date(date)
-    start.setHours(0, 0, 0, 0)
-    start.setDate(start.getDate() - start.getDay())
-    return start
-}
-
-function sameDay(a: Date, b: Date): boolean {
-    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-}
 
 //always Pacific, same as the kiosk and the backend's week boundaries, whatever the viewer's own timezone
 function formatTime(date: Date): string {
@@ -50,18 +39,18 @@ function Badge({label, title, className}: {label: string, title: string, classNa
     return <span title={title} className={"text-[10px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap " + className}>{label}</span>
 }
 
-//CruzPay-styled current-week table (Date | Time & Activities | Hours + a totals row), themed for this app's
-//dark UI - always shows all 7 days of the current Sun-Sat week, even ones with no hours logged yet. Each
+//CruzPay-styled one-week table (Date | Time & Activities | Hours + a totals row), themed for this app's
+//dark UI - always shows all 7 days of the Sun-Sat week starting at weekStart (this week by default), even ones
+//with no hours logged yet. Each
 //visit that day gets its own arrive-leave line with the activities picked at clock-in; days logged before
 //visits were tracked just show their activities. Passing onEditDay adds an Edit column (root admin's
-//Profile view) - it gets the day plus whatever's logged. Passing officeHours adds each day's break status
-//({left}/{total}, the total coming from that weekday's BESA Booking office hours) up through today.
-export default function WeeklyHoursTable({entries, openSession, officeHours, onEditDay}: {
-    entries: WeeklyHoursEntry[], openSession?: OpenSession | null, officeHours?: OfficeHoursWeek | null,
-    onEditDay?: (day: WeeklyHoursEntry) => void
+//Profile view) - it gets the day plus whatever's logged. Passing schedule adds each day's break status
+//({left}/{total}, the total coming from that date's effective BESA Booking office hours) up through today.
+export default function WeeklyHoursTable({entries, openSession, schedule, onEditDay, weekStart = startOfWeek(new Date())}: {
+    entries: WeeklyHoursEntry[], openSession?: OpenSession | null, schedule?: OfficeScheduleDay[] | null,
+    onEditDay?: (day: WeeklyHoursEntry) => void, weekStart?: Date
 }): JSX.Element {
     const today = new Date()
-    const weekStart = startOfWeek(today)
     const days = Array.from({length: 7}, (_, i) => {
         const date = new Date(weekStart)
         date.setDate(date.getDate() + i)
@@ -75,7 +64,7 @@ export default function WeeklyHoursTable({entries, openSession, officeHours, onE
             sessions: [...(entry?.sessions || [])].sort((a, b) => a.clockIn.getTime() - b.clockIn.getTime()),
             open: openSession && sameDay(openSession.clockIn, date) ? openSession : null,
             upToToday: date.getTime() <= today.getTime(),
-            breakAllowanceSeconds: (officeHours?.find(o => o.day === WEEKDAYS[date.getDay()])?.breakAllowanceMinutes || 0) * 60,
+            breakAllowanceSeconds: (schedule?.find(o => o.date === toDateKey(date))?.breakAllowanceMinutes || 0) * 60,
         }
     })
     const total = days.reduce((sum, d) => sum + d.hours, 0)
@@ -104,7 +93,7 @@ export default function WeeklyHoursTable({entries, openSession, officeHours, onE
                         {d.sessions.length === 0 && !d.open &&
                             <span>{d.activities.length > 0 ? d.activities.join(", ") : "—"}</span>
                         }
-                        {officeHours && d.upToToday &&
+                        {schedule && d.upToToday &&
                             <BreakLine allowanceSeconds={d.breakAllowanceSeconds}
                                 takenSeconds={d.sessions.reduce((sum, s) => sum + (s.breakSeconds || 0), 0)}
                                 liveBreak={d.open?.break}/>

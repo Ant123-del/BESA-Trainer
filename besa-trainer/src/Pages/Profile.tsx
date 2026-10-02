@@ -8,14 +8,15 @@ import { Loading } from "../Components/SectionEditor/Edit"
 import { getFirebaseAuth } from "../Tools/firebase"
 import { db, deleteUserAccountData } from "../Tools/firestore"
 import { mapFirebaseAuthError } from "../Tools/authErrors"
+import { toDateKey } from "../Tools/dates"
 import type { User as CustomUser, DayHours } from "../Tools/types"
 import {
     changeRootAdminPasscode, checkAutoClockout, deleteRootAccount, getActivityTypes, getAllHours,
-    getRootAdminToken, rootAdminLogout, setMemberDayHours, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeHoursWeek
+    getRootAdminToken, rootAdminLogout, setMemberDayHours, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeScheduleDay
 } from "../Tools/Fetch"
-import WeeklyHoursTable, { type OpenSession, type WeeklyHoursEntry } from "../Components/WeeklyHoursTable"
+import { type OpenSession, type WeeklyHoursEntry } from "../Components/WeeklyHoursTable"
+import HoursCarousel from "../Components/HoursCarousel"
 import RootAdminLogin from "../Components/RootAdminLogin"
-import OfficeHoursTable from "../Components/OfficeHoursTable"
 import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
 import BreakCriteria from "../Components/BreakCriteria"
 
@@ -49,10 +50,6 @@ function toOpenSession(session: ApiOpenSession | null | undefined): OpenSession 
     return session ? {clockIn: new Date(session.clockIn), activities: session.activities, break: session.break} : null
 }
 
-//YYYY-MM-DD in the browser's local calendar (the kiosk runs in Pacific, same as the backend).
-function toDateKey(date: Date): string {
-    return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, "0")}-${date.getDate().toString().padStart(2, "0")}`
-}
 
 const DELETE_CONFIRM_PHRASE = "Yes I want to delete my account"
 const SESSION_EXPIRED_NOTICE = "Your admin session expired - please log in again."
@@ -81,7 +78,7 @@ export default function Profile(): JSX.Element {
     //undefined until that check answers - until then the open visit comes off the user doc directly
     const [ownOpenSession, setOwnOpenSession] = useState<OpenSession | null | undefined>(undefined)
     //their BESA booking schedule, from the same check - undefined while loading
-    const [ownOfficeHours, setOwnOfficeHours] = useState<OfficeHoursWeek | null | undefined>(undefined)
+    const [ownSchedule, setOwnSchedule] = useState<OfficeScheduleDay[] | null | undefined>(undefined)
 
     const isRoot = userData?.accountType === "root"
 
@@ -102,12 +99,12 @@ export default function Profile(): JSX.Element {
                 if (data?.accountType === "besa" || data?.accountType === "besaLead") {
                     checkAutoClockout().then(result => {
                         if (!result) {
-                            setOwnOfficeHours(null)
+                            setOwnSchedule(null)
                             return
                         }
                         setOwnHours(result.biWeeklyHours)
                         setOwnOpenSession(toOpenSession(result.openSession))
-                        setOwnOfficeHours(result.officeHours ?? null)
+                        setOwnSchedule(result.officeSchedule ?? null)
                     })
                 }
             })
@@ -225,7 +222,7 @@ export default function Profile(): JSX.Element {
 
                         {isRoot &&
                             <section className="bg-gray-800 rounded-2xl p-6">
-                                <h2 className="text-2xl tracking-wide mb-4">Everyone's Hours (This Week)</h2>
+                                <h2 className="text-2xl tracking-wide mb-4">Everyone's Hours (Last 2 Weeks)</h2>
                                 <OfficeTimeDisclaimer className="mb-2"/>
                                 <BreakCriteria className="mb-4"/>
                                 {allHours === null ?
@@ -237,12 +234,10 @@ export default function Profile(): JSX.Element {
                                         {allHours.map(member => (
                                             <div key={member.uid}>
                                                 <p className="font-semibold mb-2">{member.besaName || "(no name on file)"}</p>
-                                                <HoursWithOfficeHours officeHours={member.officeHours ?? null}>
-                                                    <WeeklyHoursTable entries={toWeeklyHoursEntries(member.hours)}
-                                                        openSession={toOpenSession(member.openSession)}
-                                                        officeHours={member.officeHours}
-                                                        onEditDay={(day) => setEditing({member, day})}/>
-                                                </HoursWithOfficeHours>
+                                                <HoursCarousel entries={toWeeklyHoursEntries(member.hours)}
+                                                    openSession={toOpenSession(member.openSession)}
+                                                    schedule={member.officeSchedule ?? null}
+                                                    onEditDay={(day) => setEditing({member, day})}/>
                                             </div>
                                         ))}
                                     </div>
@@ -252,16 +247,14 @@ export default function Profile(): JSX.Element {
 
                         {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&
                             <section className="bg-gray-800 rounded-2xl p-6">
-                                <h2 className="text-2xl tracking-wide mb-4">My Hours (This Week)</h2>
+                                <h2 className="text-2xl tracking-wide mb-4">My Hours (Last 2 Weeks)</h2>
                                 <OfficeTimeDisclaimer className="mb-2"/>
                                 <BreakCriteria className="mb-4"/>
-                                <HoursWithOfficeHours officeHours={ownOfficeHours}>
-                                    <WeeklyHoursTable entries={toWeeklyHoursEntries(ownHours ?? userData.biWeeklyHours ?? [])}
-                                        officeHours={ownOfficeHours}
-                                        openSession={ownOpenSession !== undefined ? ownOpenSession
-                                            : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || []}
-                                            : null}/>
-                                </HoursWithOfficeHours>
+                                <HoursCarousel entries={toWeeklyHoursEntries(ownHours ?? userData.biWeeklyHours ?? [])}
+                                    schedule={ownSchedule}
+                                    openSession={ownOpenSession !== undefined ? ownOpenSession
+                                        : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || []}
+                                        : null}/>
                             </section>
                         }
                     </div>
@@ -313,16 +306,6 @@ export default function Profile(): JSX.Element {
                     </div>
                 </Loading>
             }
-        </div>
-    )
-}
-
-//logged hours with the BESA booking schedule beside them on wide screens, stacked underneath on phones
-function HoursWithOfficeHours({officeHours, children}: {officeHours: OfficeHoursWeek | null | undefined, children: JSX.Element}) {
-    return (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_15rem] items-start">
-            {children}
-            <OfficeHoursTable officeHours={officeHours}/>
         </div>
     )
 }

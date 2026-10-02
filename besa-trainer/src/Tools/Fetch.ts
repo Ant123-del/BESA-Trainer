@@ -373,9 +373,18 @@ export type ApiDayHours = {
 //a member who's clocked in right now and hasn't clocked out yet
 export type ApiOpenSession = {clockIn: string, activities: string[], break?: BreakState}
 
-//scheduled office hours from the BESA booking roster, Sun-Sat, times as "HH:MM" (24h, Pacific) -
-//null when this member's name isn't in the roster at all
-export type OfficeHoursWeek = {day: string, slots: {start: string, end: string}[], breakAllowanceMinutes?: number}[]
+//one date's effective office hours from BESA Booking - the weekly schedule, replaced by that date's
+//temporary hours if any, minus any unavailability. Times are "HH:MM" (24h, Pacific).
+export type OfficeScheduleDay = {
+    date: string // YYYY-MM-DD
+    day: string // "monday"...
+    slots: {start: string, end: string}[]
+    temporary: boolean // this date uses temporary hours instead of the usual weekly ones
+    temporaryReason: string
+    unavailable: {allDay: boolean, start: string | null, end: string | null, reason: string}[]
+    scheduledHours: number
+    breakAllowanceMinutes: number
+}
 
 export type MemberHours = {
     uid: string
@@ -383,7 +392,7 @@ export type MemberHours = {
     studentId?: string
     hours: ApiDayHours[]
     openSession?: ApiOpenSession | null
-    officeHours?: OfficeHoursWeek | null
+    officeSchedule?: OfficeScheduleDay[] | null // last week + this week; null if not on the BESA Booking roster
 }
 
 //---- Root admin login: passcode-gated session on top of the signed-in root kiosk account ----
@@ -582,7 +591,7 @@ export async function removeActivityType(name: string): Promise<string[] | void>
 //past their 8pm auto-clockout window, closing the session (crediting hours via their besa-app office
 //hours schedule) if so. Called from Profile.tsx on load so a member sees an up-to-date week even if
 //nobody ever hit the root kiosk's Current Sessions/all-hours views after they forgot to clock out.
-export async function checkAutoClockout(): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeHours?: OfficeHoursWeek | null} | void> {
+export async function checkAutoClockout(): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null} | void> {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -599,7 +608,7 @@ export async function checkAutoClockout(): Promise<{success: boolean, biWeeklyHo
             console.error(response.status)
             return
         }
-        return await response.json() as {success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeHours?: OfficeHoursWeek | null}
+        return await response.json() as {success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null}
     } catch (e) {
         console.error(e)
     }

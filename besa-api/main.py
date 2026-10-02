@@ -358,14 +358,14 @@ def _find_besa_by_student_id(db, student_id: str):
     return None, None
 
 
-#prunes biWeeklyHours to the last HOURS_WEEKS_KEPT weeks (relative to `now`), then merges this session's hours into
+#prunes biWeeklyHours to the current two-week pay period (relative to `now`), then merges this session's hours into
 #(or creates) the entry for checked_in_at's calendar day. Shared by manual clock-out and auto-clockout.
 #Each day also keeps its individual sessions (arrive/leave time + activities) so the hours table can show
 #when someone was actually there - entries written before sessions existed just have none.
 def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False):
     elapsed_hours = max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
-    keep_from = _week_start(now) - timedelta(weeks=HOURS_WEEKS_KEPT - 1)
+    keep_from = _period_start(now)
     session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out,
                "breakSeconds": break_seconds, "canceledTour": canceled_tour}
 
@@ -441,8 +441,18 @@ def _open_session(data: dict):
 
 
 WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
-#how many Sun-Sat weeks of hours are kept and shown (last week + this week, flipped through as a carousel)
-HOURS_WEEKS_KEPT = 2
+#hours run in fixed two-week periods (two Sun-Sat weeks, flipped through as a carousel), starting from this
+#Sunday and repeating every 14 days. When a period ends everything resets: the next clock-out prunes the old
+#period's hours, and the views only ever show the current period.
+PAY_PERIOD_ANCHOR = date_cls(2026, 9, 27)
+PAY_PERIOD_DAYS = 14
+
+
+#midnight (Pacific) on the Sunday the current two-week period started
+def _period_start(now: datetime) -> datetime:
+    days_in = (now.astimezone(PACIFIC).date() - PAY_PERIOD_ANCHOR).days
+    start = PAY_PERIOD_ANCHOR + timedelta(days=PAY_PERIOD_DAYS * (days_in // PAY_PERIOD_DAYS))
+    return datetime(start.year, start.month, start.day, tzinfo=PACIFIC)
 
 
 def _hhmm_to_minutes(value) -> int | None:
@@ -534,14 +544,14 @@ def _office_day(roster_doc: dict, day: date_cls) -> dict:
     }
 
 
-#the member's effective office hours for every day shown in the hours carousel (last week + this week) -
+#the member's effective office hours for every day of the current two-week period (both carousel weeks) -
 #None if their name isn't on the BESA Booking roster at all.
 def _office_schedule(besa_name, roster_docs: list):
     roster_doc = _roster_doc_for(besa_name, roster_docs)
     if roster_doc is None:
         return None
-    first_day = (_week_start(datetime.now(PACIFIC)) - timedelta(weeks=HOURS_WEEKS_KEPT - 1)).date()
-    return [_office_day(roster_doc, first_day + timedelta(days=i)) for i in range(7 * HOURS_WEEKS_KEPT)]
+    first_day = _period_start(datetime.now(PACIFIC)).date()
+    return [_office_day(roster_doc, first_day + timedelta(days=i)) for i in range(PAY_PERIOD_DAYS)]
 
 
 def _office_day_for(besa_name, day: datetime):
@@ -725,7 +735,8 @@ def checkAutoClockout(user: dict = Depends(get_current_user)):
     data = _auto_clock_out_if_needed(target_ref, doc.to_dict() or {})
     hours = [_serialize_hours_entry(e) for e in (data.get("biWeeklyHours") or []) if e.get("date")]
     return {"success": True, "biWeeklyHours": hours, "openSession": _open_session(data),
-            "officeSchedule": _office_schedule(data.get("besaName"), _get_roster())}
+            "officeSchedule": _office_schedule(data.get("besaName"), _get_roster()),
+            "periodStart": _period_start(datetime.now(PACIFIC)).date().isoformat()}
 
 
 @app.get("/current-sessions")
@@ -835,7 +846,7 @@ def endBreak(request_data: EndBreakRequest, root_user: dict = Depends(require_ro
 
 
 def _shown_weeks_hours(data: dict) -> list:
-    shown_from = _week_start(datetime.now(PACIFIC)) - timedelta(weeks=HOURS_WEEKS_KEPT - 1)
+    shown_from = _period_start(datetime.now(PACIFIC))
     return [
         _serialize_hours_entry(e)
         for e in (data.get("biWeeklyHours") or [])
@@ -1007,7 +1018,7 @@ def allHours(root_user: dict = Depends(require_root_admin)):
         members.append({"uid": u.id, "besaName": data.get("besaName"), "studentId": data.get("studentId"),
                         "hours": _shown_weeks_hours(data), "openSession": _open_session(data),
                         "officeSchedule": _office_schedule(data.get("besaName"), roster_docs)})
-    return {"success": True, "members": members}
+    return {"success": True, "members": members, "periodStart": _period_start(datetime.now(PACIFIC)).date().isoformat()}
 
 
 class SetDayHoursRequest(BaseModel):
@@ -1030,9 +1041,9 @@ def setDayHours(request_data: SetDayHoursRequest, root_user: dict = Depends(requ
         raise HTTPException(status_code=400, detail="Invalid date.")
 
     entry_day = datetime(day.year, day.month, day.day, tzinfo=PACIFIC)
-    this_week_start = _week_start(datetime.now(PACIFIC))
-    if not (this_week_start - timedelta(weeks=HOURS_WEEKS_KEPT - 1) <= entry_day < this_week_start + timedelta(days=7)):
-        raise HTTPException(status_code=400, detail="Only days in last week or this week can be edited.")
+    period_start = _period_start(datetime.now(PACIFIC))
+    if not (period_start <= entry_day < period_start + timedelta(days=PAY_PERIOD_DAYS)):
+        raise HTTPException(status_code=400, detail="Only days in the current two-week period can be edited.")
 
     db = firestore.client()
     target_ref = db.collection("training_data").document("data_root").collection("users").document(request_data.targetUid)

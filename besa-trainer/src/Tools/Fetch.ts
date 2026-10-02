@@ -502,7 +502,7 @@ export function setMemberDayHours(targetUid: string, date: string, hours: number
 
 //root admin only - every besa/besaLead member's current-week hours, for root's Profile view.
 export function getAllHours() {
-    return rootAdminRequest<{members: MemberHours[]}>("all-hours")
+    return rootAdminRequest<{members: MemberHours[], periodStart: string}>("all-hours")
 }
 
 //any signed-in account - the shared list of activity names the kiosk's Clock In chips are built from.
@@ -591,7 +591,7 @@ export async function removeActivityType(name: string): Promise<string[] | void>
 //past their 8pm auto-clockout window, closing the session (crediting hours via their besa-app office
 //hours schedule) if so. Called from Profile.tsx on load so a member sees an up-to-date week even if
 //nobody ever hit the root kiosk's Current Sessions/all-hours views after they forgot to clock out.
-export async function checkAutoClockout(): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null} | void> {
+export async function checkAutoClockout(): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null, periodStart?: string} | void> {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -608,7 +608,7 @@ export async function checkAutoClockout(): Promise<{success: boolean, biWeeklyHo
             console.error(response.status)
             return
         }
-        return await response.json() as {success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null}
+        return await response.json() as {success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null, periodStart?: string}
     } catch (e) {
         console.error(e)
     }

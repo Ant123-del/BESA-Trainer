@@ -70,6 +70,8 @@ export default function Profile(): JSX.Element {
     const [adminUnlocked, setAdminUnlocked] = useState(() => !!getRootAdminToken())
     const [adminNotice, setAdminNotice] = useState("")
     const [allHours, setAllHours] = useState<MemberHours[] | null>(null)
+    //Sunday the current two-week hours period started (YYYY-MM-DD, from the backend) - what the carousels show
+    const [periodStart, setPeriodStart] = useState<string | undefined>(undefined)
     const [editing, setEditing] = useState<{member: MemberHours, day: WeeklyHoursEntry} | null>(null)
 
     //overrides userData.biWeeklyHours once the auto-clockout self-check comes back, so a forgotten
@@ -105,6 +107,7 @@ export default function Profile(): JSX.Element {
                         setOwnHours(result.biWeeklyHours)
                         setOwnOpenSession(toOpenSession(result.openSession))
                         setOwnSchedule(result.officeSchedule ?? null)
+                        setPeriodStart(result.periodStart)
                     })
                 }
             })
@@ -117,6 +120,7 @@ export default function Profile(): JSX.Element {
         getAllHours().then(result => {
             if (result.success) {
                 setAllHours(result.members)
+                setPeriodStart(result.periodStart)
             } else {
                 //a 403 means the server-side session is gone (expired or logged out elsewhere)
                 if (result.status === 403) lockAdmin(SESSION_EXPIRED_NOTICE)
@@ -222,7 +226,7 @@ export default function Profile(): JSX.Element {
 
                         {isRoot &&
                             <section className="bg-gray-800 rounded-2xl p-6">
-                                <h2 className="text-2xl tracking-wide mb-4">Everyone's Hours (Last 2 Weeks)</h2>
+                                <h2 className="text-2xl tracking-wide mb-4">Everyone's Hours (This 2-Week Period)</h2>
                                 <OfficeTimeDisclaimer className="mb-2"/>
                                 <BreakCriteria className="mb-4"/>
                                 {allHours === null ?
@@ -237,6 +241,7 @@ export default function Profile(): JSX.Element {
                                                 <HoursCarousel entries={toWeeklyHoursEntries(member.hours)}
                                                     openSession={toOpenSession(member.openSession)}
                                                     schedule={member.officeSchedule ?? null}
+                                                    periodStart={periodStart}
                                                     onEditDay={(day) => setEditing({member, day})}/>
                                             </div>
                                         ))}
@@ -247,11 +252,12 @@ export default function Profile(): JSX.Element {
 
                         {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&
                             <section className="bg-gray-800 rounded-2xl p-6">
-                                <h2 className="text-2xl tracking-wide mb-4">My Hours (Last 2 Weeks)</h2>
+                                <h2 className="text-2xl tracking-wide mb-4">My Hours (This 2-Week Period)</h2>
                                 <OfficeTimeDisclaimer className="mb-2"/>
                                 <BreakCriteria className="mb-4"/>
                                 <HoursCarousel entries={toWeeklyHoursEntries(ownHours ?? userData.biWeeklyHours ?? [])}
                                     schedule={ownSchedule}
+                                    periodStart={periodStart}
                                     openSession={ownOpenSession !== undefined ? ownOpenSession
                                         : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || []}
                                         : null}/>

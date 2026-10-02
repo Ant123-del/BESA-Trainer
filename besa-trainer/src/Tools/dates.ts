@@ -14,6 +14,12 @@ export function startOfWeek(date: Date, weekOffset = 0): Date {
     return start
 }
 
+//"2026-09-27" -> local midnight that day (not new Date(str), which would parse it as UTC)
+export function fromDateKey(key: string): Date {
+    const [y, m, d] = key.split("-").map(Number)
+    return new Date(y, m - 1, d)
+}
+
 export function sameDay(a: Date, b: Date): boolean {
     return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }

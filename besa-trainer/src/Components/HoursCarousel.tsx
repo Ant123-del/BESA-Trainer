@@ -1,13 +1,12 @@
 import { useRef, useState, type JSX } from "react"
 import { FaChevronLeft, FaChevronRight } from "react-icons/fa"
 import type { OfficeScheduleDay } from "../Tools/Fetch"
-import { sameDay, startOfWeek, toDateKey } from "../Tools/dates"
+import { fromDateKey, startOfWeek, toDateKey } from "../Tools/dates"
 import WeeklyHoursTable, { type OpenSession, type WeeklyHoursEntry } from "./WeeklyHoursTable"
 import OfficeHoursTable from "./OfficeHoursTable"
 
-//the bi-weekly view: last week and this week, one at a time. -1 = last week, 0 = this week (matches the
-//backend's HOURS_WEEKS_KEPT = 2).
-const WEEK_OFFSETS = [-1, 0]
+//hours run in fixed two-week periods (the backend's PAY_PERIOD_ANCHOR/_period_start) - week 1 and week 2
+const WEEKS_PER_PERIOD = 2
 
 function formatRange(start: Date): string {
     const end = new Date(start)
@@ -16,19 +15,29 @@ function formatRange(start: Date): string {
     return `${fmt(start)} – ${fmt(end)}`
 }
 
-//one member's logged hours beside their BESA Booking office hours, flipped a week at a time (arrows, the dots,
-//or a swipe on a phone). Both tables always show the same week. Opens on this week.
-export default function HoursCarousel({entries, openSession, schedule, onEditDay}: {
+function weekLabel(weekStart: Date): string {
+    const offset = Math.round((weekStart.getTime() - startOfWeek(new Date()).getTime()) / (7 * 24 * 3600 * 1000))
+    return offset === 0 ? "This Week" : offset === 1 ? "Next Week" : offset === -1 ? "Last Week" : ""
+}
+
+//one member's logged hours beside their BESA Booking office hours for the current two-week period, flipped a
+//week at a time (arrows, the dots, or a swipe on a phone). Both tables always show the same week. Opens on the
+//week containing today. periodStart (YYYY-MM-DD) comes from the backend; until it arrives this week is week 1.
+export default function HoursCarousel({entries, openSession, schedule, onEditDay, periodStart}: {
     entries: WeeklyHoursEntry[]
     openSession?: OpenSession | null
     schedule: OfficeScheduleDay[] | null | undefined
     onEditDay?: (day: WeeklyHoursEntry) => void
+    periodStart?: string
 }): JSX.Element {
-    const [index, setIndex] = useState(WEEK_OFFSETS.length - 1)
+    const firstWeek = periodStart ? fromDateKey(periodStart) : startOfWeek(new Date())
+    const weekStarts = Array.from({length: WEEKS_PER_PERIOD}, (_, i) => startOfWeek(firstWeek, i))
+    const todaysWeek = weekStarts.findIndex(w => w.getTime() === startOfWeek(new Date()).getTime())
+    const [chosen, setChosen] = useState<number | null>(null)
+    const index = chosen ?? Math.max(0, todaysWeek)
     const touchStartX = useRef<number | null>(null)
 
-    const offset = WEEK_OFFSETS[index]
-    const weekStart = startOfWeek(new Date(), offset)
+    const weekStart = weekStarts[index]
     const weekKeys = Array.from({length: 7}, (_, i) => {
         const d = new Date(weekStart)
         d.setDate(d.getDate() + i)
@@ -36,13 +45,13 @@ export default function HoursCarousel({entries, openSession, schedule, onEditDay
     })
     const weekSchedule = schedule ? schedule.filter(d => weekKeys.includes(d.date)) : schedule
 
-    const firstShown = startOfWeek(new Date(), WEEK_OFFSETS[0])
-    const twoWeekTotal = entries
-        .filter(e => e.date >= firstShown || sameDay(e.date, firstShown))
+    const periodEnd = startOfWeek(firstWeek, WEEKS_PER_PERIOD)
+    const periodTotal = entries
+        .filter(e => e.date >= firstWeek && e.date < periodEnd)
         .reduce((sum, e) => sum + e.hours, 0)
 
     function go(next: number) {
-        setIndex(Math.max(0, Math.min(WEEK_OFFSETS.length - 1, next)))
+        setChosen(Math.max(0, Math.min(WEEKS_PER_PERIOD - 1, next)))
     }
 
     return (
@@ -61,16 +70,16 @@ export default function HoursCarousel({entries, openSession, schedule, onEditDay
                     <FaChevronLeft size={12}/>
                 </button>
                 <div className="text-center">
-                    <p className="font-semibold text-sm">{offset === 0 ? "This Week" : "Last Week"}</p>
+                    <p className="font-semibold text-sm">Week {index + 1} of {WEEKS_PER_PERIOD}{weekLabel(weekStart) && ` · ${weekLabel(weekStart)}`}</p>
                     <p className="text-xs text-gray-400">{formatRange(weekStart)}</p>
                     <div className="flex justify-center gap-1.5 mt-1">
-                        {WEEK_OFFSETS.map((_, i) => (
-                            <button key={i} onClick={() => go(i)} aria-label={i === WEEK_OFFSETS.length - 1 ? "This week" : "Last week"}
+                        {weekStarts.map((_, i) => (
+                            <button key={i} onClick={() => go(i)} aria-label={`Week ${i + 1}`}
                                 className={"w-2 h-2 rounded-full " + (i === index ? "bg-amber-500" : "bg-gray-600 hover:bg-gray-500")}/>
                         ))}
                     </div>
                 </div>
-                <button onClick={() => go(index + 1)} disabled={index === WEEK_OFFSETS.length - 1} aria-label="Next week"
+                <button onClick={() => go(index + 1)} disabled={index === WEEKS_PER_PERIOD - 1} aria-label="Next week"
                     className="p-2 rounded-full bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed">
                     <FaChevronRight size={12}/>
                 </button>
@@ -81,7 +90,10 @@ export default function HoursCarousel({entries, openSession, schedule, onEditDay
                     onEditDay={onEditDay} weekStart={weekStart}/>
                 <OfficeHoursTable days={weekSchedule}/>
             </div>
-            <p className="text-xs text-gray-400 mt-2 text-right">Two-week total: <span className="text-white font-semibold">{twoWeekTotal}</span> hrs</p>
+            <p className="text-xs text-gray-400 mt-2 text-right">
+                Period total ({formatRange(firstWeek).split(" – ")[0]} – {formatRange(weekStarts[WEEKS_PER_PERIOD - 1]).split(" – ")[1]}):{" "}
+                <span className="text-white font-semibold">{periodTotal}</span> hrs
+            </p>
         </div>
     )
 }

@@ -6,7 +6,9 @@ import BreakCriteria from "../Components/BreakCriteria"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import { Loading } from "../Components/SectionEditor/Edit"
 
-const CANCELED_TOUR_WARNING = "This logs them out for the rest of the day and sets today's hours to 30 minutes - even if they've already been in the office longer."
+//written to the BESA standing at the kiosk, since they're the one deciding whether to press it
+const CANCELED_TOUR_WARNING = "Only press this if your tour was canceled - if you have done a tour, do not click this button. It logs you out for the rest of the day and sets your hours for today to 30 minutes, even if you've already been in the office longer."
+const CANCELED_TOUR_WHEN_SHOWN = "This button only shows up when your intended activities are only Tours."
 import {
     addActivityType, canceledTour, clockIn, clockOut, endBreak, getActivityTypes, getCurrentSessions,
     removeActivityType, startBreak, type KioskSession
@@ -331,7 +333,9 @@ function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () 
                         className="text-xs px-3 py-1.5 rounded-full bg-red-800 hover:bg-red-900 disabled:opacity-40 whitespace-nowrap">
                         Canceled Tour
                     </button>
-                    <span className="text-xs text-yellow-300/90 flex-1 min-w-[12rem]">⚠ {CANCELED_TOUR_WARNING}</span>
+                    <span className="text-xs text-yellow-300/90 flex-1 min-w-[12rem]">
+                        ⚠ {CANCELED_TOUR_WARNING} <span className="text-gray-400">{CANCELED_TOUR_WHEN_SHOWN}</span>
+                    </span>
                 </div>
             }
             {error && <p className="text-red-400 text-xs">{error}</p>}
@@ -339,17 +343,18 @@ function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () 
             {confirmCancelTour &&
                 <Loading onClose={busy ? undefined : () => setConfirmCancelTour(false)}>
                     <div className="bg-gray-900 w-11/12 sm:w-2/3 md:w-1/3 max-w-md p-5 rounded-2xl text-center">
-                        <h3 className="text-2xl mb-2 text-red-500">Canceled Tour?</h3>
+                        <h3 className="text-2xl mb-2 text-red-500">Was your tour canceled?</h3>
                         <p className="text-sm text-gray-300 mb-1">
-                            {session.besaName || "This BESA"} will be logged out for the day.
+                            {session.besaName ? `${session.besaName}, you` : "You"} will be logged out for the day.
                         </p>
                         <p className="text-sm text-yellow-300/90">⚠ {CANCELED_TOUR_WARNING}</p>
+                        <p className="text-xs text-gray-400 mt-1">{CANCELED_TOUR_WHEN_SHOWN}</p>
                         <button
                             onClick={() => void run(() => canceledTour(session.uid)).then(() => setConfirmCancelTour(false))}
                             disabled={busy}
                             className="rounded-full w-full mt-4 p-2 bg-red-800 hover:bg-red-900 disabled:opacity-40 flex items-center justify-center gap-2">
                             {busy && <MoonLoader color="white" size={16}/>}
-                            Yes, log them out with 30 minutes
+                            Yes, my tour was canceled - log me out with 30 minutes
                         </button>
                         <button onClick={() => setConfirmCancelTour(false)} disabled={busy}
                             className="rounded-full w-full mt-3 border-solid border-2 border-gray-400 hover:bg-gray-800 p-2 disabled:opacity-40">

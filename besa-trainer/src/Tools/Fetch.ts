@@ -336,7 +336,8 @@ async function kioskPost(path: string, body: unknown): Promise<{success: boolean
 }
 
 //root only - everyone currently clocked in, for the Clock Out panel's "Current Sessions" list.
-export async function getCurrentSessions(): Promise<KioskSession[] | void> {
+//fresh = re-read office hours from BESA Booking instead of the backend's ~1 minute cache (page loads)
+export async function getCurrentSessions(fresh = false): Promise<KioskSession[] | void> {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -345,7 +346,7 @@ export async function getCurrentSessions(): Promise<KioskSession[] | void> {
         }
 
         const idToken = await user.getIdToken()
-        const response = await fetch(url + "current-sessions", {
+        const response = await fetch(url + "current-sessions" + (fresh ? "?fresh=true" : ""), {
             headers: {"Authorization": `Bearer ${idToken}`}
         })
         if (!response.ok) {
@@ -501,8 +502,8 @@ export function setMemberDayHours(targetUid: string, date: string, hours: number
 }
 
 //root admin only - every besa/besaLead member's current-week hours, for root's Profile view.
-export function getAllHours() {
-    return rootAdminRequest<{members: MemberHours[], periodStart: string}>("all-hours")
+export function getAllHours(fresh = false) {
+    return rootAdminRequest<{members: MemberHours[], periodStart: string}>("all-hours" + (fresh ? "?fresh=true" : ""))
 }
 
 //any signed-in account - the shared list of activity names the kiosk's Clock In chips are built from.
@@ -591,7 +592,7 @@ export async function removeActivityType(name: string): Promise<string[] | void>
 //past their 8pm auto-clockout window, closing the session (crediting hours via their besa-app office
 //hours schedule) if so. Called from Profile.tsx on load so a member sees an up-to-date week even if
 //nobody ever hit the root kiosk's Current Sessions/all-hours views after they forgot to clock out.
-export async function checkAutoClockout(): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null, periodStart?: string} | void> {
+export async function checkAutoClockout(fresh = false): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null, periodStart?: string} | void> {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -600,7 +601,7 @@ export async function checkAutoClockout(): Promise<{success: boolean, biWeeklyHo
         }
 
         const idToken = await user.getIdToken()
-        const response = await fetch(url + "check-auto-clockout", {
+        const response = await fetch(url + "check-auto-clockout" + (fresh ? "?fresh=true" : ""), {
             method: "POST",
             headers: {"Authorization": `Bearer ${idToken}`}
         })

@@ -99,7 +99,8 @@ export default function Profile(): JSX.Element {
                 setUserData(data)
                 setLoading(false)
                 if (data?.accountType === "besa" || data?.accountType === "besaLead") {
-                    checkAutoClockout().then(result => {
+                    //fresh: a page load/refresh always re-reads their office hours from BESA Booking
+                    checkAutoClockout(true).then(result => {
                         if (!result) {
                             setOwnSchedule(null)
                             return
@@ -117,7 +118,7 @@ export default function Profile(): JSX.Element {
 
     useEffect(() => {
         if (!isRoot || !adminUnlocked) return
-        getAllHours().then(result => {
+        getAllHours(true).then(result => {
             if (result.success) {
                 setAllHours(result.members)
                 setPeriodStart(result.periodStart)

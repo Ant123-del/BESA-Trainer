@@ -187,10 +187,11 @@ def _fetch_live_roster() -> list:
 
 
 #the roster, live from besa-app (cached per instance for ROSTER_TTL_SECONDS). Each doc is besa-app's own
-#shape - {name, role, status, officeHours, ...}.
-def _get_roster() -> list:
+#shape - {name, role, status, officeHours, ...}. force=True skips the cache - used when a page is (re)loaded or
+#a break is started, so an office-hours change on BESA Booking shows up right away instead of up to a minute later.
+def _get_roster(force: bool = False) -> list:
     now = time.monotonic()
-    if _roster_cache["docs"] is not None and now - _roster_cache["fetched_at"] < ROSTER_TTL_SECONDS:
+    if not force and _roster_cache["docs"] is not None and now - _roster_cache["fetched_at"] < ROSTER_TTL_SECONDS:
         return _roster_cache["docs"]
     try:
         docs = _fetch_live_roster()
@@ -725,7 +726,9 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
 
 
 @app.post("/check-auto-clockout")
-def checkAutoClockout(user: dict = Depends(get_current_user)):
+def checkAutoClockout(user: dict = Depends(get_current_user), fresh: bool = False):
+    if fresh:
+        _get_roster(force=True)
     db = firestore.client()
     target_ref = db.collection("training_data").document("data_root").collection("users").document(user.get("uid"))
     doc = target_ref.get()
@@ -740,7 +743,10 @@ def checkAutoClockout(user: dict = Depends(get_current_user)):
 
 
 @app.get("/current-sessions")
-def currentSessions(root_user: dict = Depends(require_root)):
+def currentSessions(root_user: dict = Depends(require_root), fresh: bool = False):
+    #the kiosk's 60s polling uses the cached roster; a page load/refresh passes fresh=true
+    if fresh:
+        _get_roster(force=True)
     db = firestore.client()
     sessions = []
     for u in db.collection("training_data").document("data_root").collection("users").stream():
@@ -809,6 +815,7 @@ class StartBreakRequest(BaseModel):
 
 @app.post("/break/start")
 def startBreak(request_data: StartBreakRequest, root_user: dict = Depends(require_root)):
+    _get_roster(force=True)  #the allowance being spent should reflect their office hours right now
     db = firestore.client()
     target_ref, data = _clocked_in_besa(db, request_data.targetUid)
     now = datetime.now(PACIFIC)
@@ -1005,9 +1012,9 @@ def rootAdminDeleteAccount(root_user: dict = Depends(require_root_admin)):
 
 
 @app.get("/all-hours")
-def allHours(root_user: dict = Depends(require_root_admin)):
+def allHours(root_user: dict = Depends(require_root_admin), fresh: bool = False):
     db = firestore.client()
-    roster_docs = _get_roster()
+    roster_docs = _get_roster(force=fresh)
     members = []
     for u in db.collection("training_data").document("data_root").collection("users").stream():
         data = u.to_dict() or {}

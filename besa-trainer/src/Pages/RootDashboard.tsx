@@ -22,16 +22,17 @@ export default function RootDashboard() {
 
     useEffect(() => {
         getActivityTypes().then(result => setActivityTypes(result || []))
-        refreshSessions()
+        //page load/refresh re-reads everyone's office hours from BESA Booking; the polling below can use the cache
+        refreshSessions(true)
         //the kiosk computer stays open all day, so poll rather than only refreshing after an action -
         //this is also what actually closes out anyone who forgot to clock out once it passes 8pm,
         //since that check runs lazily as a side effect of the backend's /current-sessions call.
-        const interval = setInterval(refreshSessions, 60_000)
+        const interval = setInterval(() => refreshSessions(), 60_000)
         return () => clearInterval(interval)
     }, [])
 
-    function refreshSessions() {
-        getCurrentSessions().then(result => setSessions(result || []))
+    function refreshSessions(fresh = false) {
+        getCurrentSessions(fresh).then(result => setSessions(result || []))
     }
 
     return (
@@ -39,8 +40,8 @@ export default function RootDashboard() {
             <Header/>
             <div className="h-16 relative top-0 left-0 w-full"></div>
             <div className="w-5/6 max-w-3xl mx-auto py-10 flex flex-col gap-8">
-                <ClockInPanel activityTypes={activityTypes} onClockedIn={refreshSessions}/>
-                <ClockOutPanel sessions={sessions} onChanged={refreshSessions}/>
+                <ClockInPanel activityTypes={activityTypes} onClockedIn={() => refreshSessions()}/>
+                <ClockOutPanel sessions={sessions} onChanged={() => refreshSessions()}/>
                 <ActivityTypesPanel activityTypes={activityTypes} setActivityTypes={setActivityTypes}/>
             </div>
         </div>

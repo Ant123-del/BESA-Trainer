@@ -363,12 +363,12 @@ def _find_besa_by_student_id(db, student_id: str):
 #(or creates) the entry for checked_in_at's calendar day. Shared by manual clock-out and auto-clockout.
 #Each day also keeps its individual sessions (arrive/leave time + activities) so the hours table can show
 #when someone was actually there - entries written before sessions existed just have none.
-def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False):
+def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False, notes: list | None = None):
     elapsed_hours = max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
     keep_from = _period_start(now)
     session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out,
-               "breakSeconds": break_seconds, "canceledTour": canceled_tour}
+               "breakSeconds": break_seconds, "canceledTour": canceled_tour, "notes": notes or []}
 
     pruned = [e for e in existing if e.get("date") and e["date"].astimezone(PACIFIC) >= keep_from]
 
@@ -426,6 +426,7 @@ def _serialize_hours_entry(e: dict) -> dict:
                 "autoClockedOut": bool(s.get("autoClockedOut")),
                 "breakSeconds": s.get("breakSeconds") or 0,
                 "canceledTour": bool(s.get("canceledTour")),
+                "notes": _serialize_notes(s.get("notes")),
             }
             for s in (e.get("sessions") or []) if s.get("clockIn") and s.get("clockOut")
         ],
@@ -434,11 +435,22 @@ def _serialize_hours_entry(e: dict) -> dict:
 
 #the still-open session (clocked in, not out yet), so the table can show "9:02 AM - now" and today's
 #live break status
+#notes/comments added from the kiosk's Current Sessions during a visit - [{text, at}] on the user doc while
+#they're clocked in (lastCheckedInNotes), then moved onto that visit's session record when they clock out
+SESSION_NOTE_MAX_LENGTH = 500
+
+
+def _serialize_notes(notes) -> list:
+    return [{"text": n.get("text") or "", "at": n["at"].isoformat() if n.get("at") else None}
+            for n in (notes or []) if isinstance(n, dict) and n.get("text")]
+
+
 def _open_session(data: dict):
     if not data.get("lastCheckedIn"):
         return None
     return {"clockIn": data["lastCheckedIn"].isoformat(), "activities": data.get("lastCheckedInActivities") or [],
-            "break": _break_state(data, datetime.now(PACIFIC))}
+            "break": _break_state(data, datetime.now(PACIFIC)),
+            "notes": _serialize_notes(data.get("lastCheckedInNotes"))}
 
 
 WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
@@ -584,6 +596,8 @@ def _get_office_hours_end(besa_name, checked_in_at: datetime):
 # breakEndsAt, and breakUsedSeconds holds what's been used today so far - seeded at clock-in with break time
 # from earlier visits that day (breakCarriedSeconds), since the allowance is per day, not per visit.
 BREAK_FIELDS_RESET = {"breakUsedSeconds": 0, "breakCarriedSeconds": 0, "breakStartedAt": None, "breakEndsAt": None}
+#everything tied to one visit that's cleared on clock in and every kind of clock out
+VISIT_FIELDS_RESET = {**BREAK_FIELDS_RESET, "lastCheckedInNotes": []}
 SHORT_BREAK_SECONDS = 5 * 60
 
 
@@ -657,9 +671,9 @@ def _auto_clock_out_if_needed(target_ref, data: dict) -> dict:
     activities = data.get("lastCheckedInActivities") or []
     break_seconds = _visit_break_seconds(data, effective_end)
     new_hours, _ = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, effective_end, activities, now,
-                                      auto_clocked_out=True, break_seconds=break_seconds)
+                                      auto_clocked_out=True, break_seconds=break_seconds, notes=data.get("lastCheckedInNotes"))
 
-    update = {"biWeeklyHours": new_hours, "lastCheckedIn": None, "lastCheckedInActivities": [], **BREAK_FIELDS_RESET}
+    update = {"biWeeklyHours": new_hours, "lastCheckedIn": None, "lastCheckedInActivities": [], **VISIT_FIELDS_RESET}
     target_ref.update(update)
     return {**data, **update}
 
@@ -690,7 +704,7 @@ def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root
         for e in (data.get("biWeeklyHours") or []) if e.get("date") and e["date"].astimezone(PACIFIC).date() == now.date()
         for sess in (e.get("sessions") or [])
     )
-    target_ref.update({"lastCheckedIn": now, "lastCheckedInActivities": activities, **BREAK_FIELDS_RESET,
+    target_ref.update({"lastCheckedIn": now, "lastCheckedInActivities": activities, **VISIT_FIELDS_RESET,
                        "breakUsedSeconds": taken_today, "breakCarriedSeconds": taken_today})
     return {"success": True, "besaName": data.get("besaName"), "clockedInAt": now.isoformat()}
 
@@ -714,13 +728,13 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
     checked_in_at = _to_pacific(last_checked_in)
     activities = data.get("lastCheckedInActivities") or []
     new_hours, elapsed_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now, activities, now,
-                                                  break_seconds=_visit_break_seconds(data, now))
+                                                  break_seconds=_visit_break_seconds(data, now), notes=data.get("lastCheckedInNotes"))
 
     target_ref.update({
         "biWeeklyHours": new_hours,
         "lastCheckedIn": None,
         "lastCheckedInActivities": [],
-        **BREAK_FIELDS_RESET,
+        **VISIT_FIELDS_RESET,
     })
     return {"success": True, "besaName": data.get("besaName"), "hoursThisSession": elapsed_hours}
 
@@ -765,6 +779,7 @@ def currentSessions(root_user: dict = Depends(require_root), fresh: bool = False
             "clockedInAt": data["lastCheckedIn"].isoformat(),
             "break": _break_state(data, datetime.now(PACIFIC)),
             "canCancelTour": _can_cancel_tour(data),
+            "notes": _serialize_notes(data.get("lastCheckedInNotes")),
         })
     return {"success": True, "sessions": sessions}
 
@@ -803,9 +818,31 @@ def canceledTour(request_data: CanceledTourRequest, root_user: dict = Depends(re
     checked_in_at = _to_pacific(data["lastCheckedIn"])
     new_hours, day_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now,
                                               data.get("lastCheckedInActivities") or [], now,
-                                              break_seconds=_visit_break_seconds(data, now), canceled_tour=True)
-    target_ref.update({"biWeeklyHours": new_hours, "lastCheckedIn": None, "lastCheckedInActivities": [], **BREAK_FIELDS_RESET})
+                                              break_seconds=_visit_break_seconds(data, now), canceled_tour=True,
+                                              notes=data.get("lastCheckedInNotes"))
+    target_ref.update({"biWeeklyHours": new_hours, "lastCheckedIn": None, "lastCheckedInActivities": [], **VISIT_FIELDS_RESET})
     return {"success": True, "besaName": data.get("besaName"), "dayHours": day_hours}
+
+
+class SessionNoteRequest(BaseModel):
+    targetUid: str
+    text: str
+
+
+#root only - adds a note/comment to a clocked-in member's current visit (kiosk's Current Sessions)
+@app.post("/session-note")
+def addSessionNote(request_data: SessionNoteRequest, root_user: dict = Depends(require_root)):
+    text = request_data.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="The note is empty.")
+    if len(text) > SESSION_NOTE_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Notes can be at most {SESSION_NOTE_MAX_LENGTH} characters.")
+
+    db = firestore.client()
+    target_ref, data = _clocked_in_besa(db, request_data.targetUid)
+    notes = (data.get("lastCheckedInNotes") or []) + [{"text": text, "at": datetime.now(PACIFIC)}]
+    target_ref.update({"lastCheckedInNotes": notes})
+    return {"success": True, "notes": _serialize_notes(notes)}
 
 
 class StartBreakRequest(BaseModel):

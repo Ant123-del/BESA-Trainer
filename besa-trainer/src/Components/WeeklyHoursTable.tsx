@@ -2,6 +2,9 @@ import type { JSX } from "react"
 import type { BreakState, OfficeScheduleDay } from "../Tools/Fetch"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import { sameDay, startOfWeek, toDateKey } from "../Tools/dates"
+import SessionNotes from "./SessionNotes"
+
+type Note = {text: string, at: Date | null}
 
 export type WeeklyHoursSession = {
     clockIn: Date
@@ -10,6 +13,7 @@ export type WeeklyHoursSession = {
     autoClockedOut?: boolean
     breakSeconds?: number
     canceledTour?: boolean
+    notes?: Note[]
 }
 
 export type WeeklyHoursEntry = {
@@ -26,6 +30,7 @@ export type OpenSession = {
     clockIn: Date
     activities: string[]
     break?: BreakState // today's live break status, so the day's break line can tick during a break
+    notes?: Note[]
 }
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
@@ -87,9 +92,9 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
                     </div>
                     <div className="p-2 px-3 text-gray-400 flex flex-col gap-1 min-w-0">
                         {d.sessions.map((s, j) => (
-                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} canceledTour={s.canceledTour}/>
+                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} canceledTour={s.canceledTour} notes={s.notes}/>
                         ))}
-                        {d.open && <SessionLine clockIn={d.open.clockIn} activities={d.open.activities}/>}
+                        {d.open && <SessionLine clockIn={d.open.clockIn} activities={d.open.activities} notes={d.open.notes}/>}
                         {d.sessions.length === 0 && !d.open &&
                             <span>{d.activities.length > 0 ? d.activities.join(", ") : "—"}</span>
                         }
@@ -125,25 +130,29 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
 }
 
 //"9:02 AM - 11:30 AM  Tours, Other" - clockOut omitted means they're still clocked in
-function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, canceledTour}: {
-    clockIn: Date, clockOut?: Date, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean
+function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, canceledTour, notes}: {
+    clockIn: Date, clockOut?: Date, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean,
+    notes?: Note[]
 }) {
     return (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="text-gray-200 whitespace-nowrap">
-                {formatTime(clockIn)} – {clockOut ? formatTime(clockOut) : "now"}
-            </span>
-            {!clockOut &&
-                <Badge label="HERE" title="Currently clocked in" className="bg-green-600 text-black"/>
-            }
-            {canceledTour &&
-                <Badge label="CANCELED TOUR" title="Tour was canceled - logged out and the day was set to 30 minutes" className="bg-red-400 text-black"/>
-            }
-            {autoClockedOut &&
-                <Badge label="AUTO" title="Forgot to clock out - leave time is their scheduled office-hours end (or 8 PM)" className="bg-yellow-600 text-black"/>
-            }
-            {activities.length > 0 && <span className="text-gray-400">{activities.join(", ")}</span>}
-            {!!breakSeconds && <span className="text-sky-300/80 whitespace-nowrap">{Math.round(breakSeconds / 60)} min break</span>}
+        <div className="flex flex-col gap-0.5">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="text-gray-200 whitespace-nowrap">
+                    {formatTime(clockIn)} – {clockOut ? formatTime(clockOut) : "now"}
+                </span>
+                {!clockOut &&
+                    <Badge label="HERE" title="Currently clocked in" className="bg-green-600 text-black"/>
+                }
+                {canceledTour &&
+                    <Badge label="CANCELED TOUR" title="Tour was canceled - logged out and the day was set to 30 minutes" className="bg-red-400 text-black"/>
+                }
+                {autoClockedOut &&
+                    <Badge label="AUTO" title="Forgot to clock out - leave time is their scheduled office-hours end (or 8 PM)" className="bg-yellow-600 text-black"/>
+                }
+                {activities.length > 0 && <span className="text-gray-400">{activities.join(", ")}</span>}
+                {!!breakSeconds && <span className="text-sky-300/80 whitespace-nowrap">{Math.round(breakSeconds / 60)} min break</span>}
+            </div>
+            <SessionNotes notes={notes}/>
         </div>
     )
 }

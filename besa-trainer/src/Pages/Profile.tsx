@@ -42,12 +42,18 @@ function toWeeklyHoursEntries(entries: RawDayHours[]): WeeklyHoursEntry[] {
             autoClockedOut: s.autoClockedOut,
             breakSeconds: s.breakSeconds,
             canceledTour: s.canceledTour,
+            notes: toNotes(s.notes),
         })),
     }))
 }
 
+//notes from the backend (ISO times) or straight off the user doc (Firestore Timestamps)
+function toNotes(notes: {text: string, at: unknown}[] | undefined): {text: string, at: Date | null}[] {
+    return (notes || []).map(n => ({text: n.text, at: n.at ? toDate(n.at) : null}))
+}
+
 function toOpenSession(session: ApiOpenSession | null | undefined): OpenSession | null {
-    return session ? {clockIn: new Date(session.clockIn), activities: session.activities, break: session.break} : null
+    return session ? {clockIn: new Date(session.clockIn), activities: session.activities, break: session.break, notes: toNotes(session.notes)} : null
 }
 
 
@@ -260,7 +266,7 @@ export default function Profile(): JSX.Element {
                                     schedule={ownSchedule}
                                     periodStart={periodStart}
                                     openSession={ownOpenSession !== undefined ? ownOpenSession
-                                        : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || []}
+                                        : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || [], notes: toNotes(userData.lastCheckedInNotes)}
                                         : null}/>
                             </section>
                         }

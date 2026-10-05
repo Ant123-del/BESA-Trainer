@@ -5,14 +5,18 @@ import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
 import BreakCriteria from "../Components/BreakCriteria"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import { Loading } from "../Components/SectionEditor/Edit"
+import SessionNotes from "../Components/SessionNotes"
+import { FaPlus } from "react-icons/fa"
+import {
+    addActivityType, addSessionNote, canceledTour, clockIn, clockOut, endBreak, getActivityTypes, getCurrentSessions,
+    removeActivityType, startBreak, type KioskSession
+} from "../Tools/Fetch"
+
+const NOTE_MAX_LENGTH = 500 //same cap as the backend's SESSION_NOTE_MAX_LENGTH
 
 //written to the BESA standing at the kiosk, since they're the one deciding whether to press it
 const CANCELED_TOUR_WARNING = "Only press this if your tour was canceled - if you have done a tour, do not click this button. It logs you out for the rest of the day and sets your hours for today to 30 minutes, even if you've already been in the office longer."
 const CANCELED_TOUR_WHEN_SHOWN = "This button only shows up when your intended activities are only Tours."
-import {
-    addActivityType, canceledTour, clockIn, clockOut, endBreak, getActivityTypes, getCurrentSessions,
-    removeActivityType, startBreak, type KioskSession
-} from "../Tools/Fetch"
 
 //the shared kiosk's home screen (root accountType only, see Home.tsx) - clock BESA members in/out by
 //school id, see who's currently clocked in, and manage the shared activity-type list.
@@ -265,6 +269,8 @@ function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () 
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState("")
     const [confirmCancelTour, setConfirmCancelTour] = useState(false)
+    const [noteOpen, setNoteOpen] = useState(false)
+    const [noteText, setNoteText] = useState("")
     const {onBreak, breakLeft, breakRanOut, remaining, resetNow} = useLiveBreak(brk)!
 
     //the break ran out on its own - pull fresh state so the buttons come back
@@ -272,7 +278,7 @@ function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () 
         if (breakRanOut) onChanged()
     }, [breakRanOut, onChanged])
 
-    async function run(action: () => Promise<{success: boolean, detail?: string}>) {
+    async function run(action: () => Promise<{success: boolean, detail?: string}>): Promise<boolean> {
         setBusy(true)
         setError("")
         const result = await action()
@@ -283,6 +289,7 @@ function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () 
         } else {
             setError(result.detail || "Something went wrong.")
         }
+        return result.success
     }
 
     return (
@@ -328,6 +335,33 @@ function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () 
                     </div>
                 }
             </div>
+            <SessionNotes notes={session.notes}/>
+            {noteOpen ?
+                <div className="flex flex-col gap-2">
+                    <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} disabled={busy} autoFocus
+                        maxLength={NOTE_MAX_LENGTH} rows={2} placeholder="Add a note or comment about this visit..."
+                        className="w-full p-2 rounded-lg bg-gray-800 text-white text-sm"/>
+                    <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-gray-500 flex-1">{noteText.length}/{NOTE_MAX_LENGTH}</span>
+                        <button onClick={() => { setNoteOpen(false); setNoteText("") }} disabled={busy}
+                            className="text-xs px-3 py-1.5 rounded-full bg-gray-600 hover:bg-gray-500 disabled:opacity-40">
+                            Cancel
+                        </button>
+                        <button disabled={busy || !noteText.trim()}
+                            onClick={() => void run(() => addSessionNote(session.uid, noteText)).then(ok => {
+                                if (ok) { setNoteOpen(false); setNoteText("") }
+                            })}
+                            className="text-xs px-3 py-1.5 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40">
+                            Save Note
+                        </button>
+                    </div>
+                </div>
+                :
+                <button onClick={() => setNoteOpen(true)} disabled={busy}
+                    className="self-start flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-gray-600 hover:bg-gray-500 disabled:opacity-40">
+                    <FaPlus size={10}/> Add a note/comment
+                </button>
+            }
             {session.canCancelTour &&
                 <div className="flex items-center gap-2 flex-wrap border-t border-gray-600 pt-2">
                     <button onClick={() => setConfirmCancelTour(true)} disabled={busy}

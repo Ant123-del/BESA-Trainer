@@ -16,6 +16,7 @@ export type User = {
     biWeeklyHours?: DayHours[] // current week (Sun-Sat) only - pruned on every clock-out
     lastCheckedIn?: Date | null // set by the root kiosk on clock-in, cleared on clock-out
     lastCheckedInActivities?: string[] // activities picked at clock-in - always set/cleared together with lastCheckedIn
+    lastCheckedInNotes?: {text: string, at: Date}[] // notes added from the kiosk during the current visit
     questionProgress?: QuestionProgress[] // mirrors `progress`, but for question-set practice
     customAnswers?: CustomAnswer[] // personalized answers, mirrors scriptPaths' "your own take" idea
 }
@@ -38,6 +39,7 @@ export type HoursSession = {
     autoClockedOut?: boolean
     breakSeconds?: number // break time taken during this visit
     canceledTour?: boolean // logged out via Canceled Tour - the whole day was set to 30 minutes
+    notes?: {text: string, at: Date | null}[] // notes/comments added from the kiosk during this visit
 }
 
 //will be used to keep track of personalized vll scripts

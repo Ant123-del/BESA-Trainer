@@ -291,6 +291,12 @@ export type KioskSession = {
     clockedInAt: string
     break: BreakState
     canCancelTour: boolean // regular BESA who clocked in only for Tours - gets the Canceled Tour option
+    notes: ApiSessionNote[]
+}
+
+//root only - adds a note/comment to a clocked-in member's current visit
+export async function addSessionNote(targetUid: string, text: string): Promise<{success: boolean, detail?: string}> {
+    return kioskPost("session-note", {targetUid, text})
 }
 
 //root only - their tour was canceled: logs them out for the day and sets the day's hours to 30 minutes
@@ -368,11 +374,14 @@ export type ApiDayHours = {
     autoClockedOut?: boolean
     editedByAdmin?: boolean
     canceledTour?: boolean
-    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean}[]
+    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean, notes?: ApiSessionNote[]}[]
 }
 
+//a note/comment added to a visit from the kiosk's Current Sessions
+export type ApiSessionNote = {text: string, at: string | null}
+
 //a member who's clocked in right now and hasn't clocked out yet
-export type ApiOpenSession = {clockIn: string, activities: string[], break?: BreakState}
+export type ApiOpenSession = {clockIn: string, activities: string[], break?: BreakState, notes?: ApiSessionNote[]}
 
 //one date's effective office hours from BESA Booking - the weekly schedule, replaced by that date's
 //temporary hours if any, minus any unavailability. Times are "HH:MM" (24h, Pacific).

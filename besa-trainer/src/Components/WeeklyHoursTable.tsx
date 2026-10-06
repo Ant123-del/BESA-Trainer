@@ -1,5 +1,5 @@
 import type { JSX } from "react"
-import type { BreakState, OfficeScheduleDay } from "../Tools/Fetch"
+import type { BreakState, OfficeScheduleDay, WorkedOn } from "../Tools/Fetch"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import { sameDay, startOfWeek, toDateKey } from "../Tools/dates"
 import SessionNotes from "./SessionNotes"
@@ -14,6 +14,7 @@ export type WeeklyHoursSession = {
     breakSeconds?: number
     canceledTour?: boolean
     notes?: Note[]
+    workedOn?: WorkedOn[] // what they actually worked on, split at clock-out
 }
 
 export type WeeklyHoursEntry = {
@@ -92,7 +93,7 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
                     </div>
                     <div className="p-2 px-3 text-gray-400 flex flex-col gap-1 min-w-0">
                         {d.sessions.map((s, j) => (
-                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} canceledTour={s.canceledTour} notes={s.notes}/>
+                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} canceledTour={s.canceledTour} notes={s.notes} workedOn={s.workedOn}/>
                         ))}
                         {d.open && <SessionLine clockIn={d.open.clockIn} activities={d.open.activities} notes={d.open.notes}/>}
                         {d.sessions.length === 0 && !d.open &&
@@ -130,9 +131,9 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
 }
 
 //"9:02 AM - 11:30 AM  Tours, Other" - clockOut omitted means they're still clocked in
-function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, canceledTour, notes}: {
+function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, canceledTour, notes, workedOn}: {
     clockIn: Date, clockOut?: Date, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean,
-    notes?: Note[]
+    notes?: Note[], workedOn?: WorkedOn[]
 }) {
     return (
         <div className="flex flex-col gap-0.5">
@@ -152,6 +153,12 @@ function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSecond
                 {activities.length > 0 && <span className="text-gray-400">{activities.join(", ")}</span>}
                 {!!breakSeconds && <span className="text-sky-300/80 whitespace-nowrap">{Math.round(breakSeconds / 60)} min break</span>}
             </div>
+            {workedOn && workedOn.length > 0 && !canceledTour &&
+                <p className="text-xs text-gray-400">
+                    <span className="text-gray-500">{autoClockedOut ? "Worked on (estimated, split evenly):" : "Worked on:"}</span>{" "}
+                    {workedOn.map(w => `${w.activity} ${Math.round(w.minutes)}m`).join(" · ")}
+                </p>
+            }
             <SessionNotes notes={notes}/>
         </div>
     )

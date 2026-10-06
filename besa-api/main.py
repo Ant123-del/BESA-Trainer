@@ -22,6 +22,7 @@ from google.cloud.speech_v2 import SpeechClient
 from google.cloud.speech_v2.types import cloud_speech
 from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import Conflict
+from google.cloud.firestore_v1.base_query import FieldFilter
 from google.oauth2 import service_account as gcp_service_account
 
 from dotenv import load_dotenv
@@ -331,6 +332,53 @@ def besaAccounts(lead_user: dict = Depends(require_besa_lead)):
     return {"success": True, "accounts": accounts}
 
 
+#BESA Lead only (Manage Admins) - hours per activity per day from the permanent activity log, over the last
+#`days` days (today included). Hours are actual time worked (minutes / 60), not the rounded credited hours.
+@app.get("/activity-analytics")
+def activityAnalytics(days: int = 30, lead_user: dict = Depends(require_besa_lead)):
+    days = max(1, min(days, 365))
+    today = datetime.now(PACIFIC).date()
+    start = today - timedelta(days=days - 1)
+    db = firestore.client()
+    logs = db.collection(ACTIVITY_LOG_COLLECTION).where(filter=FieldFilter("date", ">=", start.isoformat())).stream()
+
+    by_day = {(start + timedelta(days=i)).isoformat(): {} for i in range(days)}
+    totals, estimated_hours, visits = {}, 0.0, 0
+    for doc in logs:
+        log = doc.to_dict() or {}
+        day = log.get("date")
+        if day not in by_day:
+            continue
+        visits += 1
+        for w in log.get("workedOn") or []:
+            name, hours = w.get("activity"), (w.get("minutes") or 0) / 60
+            if not name:
+                continue
+            by_day[day][name] = by_day[day].get(name, 0) + hours
+            totals[name] = totals.get(name, 0) + hours
+            if log.get("estimated"):
+                estimated_hours += hours
+
+    #stable order so an activity keeps its color: the shared activity-type list first, then anything else
+    root_doc = db.collection("training_data").document("data_root").get()
+    type_order = ((root_doc.to_dict() or {}).get("activityTypes") if root_doc.exists else None) or ACTIVITY_TYPES_DEFAULT
+    activities = [a for a in type_order if a in totals] + sorted(a for a in totals if a not in type_order)
+    #the full shared order (not just activities with data) - colors key off this, matching the kiosk's split bar
+    color_order = list(type_order) + sorted(a for a in totals if a not in type_order)
+
+    return {
+        "success": True,
+        "start": start.isoformat(),
+        "end": today.isoformat(),
+        "activities": activities,
+        "colorOrder": color_order,
+        "days": [{"date": d, "hours": {a: round(h, 2) for a, h in acts.items()}} for d, acts in by_day.items()],
+        "totals": {a: round(totals[a], 2) for a in activities},
+        "estimatedHours": round(estimated_hours, 2),
+        "visits": visits,
+    }
+
+
 # ---- Root kiosk: clock in/out, current sessions, hours, activity types ----
 PACIFIC = ZoneInfo("America/Los_Angeles")
 ACTIVITY_TYPES_DEFAULT = ["Tours", "Summer Project", "BESA Booking", "BESA Trainer", "Other"]
@@ -363,12 +411,12 @@ def _find_besa_by_student_id(db, student_id: str):
 #(or creates) the entry for checked_in_at's calendar day. Shared by manual clock-out and auto-clockout.
 #Each day also keeps its individual sessions (arrive/leave time + activities) so the hours table can show
 #when someone was actually there - entries written before sessions existed just have none.
-def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False, notes: list | None = None):
+def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False, notes: list | None = None, worked_on: list | None = None):
     elapsed_hours = max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
     keep_from = _period_start(now)
     session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out,
-               "breakSeconds": break_seconds, "canceledTour": canceled_tour, "notes": notes or []}
+               "breakSeconds": break_seconds, "canceledTour": canceled_tour, "notes": notes or [], "workedOn": worked_on or []}
 
     pruned = [e for e in existing if e.get("date") and e["date"].astimezone(PACIFIC) >= keep_from]
 
@@ -427,6 +475,7 @@ def _serialize_hours_entry(e: dict) -> dict:
                 "breakSeconds": s.get("breakSeconds") or 0,
                 "canceledTour": bool(s.get("canceledTour")),
                 "notes": _serialize_notes(s.get("notes")),
+                "workedOn": s.get("workedOn") or [],
             }
             for s in (e.get("sessions") or []) if s.get("clockIn") and s.get("clockOut")
         ],
@@ -670,11 +719,15 @@ def _auto_clock_out_if_needed(target_ref, data: dict) -> dict:
 
     activities = data.get("lastCheckedInActivities") or []
     break_seconds = _visit_break_seconds(data, effective_end)
+    worked_on = _work_split(_even_shares(activities), max(0.0, (effective_end - checked_in_at).total_seconds() / 60),
+                            max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5))
     new_hours, _ = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, effective_end, activities, now,
-                                      auto_clocked_out=True, break_seconds=break_seconds, notes=data.get("lastCheckedInNotes"))
+                                      auto_clocked_out=True, break_seconds=break_seconds, notes=data.get("lastCheckedInNotes"),
+                                      worked_on=worked_on)
 
     update = {"biWeeklyHours": new_hours, "lastCheckedIn": None, "lastCheckedInActivities": [], **VISIT_FIELDS_RESET}
     target_ref.update(update)
+    _log_activity(firestore.client(), target_ref.id, data, checked_in_at, effective_end, worked_on, estimated=True)
     return {**data, **update}
 
 
@@ -709,8 +762,102 @@ def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root
     return {"success": True, "besaName": data.get("besaName"), "clockedInAt": now.isoformat()}
 
 
+# ---- What they actually worked on (split chosen at clock-out) + the permanent activity log ----
+# At clock-out the kiosk asks which activities were actually worked on and how the visit splits between them
+# (a timeline bar with a slider between each pair). Each share becomes actual minutes plus its share of the
+# visit's credited hours. It's saved on the visit (workedOn) AND appended to a top-level activity_log
+# collection, which - unlike biWeeklyHours - is never pruned at the end of a pay period, so the Manage Admins
+# analytics can look back as far as it likes. Firestore rules don't match activity_log, so only this backend
+# (Admin SDK) can read or write it.
+ACTIVITY_LOG_COLLECTION = "activity_log"
+MAX_WORKED_ON = 12
+
+
+class WorkedOnShare(BaseModel):
+    activity: str
+    fraction: float = Field(gt=0, le=1)
+
+
+def _work_split(shares: list, elapsed_minutes: float, credited_hours: float) -> list:
+    total = sum(sh["fraction"] for sh in shares) or 1
+    return [{
+        "activity": sh["activity"],
+        "fraction": round(sh["fraction"] / total, 4),
+        "minutes": round(elapsed_minutes * sh["fraction"] / total, 1),
+        "hours": round(credited_hours * sh["fraction"] / total, 2),
+    } for sh in shares]
+
+
+def _even_shares(activities: list) -> list:
+    names = [a for a in dict.fromkeys(activities) if a]
+    return [{"activity": a, "fraction": 1 / len(names)} for a in names]
+
+
+def _validate_shares(raw: list) -> list:
+    shares, seen = [], set()
+    for sh in raw:
+        name = sh.activity.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Every activity worked on needs a name.")
+        if name in seen:
+            raise HTTPException(status_code=400, detail=f'"{name}" is listed twice.')
+        seen.add(name)
+        shares.append({"activity": name, "fraction": sh.fraction})
+    if not shares:
+        raise HTTPException(status_code=400, detail="Pick at least one activity you actually worked on.")
+    if len(shares) > MAX_WORKED_ON:
+        raise HTTPException(status_code=400, detail=f"Pick at most {MAX_WORKED_ON} activities.")
+    return shares
+
+
+def _log_activity(db, uid: str, data: dict, checked_in_at: datetime, ended_at: datetime, worked_on: list, estimated: bool):
+    if not worked_on:
+        return
+    db.collection(ACTIVITY_LOG_COLLECTION).add({
+        "uid": uid,
+        "besaName": data.get("besaName"),
+        "date": checked_in_at.date().isoformat(),
+        "clockIn": checked_in_at,
+        "clockOut": ended_at,
+        "workedOn": worked_on,
+        #auto clock-outs never got a split, so theirs is an even split of the intended activities
+        "estimated": estimated,
+        "createdAt": datetime.now(PACIFIC),
+    })
+
+
+class ClockOutPreviewRequest(BaseModel):
+    studentId: str
+
+
+#root only - who this School Id is and how long they've been in, so the kiosk can ask what they actually
+#worked on before clocking them out
+@app.post("/clock-out/preview")
+def clockOutPreview(request_data: ClockOutPreviewRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _find_besa_by_student_id(db, request_data.studentId)
+    if target_ref is None:
+        raise HTTPException(status_code=404, detail="No BESA account found with that School Id.")
+    data = _auto_clock_out_if_needed(target_ref, data)
+    if not data.get("lastCheckedIn"):
+        raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't currently clocked in.")
+    checked_in_at = _to_pacific(data["lastCheckedIn"])
+    now = datetime.now(PACIFIC)
+    return {
+        "success": True,
+        "besaName": data.get("besaName"),
+        "intendedActivities": data.get("lastCheckedInActivities") or [],
+        "clockedInAt": checked_in_at.isoformat(),
+        "elapsedMinutes": round(max(0.0, (now - checked_in_at).total_seconds() / 60), 1),
+        "creditedHours": max(0.0, round((now - checked_in_at).total_seconds() / 1800) * 0.5),
+    }
+
+
 class ClockOutRequest(BaseModel):
     studentId: str
+    #what they actually worked on and how the visit splits between them - an even split of the intended
+    #activities is used if this is left out (older kiosk builds)
+    actualActivities: list[WorkedOnShare] | None = None
 
 
 @app.post("/clock-out")
@@ -727,8 +874,13 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
     now = datetime.now(PACIFIC)
     checked_in_at = _to_pacific(last_checked_in)
     activities = data.get("lastCheckedInActivities") or []
+    shares = _validate_shares(request_data.actualActivities) if request_data.actualActivities is not None else _even_shares(activities)
+    elapsed_minutes = max(0.0, (now - checked_in_at).total_seconds() / 60)
+    credited_hours = max(0.0, round((now - checked_in_at).total_seconds() / 1800) * 0.5)
+    worked_on = _work_split(shares, elapsed_minutes, credited_hours)
     new_hours, elapsed_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now, activities, now,
-                                                  break_seconds=_visit_break_seconds(data, now), notes=data.get("lastCheckedInNotes"))
+                                                  break_seconds=_visit_break_seconds(data, now), notes=data.get("lastCheckedInNotes"),
+                                                  worked_on=worked_on)
 
     target_ref.update({
         "biWeeklyHours": new_hours,
@@ -736,7 +888,8 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
         "lastCheckedInActivities": [],
         **VISIT_FIELDS_RESET,
     })
-    return {"success": True, "besaName": data.get("besaName"), "hoursThisSession": elapsed_hours}
+    _log_activity(db, target_ref.id, data, checked_in_at, now, worked_on, estimated=request_data.actualActivities is None)
+    return {"success": True, "besaName": data.get("besaName"), "hoursThisSession": elapsed_hours, "workedOn": worked_on}
 
 
 @app.post("/check-auto-clockout")

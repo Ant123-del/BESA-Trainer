@@ -6,9 +6,11 @@ import BreakCriteria from "../Components/BreakCriteria"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import { Loading } from "../Components/SectionEditor/Edit"
 import SessionNotes from "../Components/SessionNotes"
+import ActivitySplitBar from "../Components/ActivitySplitBar"
+import { evenFractions } from "../Tools/activityColors"
 import { FaPlus } from "react-icons/fa"
 import {
-    addActivityType, addSessionNote, canceledTour, clockIn, clockOut, endBreak, getActivityTypes, getCurrentSessions,
+    addActivityType, addSessionNote, canceledTour, clockIn, clockOut, clockOutPreview, endBreak, getActivityTypes, getCurrentSessions,
     removeActivityType, startBreak, type KioskSession
 } from "../Tools/Fetch"
 
@@ -45,7 +47,7 @@ export default function RootDashboard() {
             <div className="h-16 relative top-0 left-0 w-full"></div>
             <div className="w-5/6 max-w-3xl mx-auto py-10 flex flex-col gap-8">
                 <ClockInPanel activityTypes={activityTypes} onClockedIn={() => refreshSessions()}/>
-                <ClockOutPanel sessions={sessions} onChanged={() => refreshSessions()}/>
+                <ClockOutPanel sessions={sessions} activityTypes={activityTypes} onChanged={() => refreshSessions()}/>
                 <ActivityTypesPanel activityTypes={activityTypes} setActivityTypes={setActivityTypes}/>
             </div>
         </div>
@@ -130,45 +132,131 @@ function ClockInPanel({activityTypes, onClockedIn}: {activityTypes: string[] | n
     )
 }
 
-function ClockOutPanel({sessions, onChanged}: {sessions: KioskSession[] | null, onChanged: () => void}) {
+type ClockOutPreview = {besaName: string, intendedActivities: string[], elapsedMinutes: number, creditedHours: number}
+
+//two steps: School Id -> Next, then "what did you actually work on?" (pick activities, split the visit
+//between them on the timeline bar) -> Confirm Clock Out
+function ClockOutPanel({sessions, activityTypes, onChanged}: {
+    sessions: KioskSession[] | null, activityTypes: string[] | null, onChanged: () => void
+}) {
     const [studentId, setStudentId] = useState("")
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState<{text: string, error: boolean} | null>(null)
+    const [preview, setPreview] = useState<ClockOutPreview | null>(null)
+    const [worked, setWorked] = useState<string[]>([])
+    const [fractions, setFractions] = useState<number[]>([])
 
-    async function handleSubmit() {
+    //the shared activity list, plus anything they clocked in for that's since been removed from it - this is
+    //also the color order, so an activity's color matches the analytics chart
+    const choices = [...(activityTypes || []), ...(preview?.intendedActivities || []).filter(a => !(activityTypes || []).includes(a))]
+
+    function setWorkedOn(next: string[]) {
+        setWorked(next)
+        setFractions(evenFractions(next.length))
+    }
+
+    function reset() {
+        setPreview(null)
+        setWorked([])
+        setFractions([])
+    }
+
+    async function handleNext() {
         if (!studentId.trim()) return
         setBusy(true)
         setMessage(null)
-        const result = await clockOut(studentId.trim())
+        const result = await clockOutPreview(studentId.trim())
+        setBusy(false)
+        if (result.success) {
+            setPreview({
+                besaName: result.besaName || "",
+                intendedActivities: result.intendedActivities || [],
+                elapsedMinutes: result.elapsedMinutes || 0,
+                creditedHours: result.creditedHours || 0,
+            })
+            //start from what they said they'd do - easy to change
+            setWorkedOn(result.intendedActivities || [])
+        } else {
+            setMessage({text: result.detail || "Something went wrong.", error: true})
+        }
+    }
+
+    async function handleConfirm() {
+        if (!preview || worked.length === 0) return
+        setBusy(true)
+        setMessage(null)
+        const result = await clockOut(studentId.trim(), worked.map((activity, i) => ({activity, fraction: fractions[i]})))
+        setBusy(false)
         if (result?.success) {
             setMessage({text: `Clocked out ${result.besaName || ""} - ${result.hoursThisSession} hour(s) this session.`, error: false})
             setStudentId("")
+            reset()
             onChanged()
         } else {
             setMessage({text: result?.detail || "Something went wrong.", error: true})
         }
-        setBusy(false)
     }
 
     return (
         <section className="bg-gray-800 rounded-2xl p-6">
             <h2 className="text-2xl tracking-wide mb-4 text-center">Clock Out</h2>
-            <label className="block text-sm text-gray-400 mb-1">Enter School Id</label>
-            <input
-                value={studentId}
-                onChange={(e) => setStudentId(e.target.value)}
-                placeholder="Ex: 1234567"
-                className="w-full p-3 rounded-xl bg-gray-700 text-white mb-4"
-            />
-            {message && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
-            <button
-                onClick={() => void handleSubmit()}
-                disabled={busy || !studentId.trim()}
-                className="w-full py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 mb-6"
-            >
-                {busy && <MoonLoader color="white" size={16}/>}
-                Submit
-            </button>
+            {preview === null ?
+                <>
+                    <label className="block text-sm text-gray-400 mb-1">Enter School Id</label>
+                    <input
+                        value={studentId}
+                        onChange={(e) => setStudentId(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") void handleNext() }}
+                        placeholder="Ex: 1234567"
+                        className="w-full p-3 rounded-xl bg-gray-700 text-white mb-4"
+                    />
+                    {message && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
+                    <button
+                        onClick={() => void handleNext()}
+                        disabled={busy || !studentId.trim()}
+                        className="w-full py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 mb-6"
+                    >
+                        {busy && <MoonLoader color="white" size={16}/>}
+                        Next
+                    </button>
+                </>
+                :
+                <div className="mb-6">
+                    <p className="text-center text-sm text-gray-300 mb-1">
+                        <span className="font-semibold text-white">{preview.besaName}</span> · in for {Math.round(preview.elapsedMinutes)} min
+                    </p>
+                    <h3 className="text-lg tracking-wide text-center mb-1">What activities did you actually work on?</h3>
+                    <p className="text-xs text-gray-400 text-center mb-3">
+                        Pick everything you worked on, then drag the dividers so the bar matches how your time was split.
+                    </p>
+                    <div className="flex flex-wrap gap-2 justify-center mb-4">
+                        {choices.map(name => (
+                            <ActivityChip key={name} label={name} selected={worked.includes(name)}
+                                onClick={() => setWorkedOn(worked.includes(name) ? worked.filter(a => a !== name) : [...worked, name])}/>
+                        ))}
+                    </div>
+                    {worked.length === 0 ?
+                        <p className="text-sm text-gray-400 text-center mb-3">Pick at least one activity you actually worked on.</p>
+                        :
+                        <div className="mb-4">
+                            <ActivitySplitBar activities={worked} fractions={fractions} onChange={setFractions}
+                                totalMinutes={preview.elapsedMinutes} colorOrder={choices}/>
+                        </div>
+                    }
+                    {message && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
+                    <div className="flex gap-2">
+                        <button onClick={() => { reset(); setMessage(null) }} disabled={busy}
+                            className="flex-1 py-3 rounded-full border-solid border-2 border-gray-400 hover:bg-gray-700 disabled:opacity-40">
+                            Back
+                        </button>
+                        <button onClick={() => void handleConfirm()} disabled={busy || worked.length === 0}
+                            className="flex-[2] py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                            {busy && <MoonLoader color="white" size={16}/>}
+                            Confirm Clock Out
+                        </button>
+                    </div>
+                </div>
+            }
 
             <hr className="border-gray-700 mb-4"/>
             <h3 className="text-lg tracking-wide mb-3">Current Sessions</h3>

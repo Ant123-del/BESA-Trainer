@@ -245,7 +245,20 @@ export async function clockIn(studentId: string, activities: string[]): Promise<
 }
 
 //root only - closes the besa/besaLead account's session with this studentId and records the hours.
-export async function clockOut(studentId: string): Promise<{success: boolean, besaName?: string, hoursThisSession?: number, detail?: string} | void> {
+//one activity's share of a visit, as chosen on the clock-out split bar (fractions sum to 1)
+export type WorkedOnShare = {activity: string, fraction: number}
+//what's saved per activity: actual minutes plus its share of the visit's credited hours
+export type WorkedOn = {activity: string, fraction: number, minutes: number, hours: number}
+
+//root only - who this School Id is and how long they've been in, before asking what they actually worked on
+export async function clockOutPreview(studentId: string) {
+    return kioskPost("clock-out/preview", {studentId}) as Promise<{
+        success: boolean, detail?: string, besaName?: string, intendedActivities?: string[],
+        clockedInAt?: string, elapsedMinutes?: number, creditedHours?: number
+    }>
+}
+
+export async function clockOut(studentId: string, actualActivities?: WorkedOnShare[]): Promise<{success: boolean, besaName?: string, hoursThisSession?: number, detail?: string} | void> {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -260,7 +273,7 @@ export async function clockOut(studentId: string): Promise<{success: boolean, be
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${idToken}`
             },
-            body: JSON.stringify({studentId})
+            body: JSON.stringify({studentId, actualActivities})
         })
         const data = await response.json() as {success: boolean, besaName?: string, hoursThisSession?: number, detail?: string}
         if (!response.ok) {
@@ -374,7 +387,7 @@ export type ApiDayHours = {
     autoClockedOut?: boolean
     editedByAdmin?: boolean
     canceledTour?: boolean
-    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean, notes?: ApiSessionNote[]}[]
+    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean, notes?: ApiSessionNote[], workedOn?: WorkedOn[]}[]
 }
 
 //a note/comment added to a visit from the kiosk's Current Sessions
@@ -648,4 +661,37 @@ export async function getScript(scriptSrc: string): Promise<string | void> {
         return ""
     }
 
+}
+//hours per activity per day from the permanent activity log (Manage Admins analytics)
+export type ActivityAnalytics = {
+    start: string
+    end: string
+    activities: string[] // the ones with data, in the shared activity-type order, then anything else
+    colorOrder: string[] // the full shared activity-type order - colors key off this so they match the kiosk
+    days: {date: string, hours: Record<string, number>}[]
+    totals: Record<string, number>
+    estimatedHours: number // from auto clock-outs, which split evenly across the intended activities
+    visits: number
+}
+
+//BESA Lead only - the last `days` days of activity analytics
+export async function getActivityAnalytics(days: number): Promise<ActivityAnalytics | {success: false, detail: string}> {
+    try {
+        const user = getAuth().currentUser
+        if (!user) {
+            return {success: false, detail: "Not logged in."}
+        }
+        const idToken = await user.getIdToken()
+        const response = await fetch(url + `activity-analytics?days=${days}`, {
+            headers: {"Authorization": `Bearer ${idToken}`}
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+            return {success: false, detail: typeof data.detail === "string" ? data.detail : `Request failed (${response.status})`}
+        }
+        return data as ActivityAnalytics
+    } catch (e) {
+        console.error(e)
+        return {success: false, detail: "Couldn't reach the server."}
+    }
 }

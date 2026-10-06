@@ -132,7 +132,7 @@ function ClockInPanel({activityTypes, onClockedIn}: {activityTypes: string[] | n
     )
 }
 
-type ClockOutPreview = {besaName: string, intendedActivities: string[], elapsedMinutes: number, creditedHours: number}
+type ClockOutPreview = {besaName: string, intendedActivities: string[], elapsedMinutes: number, creditedHours: number, clockedInAt: Date}
 
 //two steps: School Id -> Next, then "what did you actually work on?" (pick activities, split the visit
 //between them on the timeline bar) -> Confirm Clock Out
@@ -173,6 +173,7 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                 intendedActivities: result.intendedActivities || [],
                 elapsedMinutes: result.elapsedMinutes || 0,
                 creditedHours: result.creditedHours || 0,
+                clockedInAt: result.clockedInAt ? new Date(result.clockedInAt) : new Date(Date.now() - (result.elapsedMinutes || 0) * 60_000),
             })
             //start from what they said they'd do - easy to change
             setWorkedOn(result.intendedActivities || [])
@@ -240,7 +241,7 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                         :
                         <div className="mb-4">
                             <ActivitySplitBar activities={worked} fractions={fractions} onChange={setFractions}
-                                totalMinutes={preview.elapsedMinutes} colorOrder={choices}/>
+                                totalMinutes={preview.elapsedMinutes} colorOrder={choices} startTime={preview.clockedInAt}/>
                         </div>
                     }
                     {message && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}

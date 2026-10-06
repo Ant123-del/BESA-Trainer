@@ -3,6 +3,7 @@ import { MoonLoader } from "react-spinners"
 import { getActivityAnalytics, type ActivityAnalytics as Analytics } from "../Tools/Fetch"
 import { ACTIVITY_PALETTE, OTHER_COLOR, activityColor } from "../Tools/activityColors"
 import { fromDateKey } from "../Tools/dates"
+import SortToggle, { type SortOrder } from "./SortToggle"
 
 const RANGES = [7, 14, 30, 90]
 const OTHER = "Other activities"
@@ -35,6 +36,7 @@ function niceScale(max: number): {top: number, step: number} {
 export default function ActivityAnalytics(): JSX.Element {
     const [days, setDays] = useState(30)
     const [view, setView] = useState<"chart" | "table">("chart")
+    const [sort, setSort] = useState<SortOrder>("default")
     const [data, setData] = useState<Analytics | null>(null)
     const [error, setError] = useState("")
     const [loading, setLoading] = useState(true)
@@ -66,11 +68,16 @@ export default function ActivityAnalytics(): JSX.Element {
     const hasSlot = (a: string) => { const i = colorOrder.indexOf(a); return i >= 0 && i < ACTIVITY_PALETTE.length }
     const withData = data?.activities || []
     const overflow = withData.filter(a => !hasSlot(a))
-    const series = [...withData.filter(hasSlot), ...(overflow.length ? [OTHER] : [])]
     const colorOf = (name: string) => name === OTHER ? OTHER_COLOR : activityColor(name, colorOrder)
     const valueOf = (hours: Record<string, number>, name: string) => name === OTHER
         ? overflow.reduce((sum, a) => sum + (hours[a] || 0), 0)
         : hours[name] || 0
+    //rows/legend/table columns: the shared activity order by default, or by hours completed in this range
+    const series = [...withData.filter(hasSlot), ...(overflow.length ? [OTHER] : [])]
+    if (sort !== "default") {
+        const total = (name: string) => valueOf(data?.totals || {}, name)
+        series.sort((a, b) => sort === "desc" ? total(b) - total(a) : total(a) - total(b))
+    }
     const totals = series.map(name => ({name, hours: valueOf(data?.totals || {}, name)}))
     const grandTotal = totals.reduce((sum, t) => sum + t.hours, 0)
 
@@ -83,6 +90,7 @@ export default function ActivityAnalytics(): JSX.Element {
                 </div>
                 {/* filters live in one row above the chart */}
                 <div className="flex items-center gap-2 flex-wrap">
+                    <SortToggle value={sort} onChange={setSort}/>
                     <div className="flex rounded-full bg-gray-900 p-0.5" role="group" aria-label="Date range">
                         {RANGES.map(r => (
                             <button key={r} onClick={() => changeRange(r)} aria-pressed={days === r}

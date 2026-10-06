@@ -696,3 +696,31 @@ export async function getActivityAnalytics(days: number): Promise<ActivityAnalyt
         return {success: false, detail: "Couldn't reach the server."}
     }
 }
+
+//what's being worked on right now (no names) - Manage Admins' Current Sessions chart
+export type CurrentActivity = {
+    asOf: string
+    people: number
+    colorOrder: string[]
+    activities: {activity: string, soFarHours: number, potentialHours: number}[]
+}
+
+//BESA Lead only - hours so far + potential hours (through today's office hours) per activity being worked on
+export async function getCurrentActivity(): Promise<CurrentActivity | {success: false, detail: string}> {
+    try {
+        const user = getAuth().currentUser
+        if (!user) {
+            return {success: false, detail: "Not logged in."}
+        }
+        const idToken = await user.getIdToken()
+        const response = await fetch(url + "current-activity", {headers: {"Authorization": `Bearer ${idToken}`}})
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+            return {success: false, detail: typeof data.detail === "string" ? data.detail : `Request failed (${response.status})`}
+        }
+        return data as CurrentActivity
+    } catch (e) {
+        console.error(e)
+        return {success: false, detail: "Couldn't reach the server."}
+    }
+}

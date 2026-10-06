@@ -379,6 +379,46 @@ def activityAnalytics(days: int = 30, lead_user: dict = Depends(require_besa_lea
     }
 
 
+#BESA Lead only (Manage Admins) - what's being worked on right now, without saying who. For everyone clocked
+#in: time so far, and their potential hours (time so far + office hours still left today, from that date's
+#effective BESA Booking schedule), each split evenly across the activities they clocked in for - the real
+#split isn't known until they clock out.
+@app.get("/current-activity")
+def currentActivity(lead_user: dict = Depends(require_besa_lead)):
+    db = firestore.client()
+    now = datetime.now(PACIFIC)
+    by_activity, people = {}, 0
+    for u in db.collection("training_data").document("data_root").collection("users").stream():
+        data = u.to_dict() or {}
+        if data.get("accountType") not in ("besa", "besaLead") or not data.get("lastCheckedIn"):
+            continue
+        data = _auto_clock_out_if_needed(u.reference, data)
+        if not data.get("lastCheckedIn"):
+            continue
+        people += 1
+        checked_in_at = _to_pacific(data["lastCheckedIn"])
+        so_far = max(0.0, (now - checked_in_at).total_seconds() / 3600)
+        office_end = _get_office_hours_end(data.get("besaName"), checked_in_at)
+        remaining = max(0.0, (office_end - now).total_seconds() / 3600) if office_end else 0.0
+        activities = [a for a in dict.fromkeys(data.get("lastCheckedInActivities") or []) if a] or ["Unspecified"]
+        for a in activities:
+            entry = by_activity.setdefault(a, {"soFar": 0.0, "potential": 0.0})
+            entry["soFar"] += so_far / len(activities)
+            entry["potential"] += (so_far + remaining) / len(activities)
+
+    root_doc = db.collection("training_data").document("data_root").get()
+    type_order = ((root_doc.to_dict() or {}).get("activityTypes") if root_doc.exists else None) or ACTIVITY_TYPES_DEFAULT
+    color_order = list(type_order) + sorted(a for a in by_activity if a not in type_order)
+    return {
+        "success": True,
+        "asOf": now.isoformat(),
+        "people": people,
+        "colorOrder": color_order,
+        "activities": [{"activity": a, "soFarHours": round(by_activity[a]["soFar"], 2), "potentialHours": round(by_activity[a]["potential"], 2)}
+                       for a in color_order if a in by_activity],
+    }
+
+
 # ---- Root kiosk: clock in/out, current sessions, hours, activity types ----
 PACIFIC = ZoneInfo("America/Los_Angeles")
 ACTIVITY_TYPES_DEFAULT = ["Tours", "Summer Project", "BESA Booking", "BESA Trainer", "Other"]

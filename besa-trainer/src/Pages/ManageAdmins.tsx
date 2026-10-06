@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { MoonLoader } from "react-spinners"
 import Header from "../Components/Header"
 import ActivityAnalytics from "../Components/ActivityAnalytics"
+import CurrentActivity from "../Components/CurrentActivity"
 import { getBesaAccounts, setAdminStatus, type BesaAccount } from "../Tools/Fetch"
 
 //BESA Lead only (gated by RequireAccess in App.tsx) - lists every besa/besaLead account and lets a
@@ -36,6 +37,7 @@ export default function ManageAdmins() {
                 <h1 className="text-2xl sm:text-3xl md:text-4xl tracking-wider mb-1">Manage Admins</h1>
                 <p className="text-gray-400 text-sm mb-8">Grant or revoke admin access for BESA accounts. BESA Leads always have admin access.</p>
 
+                <CurrentActivity/>
                 <ActivityAnalytics/>
 
                 {error && <p className="text-red-400 text-sm mb-4">{error}</p>}

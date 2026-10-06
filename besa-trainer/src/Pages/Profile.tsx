@@ -34,6 +34,7 @@ function toWeeklyHoursEntries(entries: RawDayHours[]): WeeklyHoursEntry[] {
         activities: e.activities,
         autoClockedOut: e.autoClockedOut,
         editedByAdmin: e.editedByAdmin,
+        breakAllowanceMinutes: "breakAllowanceMinutes" in e ? e.breakAllowanceMinutes : undefined,
         date: toDate(e.date),
         sessions: (e.sessions || []).map(s => ({
             clockIn: toDate(s.clockIn),

@@ -24,6 +24,7 @@ export type WeeklyHoursEntry = {
     autoClockedOut?: boolean
     editedByAdmin?: boolean
     sessions?: WeeklyHoursSession[]
+    breakAllowanceMinutes?: number // that day's break total, from the backend (scheduled vs. time actually in)
 }
 
 //someone clocked in right now - shown on its day as "9:02 AM - now" (no hours yet until they clock out)
@@ -70,7 +71,8 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
             sessions: [...(entry?.sessions || [])].sort((a, b) => a.clockIn.getTime() - b.clockIn.getTime()),
             open: openSession && sameDay(openSession.clockIn, date) ? openSession : null,
             upToToday: date.getTime() <= today.getTime(),
-            breakAllowanceSeconds: (schedule?.find(o => o.date === toDateKey(date))?.breakAllowanceMinutes || 0) * 60,
+            //days they came in carry the backend's allowance (based on time actually in); other days use the schedule
+            breakAllowanceSeconds: (entry?.breakAllowanceMinutes ?? schedule?.find(o => o.date === toDateKey(date))?.breakAllowanceMinutes ?? 0) * 60,
         }
     })
     const total = days.reduce((sum, d) => sum + d.hours, 0)
@@ -150,15 +152,15 @@ function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSecond
                 {autoClockedOut &&
                     <Badge label="AUTO" title="Forgot to clock out - leave time is their scheduled office-hours end (or 8 PM)" className="bg-yellow-600 text-black"/>
                 }
-                {activities.length > 0 && <span className="text-gray-400">{activities.join(", ")}</span>}
+                {/* one list: what they actually worked on (with time) once known, otherwise what they intended */}
+                {workedOn && workedOn.length > 0 ?
+                    <span className="text-gray-400" title={autoClockedOut ? "Forgot to clock out - split evenly across what they clocked in for" : "What they actually worked on"}>
+                        {workedOn.map(w => `${w.activity} ${Math.round(w.minutes)}m`).join(" · ")}
+                    </span>
+                    : activities.length > 0 && <span className="text-gray-400">{activities.join(", ")}</span>
+                }
                 {!!breakSeconds && <span className="text-sky-300/80 whitespace-nowrap">{Math.round(breakSeconds / 60)} min break</span>}
             </div>
-            {workedOn && workedOn.length > 0 && !canceledTour &&
-                <p className="text-xs text-gray-400">
-                    <span className="text-gray-500">{autoClockedOut ? "Worked on (estimated, split evenly):" : "Worked on:"}</span>{" "}
-                    {workedOn.map(w => `${w.activity} ${Math.round(w.minutes)}m`).join(" · ")}
-                </p>
-            }
             <SessionNotes notes={notes}/>
         </div>
     )

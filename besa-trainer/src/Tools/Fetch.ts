@@ -387,6 +387,7 @@ export type ApiDayHours = {
     autoClockedOut?: boolean
     editedByAdmin?: boolean
     canceledTour?: boolean
+    breakAllowanceMinutes?: number // that day's break total (larger of scheduled hours and time actually in)
     sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean, notes?: ApiSessionNote[], workedOn?: WorkedOn[]}[]
 }
 

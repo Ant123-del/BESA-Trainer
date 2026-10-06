@@ -415,6 +415,10 @@ def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: d
     elapsed_hours = max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
     keep_from = _period_start(now)
+    #once we know what they actually worked on, that's what the visit (and the day) records - the intended
+    #activities picked at clock-in aren't kept. Canceled tours have no split, so they keep their intended ones.
+    if worked_on:
+        activities = [w["activity"] for w in worked_on]
     session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out,
                "breakSeconds": break_seconds, "canceledTour": canceled_tour, "notes": notes or [], "workedOn": worked_on or []}
 
@@ -651,7 +655,9 @@ SHORT_BREAK_SECONDS = 5 * 60
 
 
 def _break_allowance_minutes(scheduled_hours: float) -> int:
-    whole_hours = int(scheduled_hours)
+    #rounded to the nearest half hour first, the same way worked hours are credited - so clocking in a few
+    #seconds after the hour (2.99h) doesn't drop someone a whole step
+    whole_hours = int(round(scheduled_hours * 2) / 2)
     minutes = 5 * min(whole_hours, 3)
     if whole_hours > 5:
         minutes += 5 * (whole_hours - 5)
@@ -661,6 +667,35 @@ def _break_allowance_minutes(scheduled_hours: float) -> int:
 def _scheduled_hours_on(besa_name, day: datetime) -> float:
     office_day = _office_day_for(besa_name, day)
     return office_day["scheduledHours"] if office_day else 0.0
+
+
+#hours already clocked in on `day` from finished visits (falls back to the day's credited hours for entries
+#recorded before visits were tracked)
+def _worked_hours_on(entries: list, day) -> float:
+    for e in entries or []:
+        if e.get("date") and e["date"].astimezone(PACIFIC).date() == day:
+            sessions = e.get("sessions") or []
+            if not sessions:
+                return e.get("hours") or 0
+            return sum(max(0.0, (s["clockOut"] - s["clockIn"]).total_seconds() / 3600)
+                       for s in sessions if s.get("clockIn") and s.get("clockOut") and not s.get("canceledTour"))
+    return 0.0
+
+
+#the hours a day's break allowance is based on: the larger of their scheduled office hours and the time
+#they're actually in the office - so meetings marked "unavailable" on BESA Booking, or staying past their
+#schedule, don't shortchange anyone. For today that's time already clocked in + the scheduled time still left.
+def _break_basis_hours(office_day: dict | None, worked_hours: float, open_since: datetime | None, now: datetime) -> float:
+    scheduled = office_day["scheduledHours"] if office_day else 0.0
+    in_office = worked_hours
+    if open_since is not None:
+        in_office += max(0.0, (now - open_since).total_seconds() / 3600)
+        slot_ends = [_hhmm_to_minutes(sl["end"]) for sl in (office_day or {}).get("slots") or []]
+        if slot_ends:
+            last_end = max(slot_ends)
+            scheduled_end = now.replace(hour=last_end // 60, minute=last_end % 60, second=0, microsecond=0)
+            in_office += max(0.0, (scheduled_end - now).total_seconds() / 3600)
+    return max(scheduled, in_office)
 
 
 #break time used this visit, including however much of an in-progress break has elapsed by `now`
@@ -680,13 +715,16 @@ def _visit_break_seconds(data: dict, now: datetime) -> int:
 
 def _break_state(data: dict, now: datetime) -> dict:
     checked_in_at = _to_pacific(data["lastCheckedIn"])
-    scheduled = _scheduled_hours_on(data.get("besaName"), checked_in_at)
-    allowance = _break_allowance_minutes(scheduled) * 60
+    office_day = _office_day_for(data.get("besaName"), checked_in_at)
+    scheduled = office_day["scheduledHours"] if office_day else 0.0
+    basis = _break_basis_hours(office_day, _worked_hours_on(data.get("biWeeklyHours"), checked_in_at.date()), checked_in_at, now)
+    allowance = _break_allowance_minutes(basis) * 60
     used = _break_used_seconds(data, now)
     ends = _to_pacific(data["breakEndsAt"]) if data.get("breakEndsAt") else None
     on_break = bool(ends and now < ends)
     return {
         "scheduledHours": round(scheduled, 2),
+        "basisHours": round(basis, 2),
         "allowanceSeconds": allowance,
         "usedSeconds": used,
         "remainingSeconds": max(0, allowance - used),
@@ -903,7 +941,7 @@ def checkAutoClockout(user: dict = Depends(get_current_user), fresh: bool = Fals
         raise HTTPException(status_code=404, detail="User not found.")
 
     data = _auto_clock_out_if_needed(target_ref, doc.to_dict() or {})
-    hours = [_serialize_hours_entry(e) for e in (data.get("biWeeklyHours") or []) if e.get("date")]
+    hours = _shown_weeks_hours(data)
     return {"success": True, "biWeeklyHours": hours, "openSession": _open_session(data),
             "officeSchedule": _office_schedule(data.get("besaName"), _get_roster()),
             "periodStart": _period_start(datetime.now(PACIFIC)).date().isoformat()}
@@ -1042,13 +1080,21 @@ def endBreak(request_data: EndBreakRequest, root_user: dict = Depends(require_ro
     return {"success": True, "besaName": data.get("besaName")}
 
 
-def _shown_weeks_hours(data: dict) -> list:
+#the current period's hours entries, each with that day's break allowance (same rule as the kiosk's live one:
+#the larger of their scheduled office hours and the time they were actually in the office that day)
+def _shown_weeks_hours(data: dict, roster_docs: list | None = None) -> list:
     shown_from = _period_start(datetime.now(PACIFIC))
-    return [
-        _serialize_hours_entry(e)
-        for e in (data.get("biWeeklyHours") or [])
-        if e.get("date") and e["date"].astimezone(PACIFIC) >= shown_from
-    ]
+    roster_doc = _roster_doc_for(data.get("besaName"), roster_docs if roster_docs is not None else _get_roster())
+    entries = data.get("biWeeklyHours") or []
+    shown = []
+    for e in entries:
+        if not (e.get("date") and e["date"].astimezone(PACIFIC) >= shown_from):
+            continue
+        day = e["date"].astimezone(PACIFIC).date()
+        office_day = _office_day(roster_doc, day) if roster_doc else None
+        basis = _break_basis_hours(office_day, _worked_hours_on(entries, day), None, datetime.now(PACIFIC))
+        shown.append({**_serialize_hours_entry(e), "breakAllowanceMinutes": _break_allowance_minutes(basis)})
+    return shown
 
 
 # ---- Root admin login (passcode on top of the already-signed-in root kiosk account) ----
@@ -1213,7 +1259,7 @@ def allHours(root_user: dict = Depends(require_root_admin), fresh: bool = False)
         if data.get("lastCheckedIn"):
             data = _auto_clock_out_if_needed(u.reference, data)
         members.append({"uid": u.id, "besaName": data.get("besaName"), "studentId": data.get("studentId"),
-                        "hours": _shown_weeks_hours(data), "openSession": _open_session(data),
+                        "hours": _shown_weeks_hours(data, roster_docs), "openSession": _open_session(data),
                         "officeSchedule": _office_schedule(data.get("besaName"), roster_docs)})
     return {"success": True, "members": members, "periodStart": _period_start(datetime.now(PACIFIC)).date().isoformat()}
 

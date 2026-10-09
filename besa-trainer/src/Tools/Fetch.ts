@@ -251,14 +251,16 @@ export type WorkedOnShare = {activity: string, fraction: number}
 export type WorkedOn = {activity: string, fraction: number, minutes: number, hours: number}
 
 //root only - who this School Id is and how long they've been in, before asking what they actually worked on
-export async function clockOutPreview(studentId: string) {
-    return kioskPost("clock-out/preview", {studentId}) as Promise<{
+//leaveEarly: they're leaving early with today's unused break time - creditedHours then includes it, and
+//leaveEarlySeconds says how much that is
+export async function clockOutPreview(studentId: string, leaveEarly = false) {
+    return kioskPost("clock-out/preview", {studentId, leaveEarly}) as Promise<{
         success: boolean, detail?: string, besaName?: string, intendedActivities?: string[],
-        clockedInAt?: string, elapsedMinutes?: number, creditedHours?: number
+        clockedInAt?: string, elapsedMinutes?: number, creditedHours?: number, leaveEarlySeconds?: number
     }>
 }
 
-export async function clockOut(studentId: string, actualActivities?: WorkedOnShare[]): Promise<{success: boolean, besaName?: string, hoursThisSession?: number, detail?: string} | void> {
+export async function clockOut(studentId: string, actualActivities?: WorkedOnShare[], leaveEarly = false): Promise<{success: boolean, besaName?: string, hoursThisSession?: number, leftEarlySeconds?: number, detail?: string} | void> {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -273,9 +275,9 @@ export async function clockOut(studentId: string, actualActivities?: WorkedOnSha
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${idToken}`
             },
-            body: JSON.stringify({studentId, actualActivities})
+            body: JSON.stringify({studentId, actualActivities, leaveEarly})
         })
-        const data = await response.json() as {success: boolean, besaName?: string, hoursThisSession?: number, detail?: string}
+        const data = await response.json() as {success: boolean, besaName?: string, hoursThisSession?: number, leftEarlySeconds?: number, detail?: string}
         if (!response.ok) {
             return {success: false, detail: data.detail || `Request failed (${response.status})`}
         }
@@ -399,7 +401,7 @@ export type ApiDayHours = {
     editedByAdmin?: boolean
     canceledTour?: boolean
     breakAllowanceMinutes?: number // that day's break total (larger of scheduled hours and time actually in)
-    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean, notes?: ApiSessionNote[], workedOn?: WorkedOn[]}[]
+    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean, notes?: ApiSessionNote[], workedOn?: WorkedOn[], leftEarlySeconds?: number}[]
     dayNotes?: ApiDayNote[] // notes the member wrote on this day from their own My Hours
 }
 

@@ -46,6 +46,7 @@ function toWeeklyHoursEntries(entries: RawDayHours[]): WeeklyHoursEntry[] {
             canceledTour: s.canceledTour,
             notes: toNotes(s.notes),
             workedOn: s.workedOn,
+            leftEarlySeconds: s.leftEarlySeconds,
         })),
         dayNotes: (e.dayNotes || []).map(n => ({id: n.id, text: n.text, at: n.at ? toDate(n.at) : null})),
     }))

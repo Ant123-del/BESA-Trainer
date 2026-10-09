@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { MoonLoader } from "react-spinners"
 import Header from "../Components/Header"
 import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
@@ -132,10 +132,11 @@ function ClockInPanel({activityTypes, onClockedIn}: {activityTypes: string[] | n
     )
 }
 
-type ClockOutPreview = {besaName: string, intendedActivities: string[], elapsedMinutes: number, creditedHours: number, clockedInAt: Date}
+type ClockOutPreview = {besaName: string, intendedActivities: string[], elapsedMinutes: number, creditedHours: number, clockedInAt: Date, leaveEarlySeconds: number}
 
 //two steps: School Id -> Next, then "what did you actually work on?" (pick activities, split the visit
-//between them on the timeline bar) -> Confirm Clock Out
+//between them on the timeline bar) -> Confirm Clock Out. A Current Sessions row's "Leave Early" puts it in
+//leave-early mode: same steps, but they're credited their unused break time as if they'd stayed.
 function ClockOutPanel({sessions, activityTypes, onChanged}: {
     sessions: KioskSession[] | null, activityTypes: string[] | null, onChanged: () => void
 }) {
@@ -145,6 +146,17 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
     const [preview, setPreview] = useState<ClockOutPreview | null>(null)
     const [worked, setWorked] = useState<string[]>([])
     const [fractions, setFractions] = useState<number[]>([])
+    const [leaveEarlyFor, setLeaveEarlyFor] = useState<KioskSession | null>(null)
+    const panelRef = useRef<HTMLElement>(null)
+    const idInputRef = useRef<HTMLInputElement>(null)
+
+    function startLeaveEarly(session: KioskSession) {
+        setLeaveEarlyFor(session)
+        setPreview(null)
+        setMessage(null)
+        panelRef.current?.scrollIntoView({behavior: "smooth", block: "start"})
+        idInputRef.current?.focus({preventScroll: true})
+    }
 
     //the shared activity list, plus anything they clocked in for that's since been removed from it - this is
     //also the color order, so an activity's color matches the analytics chart
@@ -165,7 +177,7 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
         if (!studentId.trim()) return
         setBusy(true)
         setMessage(null)
-        const result = await clockOutPreview(studentId.trim())
+        const result = await clockOutPreview(studentId.trim(), !!leaveEarlyFor)
         setBusy(false)
         if (result.success) {
             setPreview({
@@ -173,6 +185,7 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                 intendedActivities: result.intendedActivities || [],
                 elapsedMinutes: result.elapsedMinutes || 0,
                 creditedHours: result.creditedHours || 0,
+                leaveEarlySeconds: result.leaveEarlySeconds || 0,
                 clockedInAt: result.clockedInAt ? new Date(result.clockedInAt) : new Date(Date.now() - (result.elapsedMinutes || 0) * 60_000),
             })
             //start from what they said they'd do - easy to change
@@ -186,11 +199,13 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
         if (!preview || worked.length === 0) return
         setBusy(true)
         setMessage(null)
-        const result = await clockOut(studentId.trim(), worked.map((activity, i) => ({activity, fraction: fractions[i]})))
+        const result = await clockOut(studentId.trim(), worked.map((activity, i) => ({activity, fraction: fractions[i]})), !!leaveEarlyFor)
         setBusy(false)
         if (result?.success) {
-            setMessage({text: `Clocked out ${result.besaName || ""} - ${result.hoursThisSession} hour(s) this session.`, error: false})
+            const leftEarly = result.leftEarlySeconds ? ` (left early with ${formatDuration(result.leftEarlySeconds)} of unused break)` : ""
+            setMessage({text: `Clocked out ${result.besaName || ""} - ${result.hoursThisSession} hour(s) this session${leftEarly}.`, error: false})
             setStudentId("")
+            setLeaveEarlyFor(null)
             reset()
             onChanged()
         } else {
@@ -199,12 +214,26 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
     }
 
     return (
-        <section className="bg-gray-800 rounded-2xl p-6">
-            <h2 className="text-2xl tracking-wide mb-4 text-center">Clock Out</h2>
+        <section ref={panelRef} className="bg-gray-800 rounded-2xl p-6 scroll-mt-20">
+            <h2 className="text-2xl tracking-wide mb-4 text-center">{leaveEarlyFor ? "Leave Early" : "Clock Out"}</h2>
+            {leaveEarlyFor &&
+                <div className="rounded-xl bg-emerald-900/50 border border-emerald-700 p-3 mb-4 text-sm flex items-start gap-3">
+                    <p className="flex-1 text-emerald-100">
+                        <span className="font-semibold">{leaveEarlyFor.besaName || "This BESA"}</span> is leaving early with their unused break
+                        time (about {formatDuration(leaveEarlyFor.break.remainingSeconds)}). They're credited as if they'd stayed that much
+                        longer, and today's break time is used up.
+                    </p>
+                    <button onClick={() => { setLeaveEarlyFor(null); reset(); setMessage(null) }} disabled={busy}
+                        className="text-xs px-3 py-1.5 rounded-full bg-gray-600 hover:bg-gray-500 disabled:opacity-40">
+                        Cancel
+                    </button>
+                </div>
+            }
             {preview === null ?
                 <>
                     <label className="block text-sm text-gray-400 mb-1">Enter School Id</label>
                     <input
+                        ref={idInputRef}
                         value={studentId}
                         onChange={(e) => setStudentId(e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Enter") void handleNext() }}
@@ -225,6 +254,9 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                 <div className="mb-6">
                     <p className="text-center text-sm text-gray-300 mb-1">
                         <span className="font-semibold text-white">{preview.besaName}</span> · in for {Math.round(preview.elapsedMinutes)} min
+                        {preview.leaveEarlySeconds > 0 &&
+                            <span className="text-emerald-300"> + {Math.round(preview.leaveEarlySeconds / 60)} min unused break · credited {preview.creditedHours} h</span>
+                        }
                     </p>
                     <h3 className="text-lg tracking-wide text-center mb-1">What activities did you actually work on?</h3>
                     <p className="text-xs text-gray-400 text-center mb-3">
@@ -253,7 +285,7 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                         <button onClick={() => void handleConfirm()} disabled={busy || worked.length === 0}
                             className="flex-[2] py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
                             {busy && <MoonLoader color="white" size={16}/>}
-                            Confirm Clock Out
+                            {leaveEarlyFor ? "Confirm Leave Early" : "Confirm Clock Out"}
                         </button>
                     </div>
                 </div>
@@ -268,7 +300,7 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                 <p className="text-gray-500 italic text-sm">Nobody is currently clocked in.</p>
                 :
                 <div className="flex flex-col gap-2">
-                    {sessions.map(s => <SessionRow key={s.uid} session={s} onChanged={onChanged}/>)}
+                    {sessions.map(s => <SessionRow key={s.uid} session={s} onChanged={onChanged} onLeaveEarly={() => startLeaveEarly(s)}/>)}
                 </div>
             }
         </section>
@@ -352,8 +384,8 @@ function ActivityTypesPanel({activityTypes, setActivityTypes}: {
 
 //one clocked-in member in Current Sessions, with their break controls. Today's break allowance comes from
 //their BESA Booking office hours that day (see the backend's _break_allowance_minutes); they can take 5
-//minutes at a time or everything left at once, shown as {time left}/{today's total}.
-function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () => void}) {
+//minutes at a time or everything left at once, shown as {time left}/{today's total} - or leave early with it.
+function SessionRow({session, onChanged, onLeaveEarly}: {session: KioskSession, onChanged: () => void, onLeaveEarly: () => void}) {
     const brk = session.break
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState("")
@@ -421,6 +453,11 @@ function SessionRow({session, onChanged}: {session: KioskSession, onChanged: () 
                                 Take All ({formatDuration(remaining)})
                             </button>
                         }
+                        <button onClick={onLeaveEarly} disabled={busy}
+                            title="Leave now and use the unused break time instead - credited as if they'd stayed that much longer"
+                            className="text-xs px-3 py-1.5 rounded-full bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40">
+                            Leave Early ({formatDuration(remaining)})
+                        </button>
                     </div>
                 }
             </div>

@@ -16,6 +16,7 @@ export type WeeklyHoursSession = {
     canceledTour?: boolean
     notes?: Note[]
     workedOn?: WorkedOn[] // what they actually worked on, split at clock-out
+    leftEarlySeconds?: number // unused break they left early with - credited on top of the time shown
 }
 
 export type WeeklyHoursEntry = {
@@ -99,7 +100,7 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
                     </div>
                     <div className="p-2 px-3 text-gray-400 flex flex-col gap-1 min-w-0">
                         {d.sessions.map((s, j) => (
-                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} canceledTour={s.canceledTour} notes={s.notes} workedOn={s.workedOn}/>
+                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} canceledTour={s.canceledTour} notes={s.notes} workedOn={s.workedOn} leftEarlySeconds={s.leftEarlySeconds}/>
                         ))}
                         {d.open && <SessionLine clockIn={d.open.clockIn} activities={d.open.activities} notes={d.open.notes}/>}
                         {d.sessions.length === 0 && !d.open &&
@@ -138,10 +139,12 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
 }
 
 //"9:02 AM - 11:30 AM  Tours, Other" - clockOut omitted means they're still clocked in
-function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, canceledTour, notes, workedOn}: {
+function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, canceledTour, notes, workedOn, leftEarlySeconds}: {
     clockIn: Date, clockOut?: Date, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean,
-    notes?: Note[], workedOn?: WorkedOn[]
+    notes?: Note[], workedOn?: WorkedOn[], leftEarlySeconds?: number
 }) {
+    //the break they left early with is shown on its own, not as a break taken
+    const breakTaken = (breakSeconds || 0) - (leftEarlySeconds || 0)
     return (
         <div className="flex flex-col gap-0.5">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -154,6 +157,9 @@ function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSecond
                 {canceledTour &&
                     <Badge label="CANCELED TOUR" title="Tour was canceled - logged out and the day was set to 30 minutes" className="bg-red-400 text-black"/>
                 }
+                {!!leftEarlySeconds &&
+                    <Badge label={`LEFT EARLY · +${Math.round(leftEarlySeconds / 60)}m`} title="Left early with their unused break time - credited as if they'd stayed that much longer" className="bg-emerald-400 text-black"/>
+                }
                 {autoClockedOut &&
                     <Badge label="AUTO" title="Forgot to clock out - leave time is their scheduled office-hours end (or 8 PM)" className="bg-yellow-600 text-black"/>
                 }
@@ -164,7 +170,7 @@ function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSecond
                     </span>
                     : activities.length > 0 && <span className="text-gray-400">{activities.join(", ")}</span>
                 }
-                {!!breakSeconds && <span className="text-sky-300/80 whitespace-nowrap">{Math.round(breakSeconds / 60)} min break</span>}
+                {breakTaken > 0 && <span className="text-sky-300/80 whitespace-nowrap">{Math.round(breakTaken / 60)} min break</span>}
             </div>
             <SessionNotes notes={notes}/>
         </div>

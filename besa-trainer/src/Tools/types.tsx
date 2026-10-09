@@ -42,6 +42,7 @@ export type HoursSession = {
     canceledTour?: boolean // logged out via Canceled Tour - the whole day was set to 30 minutes
     notes?: {text: string, at: Date | null}[] // notes/comments added from the kiosk during this visit
     workedOn?: {activity: string, fraction: number, minutes: number, hours: number}[] // actual split, chosen at clock-out
+    leftEarlySeconds?: number // unused break they left early with (Leave Early) - credited as time in
 }
 
 //will be used to keep track of personalized vll scripts

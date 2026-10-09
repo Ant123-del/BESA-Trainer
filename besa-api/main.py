@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Literal
 import time
+import math
 from datetime import datetime, timedelta, date as date_cls
 from zoneinfo import ZoneInfo
 from google import genai
@@ -449,12 +450,31 @@ def _find_besa_by_student_id(db, student_id: str):
     return None, None
 
 
+#time in -> credited hours, to the nearest half hour, rounding up from the quarter marks: under 15 minutes
+#past a whole hour rounds down, 15-44 minutes is .5, 45+ is the next hour. Not Python's round(), which rounds
+#exact halves to even (15 minutes came out as 0, 1h15 as 1.0).
+def _credited_hours(seconds: float) -> float:
+    return math.floor(max(0.0, seconds) / 1800 + 0.5) * 0.5
+
+
+#a day's credited hours: its visits' total time in (plus any unused break they left early with), rounded once
+#for the whole day - not each visit rounded separately and summed. Days a root admin set by hand, canceled-tour
+#days, and old entries from before visits were tracked keep their stored number.
+def _day_hours(entry: dict) -> float:
+    sessions = [s for s in entry.get("sessions") or [] if s.get("clockIn") and s.get("clockOut")]
+    if entry.get("editedByAdmin") or entry.get("canceledTour") or not sessions:
+        return entry.get("hours", 0)
+    return _credited_hours(sum((s["clockOut"] - s["clockIn"]).total_seconds() + (s.get("leftEarlySeconds") or 0)
+                               for s in sessions))
+
+
 #prunes biWeeklyHours to the current two-week pay period (relative to `now`), then merges this session's hours into
 #(or creates) the entry for checked_in_at's calendar day. Shared by manual clock-out and auto-clockout.
 #Each day also keeps its individual sessions (arrive/leave time + activities) so the hours table can show
 #when someone was actually there - entries written before sessions existed just have none.
-def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False, notes: list | None = None, worked_on: list | None = None):
-    elapsed_hours = max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5)
+#left_early_seconds: unused break they left early with (see /clock-out's leaveEarly) - credited as time in.
+def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False, notes: list | None = None, worked_on: list | None = None, left_early_seconds: int = 0):
+    elapsed_hours = _credited_hours((effective_end - checked_in_at).total_seconds() + left_early_seconds)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
     keep_from = _period_start(now)
     #once we know what they actually worked on, that's what the visit (and the day) records - the intended
@@ -462,7 +482,8 @@ def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: d
     if worked_on:
         activities = [w["activity"] for w in worked_on]
     session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out,
-               "breakSeconds": break_seconds, "canceledTour": canceled_tour, "notes": notes or [], "workedOn": worked_on or []}
+               "breakSeconds": break_seconds, "canceledTour": canceled_tour, "notes": notes or [], "workedOn": worked_on or [],
+               "leftEarlySeconds": left_early_seconds}
 
     pruned = [e for e in existing if e.get("date") and e["date"].astimezone(PACIFIC) >= keep_from]
 
@@ -470,13 +491,16 @@ def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: d
     new_hours = []
     for e in pruned:
         if e["date"].astimezone(PACIFIC).date() == entry_day.date():
-            new_hours.append({
+            merged_entry = {
                 **e,
                 "hours": e.get("hours", 0) + elapsed_hours,
                 "activities": sorted(set((e.get("activities") or []) + activities)),
                 "autoClockedOut": bool(e.get("autoClockedOut")) or auto_clocked_out,
                 "sessions": (e.get("sessions") or []) + [session],
-            })
+            }
+            #re-rounded from the whole day's time in (admin-set/canceled-tour days just add, as before)
+            merged_entry["hours"] = _day_hours(merged_entry)
+            new_hours.append(merged_entry)
             merged = True
         else:
             new_hours.append(e)
@@ -507,7 +531,7 @@ TOUR_ACTIVITY = "Tours"
 def _serialize_hours_entry(e: dict) -> dict:
     return {
         "date": e["date"].isoformat(),
-        "hours": e.get("hours", 0),
+        "hours": _day_hours(e),
         "activities": e.get("activities") or [],
         "autoClockedOut": bool(e.get("autoClockedOut")),
         "editedByAdmin": bool(e.get("editedByAdmin")),
@@ -522,6 +546,7 @@ def _serialize_hours_entry(e: dict) -> dict:
                 "canceledTour": bool(s.get("canceledTour")),
                 "notes": _serialize_notes(s.get("notes")),
                 "workedOn": s.get("workedOn") or [],
+                "leftEarlySeconds": s.get("leftEarlySeconds") or 0,
             }
             for s in (e.get("sessions") or []) if s.get("clockIn") and s.get("clockOut")
         ],
@@ -811,7 +836,7 @@ def _auto_clock_out_if_needed(target_ref, data: dict) -> dict:
     activities = data.get("lastCheckedInActivities") or []
     break_seconds = _visit_break_seconds(data, effective_end)
     worked_on = _work_split(_even_shares(activities), max(0.0, (effective_end - checked_in_at).total_seconds() / 60),
-                            max(0.0, round((effective_end - checked_in_at).total_seconds() / 1800) * 0.5))
+                            _credited_hours((effective_end - checked_in_at).total_seconds()))
     new_hours, _ = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, effective_end, activities, now,
                                       auto_clocked_out=True, break_seconds=break_seconds, notes=data.get("lastCheckedInNotes"),
                                       worked_on=worked_on)
@@ -919,6 +944,16 @@ def _log_activity(db, uid: str, data: dict, checked_in_at: datetime, ended_at: d
 
 class ClockOutPreviewRequest(BaseModel):
     studentId: str
+    leaveEarly: bool = False  # see ClockOutRequest
+
+
+#"Leave Early" (kiosk Current Sessions): instead of taking the rest of today's break, they leave that much
+#earlier and are credited as if they'd stayed - so the unused break time is used up and counted as time in.
+def _leave_early_seconds(data: dict, now: datetime) -> int:
+    remaining = _break_state(data, now)["remainingSeconds"]
+    if remaining <= 0:
+        raise HTTPException(status_code=409, detail=f"{data.get('besaName')} has no unused break time left today to leave early with.")
+    return remaining
 
 
 #root only - who this School Id is and how long they've been in, so the kiosk can ask what they actually
@@ -934,13 +969,15 @@ def clockOutPreview(request_data: ClockOutPreviewRequest, root_user: dict = Depe
         raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't currently clocked in.")
     checked_in_at = _to_pacific(data["lastCheckedIn"])
     now = datetime.now(PACIFIC)
+    leave_early_seconds = _leave_early_seconds(data, now) if request_data.leaveEarly else 0
     return {
         "success": True,
         "besaName": data.get("besaName"),
         "intendedActivities": data.get("lastCheckedInActivities") or [],
         "clockedInAt": checked_in_at.isoformat(),
         "elapsedMinutes": round(max(0.0, (now - checked_in_at).total_seconds() / 60), 1),
-        "creditedHours": max(0.0, round((now - checked_in_at).total_seconds() / 1800) * 0.5),
+        "creditedHours": _credited_hours((now - checked_in_at).total_seconds() + leave_early_seconds),
+        "leaveEarlySeconds": leave_early_seconds,
     }
 
 
@@ -949,6 +986,8 @@ class ClockOutRequest(BaseModel):
     #what they actually worked on and how the visit splits between them - an even split of the intended
     #activities is used if this is left out (older kiosk builds)
     actualActivities: list[WorkedOnShare] | None = None
+    #leaving early with today's unused break time (see _leave_early_seconds)
+    leaveEarly: bool = False
 
 
 @app.post("/clock-out")
@@ -966,12 +1005,15 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
     checked_in_at = _to_pacific(last_checked_in)
     activities = data.get("lastCheckedInActivities") or []
     shares = _validate_shares(request_data.actualActivities) if request_data.actualActivities is not None else _even_shares(activities)
+    leave_early_seconds = _leave_early_seconds(data, now) if request_data.leaveEarly else 0
     elapsed_minutes = max(0.0, (now - checked_in_at).total_seconds() / 60)
-    credited_hours = max(0.0, round((now - checked_in_at).total_seconds() / 1800) * 0.5)
+    credited_hours = _credited_hours((now - checked_in_at).total_seconds() + leave_early_seconds)
     worked_on = _work_split(shares, elapsed_minutes, credited_hours)
+    #the break they left early with is used up, so it isn't available again if they come back later today
     new_hours, elapsed_hours = _merge_hours_entry(data.get("biWeeklyHours") or [], checked_in_at, now, activities, now,
-                                                  break_seconds=_visit_break_seconds(data, now), notes=data.get("lastCheckedInNotes"),
-                                                  worked_on=worked_on)
+                                                  break_seconds=_visit_break_seconds(data, now) + leave_early_seconds,
+                                                  notes=data.get("lastCheckedInNotes"), worked_on=worked_on,
+                                                  left_early_seconds=leave_early_seconds)
 
     target_ref.update({
         "biWeeklyHours": new_hours,
@@ -980,7 +1022,8 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
         **VISIT_FIELDS_RESET,
     })
     _log_activity(db, target_ref.id, data, checked_in_at, now, worked_on, estimated=request_data.actualActivities is None)
-    return {"success": True, "besaName": data.get("besaName"), "hoursThisSession": elapsed_hours, "workedOn": worked_on}
+    return {"success": True, "besaName": data.get("besaName"), "hoursThisSession": elapsed_hours, "workedOn": worked_on,
+            "leftEarlySeconds": leave_early_seconds}
 
 
 @app.post("/check-auto-clockout")

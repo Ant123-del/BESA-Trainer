@@ -3,6 +3,7 @@ import type { BreakState, OfficeScheduleDay, WorkedOn } from "../Tools/Fetch"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import { sameDay, startOfWeek, toDateKey } from "../Tools/dates"
 import SessionNotes from "./SessionNotes"
+import DayNotes, { type DayNote, type DayNoteHandlers } from "./DayNotes"
 
 type Note = {text: string, at: Date | null}
 
@@ -25,6 +26,7 @@ export type WeeklyHoursEntry = {
     editedByAdmin?: boolean
     sessions?: WeeklyHoursSession[]
     breakAllowanceMinutes?: number // that day's break total, from the backend (scheduled vs. time actually in)
+    dayNotes?: DayNote[] // the member's own notes on this day (Profile's My Hours)
 }
 
 //someone clocked in right now - shown on its day as "9:02 AM - now" (no hours yet until they clock out)
@@ -53,9 +55,10 @@ function Badge({label, title, className}: {label: string, title: string, classNa
 //visits were tracked just show their activities. Passing onEditDay adds an Edit column (root admin's
 //Profile view) - it gets the day plus whatever's logged. Passing schedule adds each day's break status
 //({left}/{total}, the total coming from that date's effective BESA Booking office hours) up through today.
-export default function WeeklyHoursTable({entries, openSession, schedule, onEditDay, weekStart = startOfWeek(new Date())}: {
+//Each day's own notes always show; passing dayNoteHandlers (the member's own My Hours) lets them add/delete them.
+export default function WeeklyHoursTable({entries, openSession, schedule, onEditDay, dayNoteHandlers, weekStart = startOfWeek(new Date())}: {
     entries: WeeklyHoursEntry[], openSession?: OpenSession | null, schedule?: OfficeScheduleDay[] | null,
-    onEditDay?: (day: WeeklyHoursEntry) => void, weekStart?: Date
+    onEditDay?: (day: WeeklyHoursEntry) => void, dayNoteHandlers?: DayNoteHandlers, weekStart?: Date
 }): JSX.Element {
     const today = new Date()
     const days = Array.from({length: 7}, (_, i) => {
@@ -69,6 +72,7 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
             autoClockedOut: entry?.autoClockedOut,
             editedByAdmin: entry?.editedByAdmin,
             sessions: [...(entry?.sessions || [])].sort((a, b) => a.clockIn.getTime() - b.clockIn.getTime()),
+            dayNotes: entry?.dayNotes || [],
             open: openSession && sameDay(openSession.clockIn, date) ? openSession : null,
             upToToday: date.getTime() <= today.getTime(),
             //days they came in carry the backend's allowance (based on time actually in); other days use the schedule
@@ -106,6 +110,7 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
                                 takenSeconds={d.sessions.reduce((sum, s) => sum + (s.breakSeconds || 0), 0)}
                                 liveBreak={d.open?.break}/>
                         }
+                        <DayNotes date={toDateKey(d.date)} notes={d.dayNotes} handlers={dayNoteHandlers}/>
                     </div>
                     <div className="p-2 px-3 text-right flex flex-wrap items-center justify-end gap-1 content-center">
                         {d.editedByAdmin &&

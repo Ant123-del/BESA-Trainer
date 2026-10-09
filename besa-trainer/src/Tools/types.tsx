@@ -29,6 +29,7 @@ export type DayHours = {
     autoClockedOut?: boolean // true if this day's hours (or part of them) came from a forgotten-checkout auto-clockout, not a manual one
     editedByAdmin?: boolean // root admin overwrote this day's hours/activities, so the total may not match the sessions
     sessions?: HoursSession[] // each clock-in/out that day - missing on entries recorded before sessions were tracked
+    dayNotes?: {id: string, text: string, at: Date | null}[] // notes the member wrote on this day from their Profile
 }
 
 //one kiosk visit: when they arrived, when they left (or were auto-clocked-out), and what they came to do.

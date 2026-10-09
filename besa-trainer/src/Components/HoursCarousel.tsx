@@ -3,6 +3,7 @@ import { FaChevronLeft, FaChevronRight } from "react-icons/fa"
 import type { OfficeScheduleDay } from "../Tools/Fetch"
 import { fromDateKey, startOfWeek, toDateKey } from "../Tools/dates"
 import WeeklyHoursTable, { type OpenSession, type WeeklyHoursEntry } from "./WeeklyHoursTable"
+import type { DayNoteHandlers } from "./DayNotes"
 import OfficeHoursTable from "./OfficeHoursTable"
 
 //hours run in fixed two-week periods (the backend's PAY_PERIOD_ANCHOR/_period_start) - week 1 and week 2
@@ -23,11 +24,12 @@ function weekLabel(weekStart: Date): string {
 //one member's logged hours beside their BESA Booking office hours for the current two-week period, flipped a
 //week at a time (arrows, the dots, or a swipe on a phone). Both tables always show the same week. Opens on the
 //week containing today. periodStart (YYYY-MM-DD) comes from the backend; until it arrives this week is week 1.
-export default function HoursCarousel({entries, openSession, schedule, onEditDay, periodStart}: {
+export default function HoursCarousel({entries, openSession, schedule, onEditDay, dayNoteHandlers, periodStart}: {
     entries: WeeklyHoursEntry[]
     openSession?: OpenSession | null
     schedule: OfficeScheduleDay[] | null | undefined
     onEditDay?: (day: WeeklyHoursEntry) => void
+    dayNoteHandlers?: DayNoteHandlers
     periodStart?: string
 }): JSX.Element {
     const firstWeek = periodStart ? fromDateKey(periodStart) : startOfWeek(new Date())
@@ -87,7 +89,7 @@ export default function HoursCarousel({entries, openSession, schedule, onEditDay
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_16rem] items-start">
                 <WeeklyHoursTable entries={entries} openSession={openSession} schedule={schedule}
-                    onEditDay={onEditDay} weekStart={weekStart}/>
+                    onEditDay={onEditDay} dayNoteHandlers={dayNoteHandlers} weekStart={weekStart}/>
                 <OfficeHoursTable days={weekSchedule}/>
             </div>
             <p className="text-xs text-gray-400 mt-2 text-right">

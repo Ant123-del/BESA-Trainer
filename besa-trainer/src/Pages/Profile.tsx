@@ -11,7 +11,7 @@ import { mapFirebaseAuthError } from "../Tools/authErrors"
 import { toDateKey } from "../Tools/dates"
 import type { User as CustomUser, DayHours } from "../Tools/types"
 import {
-    changeRootAdminPasscode, checkAutoClockout, deleteRootAccount, getActivityTypes, getAllHours,
+    addDayNote, changeRootAdminPasscode, checkAutoClockout, deleteDayNote, deleteRootAccount, getActivityTypes, getAllHours,
     getRootAdminToken, rootAdminLogout, setMemberDayHours, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeScheduleDay
 } from "../Tools/Fetch"
 import { type OpenSession, type WeeklyHoursEntry } from "../Components/WeeklyHoursTable"
@@ -19,6 +19,7 @@ import HoursCarousel from "../Components/HoursCarousel"
 import RootAdminLogin from "../Components/RootAdminLogin"
 import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
 import BreakCriteria from "../Components/BreakCriteria"
+import type { DayNoteHandlers } from "../Components/DayNotes"
 
 type RawDayHours = DayHours | ApiDayHours
 
@@ -46,6 +47,7 @@ function toWeeklyHoursEntries(entries: RawDayHours[]): WeeklyHoursEntry[] {
             notes: toNotes(s.notes),
             workedOn: s.workedOn,
         })),
+        dayNotes: (e.dayNotes || []).map(n => ({id: n.id, text: n.text, at: n.at ? toDate(n.at) : null})),
     }))
 }
 
@@ -91,6 +93,20 @@ export default function Profile(): JSX.Element {
     const [ownSchedule, setOwnSchedule] = useState<OfficeScheduleDay[] | null | undefined>(undefined)
 
     const isRoot = userData?.accountType === "root"
+
+    //their own My Hours only - each save comes back with the updated hours, so the table redraws from that
+    const dayNoteHandlers: DayNoteHandlers = {
+        add: async (date, text) => {
+            const result = await addDayNote(date, text)
+            if (result.success && result.biWeeklyHours) setOwnHours(result.biWeeklyHours)
+            return result.success ? null : result.detail || "Couldn't save the note."
+        },
+        remove: async (date, noteId) => {
+            const result = await deleteDayNote(date, noteId)
+            if (result.success && result.biWeeklyHours) setOwnHours(result.biWeeklyHours)
+            return result.success ? null : result.detail || "Couldn't delete the note."
+        },
+    }
 
     useEffect(() => {
         const auth = getFirebaseAuth()
@@ -267,6 +283,7 @@ export default function Profile(): JSX.Element {
                                 <HoursCarousel entries={toWeeklyHoursEntries(ownHours ?? userData.biWeeklyHours ?? [])}
                                     schedule={ownSchedule}
                                     periodStart={periodStart}
+                                    dayNoteHandlers={dayNoteHandlers}
                                     openSession={ownOpenSession !== undefined ? ownOpenSession
                                         : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || [], notes: toNotes(userData.lastCheckedInNotes)}
                                         : null}/>

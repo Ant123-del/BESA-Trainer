@@ -312,6 +312,17 @@ export async function addSessionNote(targetUid: string, text: string): Promise<{
     return kioskPost("session-note", {targetUid, text})
 }
 
+//besa/besaLead only - adds a note to one of their own days (YYYY-MM-DD, current two-week period). Comes back
+//with their updated hours so My Hours can redraw without another round trip.
+export async function addDayNote(date: string, text: string): Promise<{success: boolean, detail?: string, biWeeklyHours?: ApiDayHours[]}> {
+    return kioskPost("my-hours/note", {date, text})
+}
+
+//besa/besaLead only - deletes one of their own day notes
+export async function deleteDayNote(date: string, noteId: string): Promise<{success: boolean, detail?: string, biWeeklyHours?: ApiDayHours[]}> {
+    return kioskPost("my-hours/note/delete", {date, noteId})
+}
+
 //root only - their tour was canceled: logs them out for the day and sets the day's hours to 30 minutes
 export async function canceledTour(targetUid: string): Promise<{success: boolean, detail?: string}> {
     return kioskPost("canceled-tour", {targetUid})
@@ -389,7 +400,11 @@ export type ApiDayHours = {
     canceledTour?: boolean
     breakAllowanceMinutes?: number // that day's break total (larger of scheduled hours and time actually in)
     sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean, notes?: ApiSessionNote[], workedOn?: WorkedOn[]}[]
+    dayNotes?: ApiDayNote[] // notes the member wrote on this day from their own My Hours
 }
+
+//a note a member wrote on one of their days (Profile's My Hours) - id is what deleting it goes by
+export type ApiDayNote = {id: string, text: string, at: string | null}
 
 //a note/comment added to a visit from the kiosk's Current Sessions
 export type ApiSessionNote = {text: string, at: string | null}

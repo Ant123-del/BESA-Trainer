@@ -14,6 +14,8 @@ import hashlib
 import hmac
 import secrets
 import requests
+import smtplib
+from email.message import EmailMessage
 
 import firebase_admin
 from firebase_admin import credentials, storage, auth, firestore
@@ -523,6 +525,7 @@ def _serialize_hours_entry(e: dict) -> dict:
             }
             for s in (e.get("sessions") or []) if s.get("clockIn") and s.get("clockOut")
         ],
+        "dayNotes": _serialize_day_notes(e.get("dayNotes")),
     }
 
 
@@ -535,6 +538,13 @@ SESSION_NOTE_MAX_LENGTH = 500
 
 def _serialize_notes(notes) -> list:
     return [{"text": n.get("text") or "", "at": n["at"].isoformat() if n.get("at") else None}
+            for n in (notes or []) if isinstance(n, dict) and n.get("text")]
+
+
+#notes a member writes on a day from their own Profile's My Hours - [{id, text, at}] on that day's
+#biWeeklyHours entry (dayNotes), separate from the kiosk's per-visit notes. The id lets them delete one.
+def _serialize_day_notes(notes) -> list:
+    return [{"id": n.get("id") or "", "text": n.get("text") or "", "at": n["at"].isoformat() if n.get("at") else None}
             for n in (notes or []) if isinstance(n, dict) and n.get("text")]
 
 
@@ -688,7 +698,8 @@ def _get_office_hours_end(besa_name, checked_in_at: datetime):
 # (1h=5, 2h=10, 3-5h=15, 6h=20, 7h=25...). The in-progress break lives on the user doc as breakStartedAt/
 # breakEndsAt, and breakUsedSeconds holds what's been used today so far - seeded at clock-in with break time
 # from earlier visits that day (breakCarriedSeconds), since the allowance is per day, not per visit.
-BREAK_FIELDS_RESET = {"breakUsedSeconds": 0, "breakCarriedSeconds": 0, "breakStartedAt": None, "breakEndsAt": None}
+BREAK_FIELDS_RESET = {"breakUsedSeconds": 0, "breakCarriedSeconds": 0, "breakStartedAt": None, "breakEndsAt": None,
+                      "breakEndNotified": True}
 #everything tied to one visit that's cleared on clock in and every kind of clock out
 VISIT_FIELDS_RESET = {**BREAK_FIELDS_RESET, "lastCheckedInNotes": []}
 SHORT_BREAK_SECONDS = 5 * 60
@@ -725,16 +736,18 @@ def _worked_hours_on(entries: list, day) -> float:
 #the hours a day's break allowance is based on: the larger of their scheduled office hours and the time
 #they're actually in the office - so meetings marked "unavailable" on BESA Booking, or staying past their
 #schedule, don't shortchange anyone. For today that's time already clocked in + the scheduled time still left.
+#"Still left" is only the time inside the remaining slots - a gap or an unavailable block between slots (e.g.
+#9-12 and 2-5) isn't time they'll be in, so it mustn't count (it used to: the span to the last slot's end did).
 def _break_basis_hours(office_day: dict | None, worked_hours: float, open_since: datetime | None, now: datetime) -> float:
     scheduled = office_day["scheduledHours"] if office_day else 0.0
     in_office = worked_hours
     if open_since is not None:
         in_office += max(0.0, (now - open_since).total_seconds() / 3600)
-        slot_ends = [_hhmm_to_minutes(sl["end"]) for sl in (office_day or {}).get("slots") or []]
-        if slot_ends:
-            last_end = max(slot_ends)
-            scheduled_end = now.replace(hour=last_end // 60, minute=last_end % 60, second=0, microsecond=0)
-            in_office += max(0.0, (scheduled_end - now).total_seconds() / 3600)
+        now_minutes = now.hour * 60 + now.minute + now.second / 60
+        for sl in (office_day or {}).get("slots") or []:
+            start, end = _hhmm_to_minutes(sl["start"]), _hhmm_to_minutes(sl["end"])
+            if start is not None and end is not None:
+                in_office += max(0.0, end - max(start, now_minutes)) / 60
     return max(scheduled, in_office)
 
 
@@ -1100,6 +1113,7 @@ def startBreak(request_data: StartBreakRequest, root_user: dict = Depends(requir
         "breakUsedSeconds": state["usedSeconds"],
         "breakStartedAt": now,
         "breakEndsAt": now + timedelta(seconds=duration),
+        "breakEndNotified": False,  #picked up by break_end_alerts once breakEndsAt passes
     })
     return {"success": True, "besaName": data.get("besaName"), "breakSeconds": duration}
 
@@ -1117,7 +1131,78 @@ def endBreak(request_data: EndBreakRequest, root_user: dict = Depends(require_ro
         raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't on break.")
     #only the time actually taken counts - the rest stays available for later
     target_ref.update({"breakUsedSeconds": _break_used_seconds(data, now), "breakStartedAt": None, "breakEndsAt": None})
+    _notify_break_ended(data.get("besaName"))
     return {"success": True, "besaName": data.get("besaName")}
+
+
+# ---- "Your break has ended" emails ----
+# Emailed to every BESA account (BCC, so nobody sees the others' addresses) whenever a break ends: right away
+# when the kiosk ends it early (above), or by the break_end_alerts scheduled function (bottom of this file)
+# within about a minute of a break's timer running out. Sent from a Gmail account over SMTP using a Google
+# App Password. Off unless both BREAK_ALERT_GMAIL_ADDRESS and BREAK_ALERT_GMAIL_APP_PASSWORD are set.
+GMAIL_SMTP_HOST = "smtp.gmail.com"
+GMAIL_SMTP_PORT = 465
+#a break that ran out longer ago than this (e.g. the scheduler was down) is skipped, not announced late
+BREAK_ALERT_MAX_LATE = timedelta(minutes=10)
+
+
+#sign-in emails of every besa/besaLead account - they live on Firebase Auth, not the user docs
+def _besa_emails() -> list:
+    users_ref = firestore.client().collection("training_data").document("data_root").collection("users")
+    uids = [u.id for u in users_ref.stream() if (u.to_dict() or {}).get("accountType") in ("besa", "besaLead")]
+    emails = []
+    for i in range(0, len(uids), 100):  # get_users takes at most 100 identifiers per call
+        result = auth.get_users([auth.UidIdentifier(uid) for uid in uids[i:i + 100]])
+        emails += [u.email for u in result.users if u.email]
+    return emails
+
+
+def _notify_break_ended(besa_name):
+    sender = os.getenv("BREAK_ALERT_GMAIL_ADDRESS")
+    app_password = os.getenv("BREAK_ALERT_GMAIL_APP_PASSWORD")
+    if not sender or not app_password:
+        return
+    name = besa_name or "A BESA"
+    try:
+        recipients = _besa_emails()
+        if not recipients:
+            return
+        message = EmailMessage()
+        message["Subject"] = f"{name}, your break has ended"
+        message["From"] = sender
+        message["To"] = sender  # everyone else is BCC'd
+        message.set_content(f"{name}, your break has ended.")
+        with smtplib.SMTP_SSL(GMAIL_SMTP_HOST, GMAIL_SMTP_PORT, timeout=10) as smtp:
+            smtp.login(sender, app_password)
+            smtp.send_message(message, to_addrs=[sender] + recipients)
+    except Exception as e:
+        #an alert failing must never fail the kiosk action that triggered it
+        print(f"Break-ended email for {name} failed: {e}")
+
+
+#every break whose timer has run out and hasn't been announced yet - claimed in a transaction first so an
+#overlapping run (or the kiosk ending it at the same moment) can't announce the same break twice
+def _send_due_break_alerts():
+    db = firestore.client()
+    now = datetime.now(PACIFIC)
+    users_ref = db.collection("training_data").document("data_root").collection("users")
+
+    @firestore.transactional
+    def claim(transaction, ref) -> bool:
+        data = ref.get(transaction=transaction).to_dict() or {}
+        ends = data.get("breakEndsAt")
+        #a missing flag means the break started before alerts existed - never announce those
+        if not ends or data.get("breakEndNotified", True) or ends > now:
+            return False
+        transaction.update(ref, {"breakEndNotified": True})
+        return now - ends <= BREAK_ALERT_MAX_LATE
+
+    for snap in users_ref.where(filter=FieldFilter("breakEndsAt", "<=", now)).stream():
+        data = snap.to_dict() or {}
+        if data.get("breakEndNotified", True):
+            continue
+        if claim(db.transaction(), snap.reference):
+            _notify_break_ended(data.get("besaName"))
 
 
 #the current period's hours entries, each with that day's break allowance (same rule as the kiosk's live one:
@@ -1350,10 +1435,90 @@ def setDayHours(request_data: SetDayHoursRequest, root_user: dict = Depends(requ
             "autoClockedOut": False,
             "editedByAdmin": True,
             "sessions": (existing or {}).get("sessions") or [],
+            "dayNotes": (existing or {}).get("dayNotes") or [],
         })
+    elif (existing or {}).get("dayNotes"):
+        #clearing a day's hours shouldn't throw away the notes the member wrote on it
+        remaining.append({"date": entry_day, "hours": 0, "activities": [], "dayNotes": existing["dayNotes"]})
 
     target_ref.update({"biWeeklyHours": remaining})
     return {"success": True, "hours": _shown_weeks_hours({**data, "biWeeklyHours": remaining})}
+
+
+# ---- Day notes (a member's own notes on a day of their My Hours) ----
+DAY_NOTE_MAX_LENGTH = 500
+DAY_NOTES_MAX_PER_DAY = 20
+
+
+class DayNoteRequest(BaseModel):
+    date: str  # YYYY-MM-DD, a day in the current two-week period
+    text: str
+
+
+class DeleteDayNoteRequest(BaseModel):
+    date: str
+    noteId: str
+
+
+#the signed-in besa/besaLead's own user doc, plus the requested day (must be in the current period, since
+#older entries get pruned on the next clock-out anyway)
+def _own_hours_day(user: dict, date_str: str):
+    try:
+        day = date_cls.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date.")
+    entry_day = datetime(day.year, day.month, day.day, tzinfo=PACIFIC)
+    period_start = _period_start(datetime.now(PACIFIC))
+    if not (period_start <= entry_day < period_start + timedelta(days=PAY_PERIOD_DAYS)):
+        raise HTTPException(status_code=400, detail="Notes can only be added to days in the current two-week period.")
+
+    db = firestore.client()
+    target_ref = db.collection("training_data").document("data_root").collection("users").document(user.get("uid"))
+    doc = target_ref.get()
+    data = (doc.to_dict() or {}) if doc.exists else {}
+    if data.get("accountType") not in ("besa", "besaLead"):
+        raise HTTPException(status_code=403, detail="Only BESA accounts have hours to add notes to.")
+    return target_ref, data, day, entry_day
+
+
+#replaces that day's dayNotes with whatever `change` returns, creating a 0-hour entry for a day with nothing logged
+def _update_day_notes(target_ref, data: dict, day, entry_day: datetime, change) -> list:
+    entries = data.get("biWeeklyHours") or []
+    is_day = lambda e: e.get("date") and e["date"].astimezone(PACIFIC).date() == day
+    existing = next((e for e in entries if is_day(e)), None)
+    notes = change((existing or {}).get("dayNotes") or [])
+    remaining = [e for e in entries if not is_day(e)]
+    if existing:
+        remaining.append({**existing, "dayNotes": notes})
+    elif notes:
+        remaining.append({"date": entry_day, "hours": 0, "activities": [], "dayNotes": notes})
+    target_ref.update({"biWeeklyHours": remaining})
+    return _shown_weeks_hours({**data, "biWeeklyHours": remaining})
+
+
+@app.post("/my-hours/note")
+def addDayNote(request_data: DayNoteRequest, user: dict = Depends(get_current_user)):
+    text = request_data.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="The note is empty.")
+    if len(text) > DAY_NOTE_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Notes can be at most {DAY_NOTE_MAX_LENGTH} characters.")
+    target_ref, data, day, entry_day = _own_hours_day(user, request_data.date)
+
+    def add(notes: list) -> list:
+        if len(notes) >= DAY_NOTES_MAX_PER_DAY:
+            raise HTTPException(status_code=400, detail=f"A day can have at most {DAY_NOTES_MAX_PER_DAY} notes.")
+        return notes + [{"id": secrets.token_hex(6), "text": text, "at": datetime.now(PACIFIC)}]
+
+    return {"success": True, "biWeeklyHours": _update_day_notes(target_ref, data, day, entry_day, add)}
+
+
+@app.post("/my-hours/note/delete")
+def deleteDayNote(request_data: DeleteDayNoteRequest, user: dict = Depends(get_current_user)):
+    target_ref, data, day, entry_day = _own_hours_day(user, request_data.date)
+    hours = _update_day_notes(target_ref, data, day, entry_day,
+                              lambda notes: [n for n in notes if n.get("id") != request_data.noteId])
+    return {"success": True, "biWeeklyHours": hours}
 
 
 @app.get("/activity-types")
@@ -1676,7 +1841,7 @@ def reconcileProgress(request_data: ReconcileProgressRequest, admin_user: dict =
 #WSGI-style (Request) -> Response, so the FastAPI app is bridged through a2wsgi. Every route above stays
 #reachable under this one function's URL (e.g. https://api-<hash>-<region>.a.run.app/clock-in).
 #Local dev is unaffected - `uvicorn main:app --reload` still runs the same `app` object directly.
-from firebase_functions import https_fn, options
+from firebase_functions import https_fn, options, scheduler_fn
 from a2wsgi import ASGIMiddleware
 
 #lazy, not constructed at import time - ASGIMiddleware spawns a background thread running its own
@@ -1695,8 +1860,19 @@ def _get_wsgi_app():
 @https_fn.on_request(
     memory=options.MemoryOption.GB_1,
     timeout_sec=900,
-    secrets=["GEMINI_API_KEY", "ALLOWED_ORIGINS"],
+    secrets=["GEMINI_API_KEY", "ALLOWED_ORIGINS", "BREAK_ALERT_GMAIL_ADDRESS", "BREAK_ALERT_GMAIL_APP_PASSWORD"],
     invoker="public",
 )
 def api(req: https_fn.Request) -> https_fn.Response:
     return https_fn.Response.from_app(_get_wsgi_app(), req.environ)
+
+
+#announces breaks whose timer ran out on their own (see _send_due_break_alerts) - nothing else ever runs at
+#the moment a break expires, so this checks once a minute
+@scheduler_fn.on_schedule(
+    schedule="every 1 minutes",
+    timezone="America/Los_Angeles",
+    secrets=["BREAK_ALERT_GMAIL_ADDRESS", "BREAK_ALERT_GMAIL_APP_PASSWORD"],
+)
+def break_end_alerts(event: scheduler_fn.ScheduledEvent) -> None:
+    _send_due_break_alerts()

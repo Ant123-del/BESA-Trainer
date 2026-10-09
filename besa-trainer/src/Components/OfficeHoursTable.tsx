@@ -16,8 +16,8 @@ function formatSlotTime(hhmm: string): string {
 
 //one week of the member's actual office hours from BESA Booking, shown beside their logged hours for the same
 //week. Each date is its effective hours: temporary hours (TEMP) replace the usual weekly ones, and unavailable
-//time is already taken out and listed with its reason. undefined = still loading, null = their name isn't on
-//the booking roster.
+//time is already taken out of the slots (not listed separately). undefined = still loading, null = their name
+//isn't on the booking roster.
 export default function OfficeHoursTable({days}: {days: OfficeScheduleDay[] | null | undefined}): JSX.Element {
     const todayKey = toDateKey(new Date())
     const total = (days || []).reduce((sum, d) => sum + d.scheduledHours, 0)
@@ -50,12 +50,6 @@ export default function OfficeHoursTable({days}: {days: OfficeScheduleDay[] | nu
                                             <span key={j} className="whitespace-nowrap">{formatSlotTime(sl.start)} – {formatSlotTime(sl.end)}</span>
                                         ))
                                     }
-                                    {d.unavailable.map((u, j) => (
-                                        <span key={"u" + j} className="text-xs text-red-300/90">
-                                            Unavailable {u.allDay ? "all day" : `${formatSlotTime(u.start!)} – ${formatSlotTime(u.end!)}`}
-                                            {u.reason && <span className="text-gray-400"> · {u.reason}</span>}
-                                        </span>
-                                    ))}
                                 </div>
                             </div>
                         )

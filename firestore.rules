@@ -20,7 +20,7 @@ service cloud.firestore {
       return ['uid', 'accountType', 'admin', 'besaName', 'studentId',
               'biWeeklyHours', 'lastCheckedIn', 'lastCheckedInActivities',
               'breakUsedSeconds', 'breakCarriedSeconds', 'breakStartedAt', 'breakEndsAt',
-              'lastCheckedInNotes'];
+              'lastCheckedInNotes', 'breakEndNotified'];
     }
 
     match /training_data/data_root/users/{userId} {

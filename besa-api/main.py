@@ -1131,12 +1131,13 @@ def endBreak(request_data: EndBreakRequest, root_user: dict = Depends(require_ro
         raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't on break.")
     #only the time actually taken counts - the rest stays available for later
     target_ref.update({"breakUsedSeconds": _break_used_seconds(data, now), "breakStartedAt": None, "breakEndsAt": None})
-    _notify_break_ended(data.get("besaName"))
+    _notify_break_ended(target_ref.id, data.get("besaName"))
     return {"success": True, "besaName": data.get("besaName")}
 
 
 # ---- "Your break has ended" emails ----
-# Emailed to every BESA account (BCC, so nobody sees the others' addresses) whenever a break ends: right away
+# Emailed to the BESA whose break it was plus every BESA Lead (BCC, so nobody sees the others' addresses)
+# whenever a break ends: right away
 # when the kiosk ends it early (above), or by the break_end_alerts scheduled function (bottom of this file)
 # within about a minute of a break's timer running out. Sent from a Gmail account over SMTP using a Google
 # App Password. Off unless both BREAK_ALERT_GMAIL_ADDRESS and BREAK_ALERT_GMAIL_APP_PASSWORD are set.
@@ -1146,10 +1147,11 @@ GMAIL_SMTP_PORT = 465
 BREAK_ALERT_MAX_LATE = timedelta(minutes=10)
 
 
-#sign-in emails of every besa/besaLead account - they live on Firebase Auth, not the user docs
-def _besa_emails() -> list:
+#sign-in emails (they live on Firebase Auth, not the user docs) of the BESA whose break ended and every BESA Lead
+def _break_alert_emails(on_break_uid: str) -> list:
     users_ref = firestore.client().collection("training_data").document("data_root").collection("users")
-    uids = [u.id for u in users_ref.stream() if (u.to_dict() or {}).get("accountType") in ("besa", "besaLead")]
+    uids = {on_break_uid} | {u.id for u in users_ref.where(filter=FieldFilter("accountType", "==", "besaLead")).stream()}
+    uids = sorted(uids)
     emails = []
     for i in range(0, len(uids), 100):  # get_users takes at most 100 identifiers per call
         result = auth.get_users([auth.UidIdentifier(uid) for uid in uids[i:i + 100]])
@@ -1157,14 +1159,14 @@ def _besa_emails() -> list:
     return emails
 
 
-def _notify_break_ended(besa_name):
+def _notify_break_ended(on_break_uid: str, besa_name):
     sender = os.getenv("BREAK_ALERT_GMAIL_ADDRESS")
     app_password = os.getenv("BREAK_ALERT_GMAIL_APP_PASSWORD")
     if not sender or not app_password:
         return
     name = besa_name or "A BESA"
     try:
-        recipients = _besa_emails()
+        recipients = _break_alert_emails(on_break_uid)
         if not recipients:
             return
         message = EmailMessage()
@@ -1202,7 +1204,7 @@ def _send_due_break_alerts():
         if data.get("breakEndNotified", True):
             continue
         if claim(db.transaction(), snap.reference):
-            _notify_break_ended(data.get("besaName"))
+            _notify_break_ended(snap.id, data.get("besaName"))
 
 
 #the current period's hours entries, each with that day's break allowance (same rule as the kiosk's live one:

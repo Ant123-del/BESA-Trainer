@@ -5,7 +5,7 @@ The backend is hosted using firebase functions. It uses Python FastAPI. The main
  * Handle large requests for backend such as updating everyone's progress when there a section change. 
 ## Break-ended emails
 
-When a BESA's break ends, the backend emails "<name>, your break has ended." to every BESA account. Each person is BCC'd, so nobody sees the others' addresses. If a break is ended early from the kiosk, the email goes out right away. If the break timer runs out, the `break_end_alerts` scheduled function sends it within about a minute.
+When a BESA's break ends, the backend emails "<name>, your break has ended." to that BESA and every BESA Lead. Each person is BCC'd, so nobody sees the others' addresses. If a break is ended early from the kiosk, the email goes out right away. If the break timer runs out, the `break_end_alerts` scheduled function sends it within about a minute.
 
 The emails are sent from a Gmail account. Setup:
 
@@ -18,4 +18,4 @@ The emails are sent from a Gmail account. Setup:
    firebase functions:secrets:set BREAK_ALERT_GMAIL_APP_PASSWORD
    ```
 
-If either secret is empty, the emails are off and nothing else is affected. A personal Gmail account can send about 500 emails a day, and each BESA on the BCC list counts toward that.
+If either secret is empty, the emails are off and nothing else is affected. A personal Gmail account can send about 500 emails a day, and each person on the BCC list (the BESA plus every Lead) counts toward that.

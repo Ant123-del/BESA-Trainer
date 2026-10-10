@@ -1,4 +1,5 @@
-import type { JSX } from "react"
+import { useState, type JSX } from "react"
+import { FaCheck, FaRegCopy } from "react-icons/fa"
 import type { BreakState, OfficeScheduleDay, WorkedOn } from "../Tools/Fetch"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import { sameDay, startOfWeek, toDateKey } from "../Tools/dates"
@@ -57,9 +58,10 @@ function Badge({label, title, className}: {label: string, title: string, classNa
 //Profile view) - it gets the day plus whatever's logged. Passing schedule adds each day's break status
 //({left}/{total}, the total coming from that date's effective BESA Booking office hours) up through today.
 //Each day's own notes always show; passing dayNoteHandlers (the member's own My Hours) lets them add/delete them.
-export default function WeeklyHoursTable({entries, openSession, schedule, onEditDay, dayNoteHandlers, weekStart = startOfWeek(new Date())}: {
+//copyActivities (also the member's own My Hours) adds a button that copies the day's activities, comma-separated.
+export default function WeeklyHoursTable({entries, openSession, schedule, onEditDay, dayNoteHandlers, copyActivities, weekStart = startOfWeek(new Date())}: {
     entries: WeeklyHoursEntry[], openSession?: OpenSession | null, schedule?: OfficeScheduleDay[] | null,
-    onEditDay?: (day: WeeklyHoursEntry) => void, dayNoteHandlers?: DayNoteHandlers, weekStart?: Date
+    onEditDay?: (day: WeeklyHoursEntry) => void, dayNoteHandlers?: DayNoteHandlers, copyActivities?: boolean, weekStart?: Date
 }): JSX.Element {
     const today = new Date()
     const days = Array.from({length: 7}, (_, i) => {
@@ -95,8 +97,9 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
             </div>
             {days.map((d, i) => (
                 <div key={i} className={"grid " + cols + " text-sm " + (i % 2 === 0 ? "bg-gray-800" : "bg-gray-800/60")}>
-                    <div className="p-2 px-3 text-gray-300">
-                        {DAY_LABELS[d.date.getDay()]} <span className="whitespace-nowrap">{(d.date.getMonth() + 1).toString().padStart(2, "0")}/{d.date.getDate().toString().padStart(2, "0")}</span>
+                    <div className="p-2 px-3 text-gray-300 flex flex-col items-start gap-1">
+                        <span>{DAY_LABELS[d.date.getDay()]} <span className="whitespace-nowrap">{(d.date.getMonth() + 1).toString().padStart(2, "0")}/{d.date.getDate().toString().padStart(2, "0")}</span></span>
+                        {copyActivities && <CopyActivitiesButton activities={[...d.activities, ...(d.open?.activities || [])]}/>}
                     </div>
                     <div className="p-2 px-3 text-gray-400 flex flex-col gap-1 min-w-0">
                         {d.sessions.map((s, j) => (
@@ -135,6 +138,31 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
                 {onEditDay && <div/>}
             </div>
         </div>
+    )
+}
+
+//copies the day's activities as one line ("Tours, Slugworks") - e.g. for pasting into a timesheet
+function CopyActivitiesButton({activities}: {activities: string[]}) {
+    const [copied, setCopied] = useState(false)
+    const unique = [...new Set(activities)]
+    if (unique.length === 0) return null
+
+    async function copy() {
+        try {
+            await navigator.clipboard.writeText(unique.join(", "))
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+        } catch (e) {
+            console.error(e)
+        }
+    }
+
+    return (
+        <button onClick={() => void copy()} title={`Copy: ${unique.join(", ")}`}
+            className={"flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full " + (copied ? "bg-green-700 text-white" : "bg-gray-700 hover:bg-gray-600 text-gray-200")}>
+            {copied ? <FaCheck size={9}/> : <FaRegCopy size={9}/>}
+            {copied ? "Copied" : "Copy"}
+        </button>
     )
 }
 

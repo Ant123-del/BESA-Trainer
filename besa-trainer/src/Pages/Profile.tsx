@@ -285,6 +285,7 @@ export default function Profile(): JSX.Element {
                                     schedule={ownSchedule}
                                     periodStart={periodStart}
                                     dayNoteHandlers={dayNoteHandlers}
+                                    copyActivities
                                     openSession={ownOpenSession !== undefined ? ownOpenSession
                                         : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || [], notes: toNotes(userData.lastCheckedInNotes)}
                                         : null}/>

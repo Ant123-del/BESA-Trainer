@@ -8,11 +8,11 @@ import { Loading } from "../Components/SectionEditor/Edit"
 import { getFirebaseAuth } from "../Tools/firebase"
 import { db, deleteUserAccountData } from "../Tools/firestore"
 import { mapFirebaseAuthError } from "../Tools/authErrors"
-import { toDateKey } from "../Tools/dates"
+import { fromDateKey, toDateKey } from "../Tools/dates"
 import type { User as CustomUser, DayHours } from "../Tools/types"
 import {
     addDayNote, changeRootAdminPasscode, checkAutoClockout, deleteDayNote, deleteRootAccount, getActivityTypes, getAllHours,
-    getRootAdminToken, rootAdminLogout, setMemberDayHours, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeScheduleDay
+    getPastHours, getRootAdminToken, rootAdminLogout, setMemberDayHours, type PastPeriod, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeScheduleDay
 } from "../Tools/Fetch"
 import { type OpenSession, type WeeklyHoursEntry } from "../Components/WeeklyHoursTable"
 import HoursCarousel from "../Components/HoursCarousel"
@@ -291,6 +291,10 @@ export default function Profile(): JSX.Element {
                                         : null}/>
                             </section>
                         }
+
+                        {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&
+                            <PastLogsPanel/>
+                        }
                     </div>
                 }
             </div>
@@ -341,6 +345,62 @@ export default function Profile(): JSX.Element {
                 </Loading>
             }
         </div>
+    )
+}
+
+//"2026-09-27" -> "Sep 27 – Oct 10"
+function periodLabel(periodStart: string): string {
+    const start = fromDateKey(periodStart)
+    const end = new Date(start)
+    end.setDate(end.getDate() + 13)
+    const fmt = (d: Date) => d.toLocaleDateString("en-US", {month: "short", day: "numeric"})
+    return `${fmt(start)} – ${fmt(end)}`
+}
+
+//besa/besaLead only - their finished two-week periods (My Hours above only shows the current one). Loaded the
+//first time it's opened; read-only apart from copying a day's activities.
+function PastLogsPanel() {
+    const [open, setOpen] = useState(false)
+    const [periods, setPeriods] = useState<PastPeriod[] | null | undefined>(undefined) // undefined = not loaded, null = failed
+    const [chosen, setChosen] = useState(0)
+
+    function toggle() {
+        setOpen(!open)
+        if (!open && periods === undefined) {
+            getPastHours().then(result => setPeriods(result ?? null))
+        }
+    }
+
+    const period = periods?.[chosen]
+
+    return (
+        <section className="bg-gray-800 rounded-2xl p-6">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+                <h2 className="text-2xl tracking-wide">Past Logs</h2>
+                <button onClick={toggle} className="p-2 px-5 rounded-full bg-gray-700 hover:bg-gray-600 text-sm">
+                    {open ? "Hide" : "Show Past Logs"}
+                </button>
+            </div>
+            {open && (periods === undefined ?
+                <div className="flex justify-center py-10"><MoonLoader color="white" size={24}/></div>
+                : periods === null ?
+                <p className="text-red-400 text-sm mt-4">Couldn't load your past logs - try again later.</p>
+                : periods.length === 0 ?
+                <p className="text-gray-500 italic text-sm mt-4">No past logs yet - each two-week period shows up here once it's over.</p>
+                :
+                <div className="mt-4">
+                    <label className="block text-sm text-gray-400 mb-1">Pay period</label>
+                    <select value={chosen} onChange={(e) => setChosen(Number(e.target.value))}
+                        className="w-full sm:w-auto p-2 px-3 rounded-xl bg-gray-700 text-white mb-4">
+                        {periods.map((p, i) => <option key={p.periodStart} value={i}>{periodLabel(p.periodStart)}</option>)}
+                    </select>
+                    {period &&
+                        <HoursCarousel key={period.periodStart} entries={toWeeklyHoursEntries(period.hours)}
+                            schedule={period.officeSchedule} periodStart={period.periodStart} copyActivities/>
+                    }
+                </div>
+            )}
+        </section>
     )
 }
 

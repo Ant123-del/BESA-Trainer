@@ -632,6 +632,28 @@ export async function removeActivityType(name: string): Promise<string[] | void>
 //past their 8pm auto-clockout window, closing the session (crediting hours via their besa-app office
 //hours schedule) if so. Called from Profile.tsx on load so a member sees an up-to-date week even if
 //nobody ever hit the root kiosk's Current Sessions/all-hours views after they forgot to clock out.
+//one finished two-week pay period from Profile's Past Logs - periodStart is its first Sunday (YYYY-MM-DD)
+export type PastPeriod = {periodStart: string, hours: ApiDayHours[], officeSchedule: OfficeScheduleDay[] | null}
+
+//besa/besaLead only - their finished pay periods, newest first (days move here once a period ends)
+export async function getPastHours(): Promise<PastPeriod[] | void> {
+    try {
+        const user = getAuth().currentUser
+        if (!user) {
+            return console.error("not logged in")
+        }
+        const idToken = await user.getIdToken()
+        const response = await fetch(url + "my-hours/past", {headers: {"Authorization": `Bearer ${idToken}`}})
+        if (!response.ok) {
+            console.error(response.status)
+            return
+        }
+        return (await response.json() as {periods: PastPeriod[]}).periods
+    } catch (e) {
+        console.error(e)
+    }
+}
+
 export async function checkAutoClockout(fresh = false): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null, periodStart?: string} | void> {
     try {
         const auth = getAuth()

@@ -468,15 +468,53 @@ def _day_hours(entry: dict) -> float:
                                for s in sessions))
 
 
-#prunes biWeeklyHours to the current two-week pay period (relative to `now`), then merges this session's hours into
-#(or creates) the entry for checked_in_at's calendar day. Shared by manual clock-out and auto-clockout.
+# ---- Past logs (finished pay periods) ----
+# biWeeklyHours on the user doc only holds the current two-week period. When a period ends, its days are moved
+# (not deleted) into hours_archive/{uid}_{periodStart}: {uid, besaName, periodStart, days: {YYYY-MM-DD: entry}},
+# which Profile's Past Logs reads through /my-hours/past. Firestore rules don't match hours_archive, so only
+# this backend (Admin SDK) can read or write it.
+HOURS_ARCHIVE_COLLECTION = "hours_archive"
+
+
+#writes any days from before the current period into their period's archive doc and returns the rest. The
+#archive is written before the caller updates the user doc, and a day is keyed by its date, so a retry (or
+#the same day archived twice) just overwrites it - nothing is ever lost or duplicated.
+def _archive_past_periods(uid: str, besa_name, entries: list, now: datetime) -> list:
+    current_start = _period_start(now)
+    is_old = lambda e: e.get("date") and e["date"].astimezone(PACIFIC) < current_start
+    by_period = {}
+    for e in entries:
+        if is_old(e):
+            start = _period_start(e["date"]).date().isoformat()
+            by_period.setdefault(start, {})[e["date"].astimezone(PACIFIC).date().isoformat()] = e
+    if not by_period:
+        return entries
+    db = firestore.client()
+    for start, days in by_period.items():
+        db.collection(HOURS_ARCHIVE_COLLECTION).document(f"{uid}_{start}").set(
+            {"uid": uid, "besaName": besa_name, "periodStart": start, "days": days, "archivedAt": now}, merge=True)
+    return [e for e in entries if not is_old(e)]
+
+
+#archives a member's finished-period days that are still sitting on their user doc (they haven't clocked out
+#since the period ended) - returns the doc data as it is afterwards
+def _roll_over_periods(target_ref, data: dict) -> dict:
+    entries = data.get("biWeeklyHours") or []
+    current = _archive_past_periods(target_ref.id, data.get("besaName"), entries, datetime.now(PACIFIC))
+    if len(current) == len(entries):
+        return data
+    target_ref.update({"biWeeklyHours": current})
+    return {**data, "biWeeklyHours": current}
+
+
+#merges this session's hours into (or creates) the entry for checked_in_at's calendar day. Shared by manual
+#clock-out and auto-clockout. Days from finished pay periods are moved out by _archive_past_periods afterwards.
 #Each day also keeps its individual sessions (arrive/leave time + activities) so the hours table can show
 #when someone was actually there - entries written before sessions existed just have none.
 #left_early_seconds: unused break they left early with (see /clock-out's leaveEarly) - credited as time in.
 def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False, notes: list | None = None, worked_on: list | None = None, left_early_seconds: int = 0):
     elapsed_hours = _credited_hours((effective_end - checked_in_at).total_seconds() + left_early_seconds)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
-    keep_from = _period_start(now)
     #once we know what they actually worked on, that's what the visit (and the day) records - the intended
     #activities picked at clock-in aren't kept. Canceled tours have no split, so they keep their intended ones.
     if worked_on:
@@ -485,11 +523,9 @@ def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: d
                "breakSeconds": break_seconds, "canceledTour": canceled_tour, "notes": notes or [], "workedOn": worked_on or [],
                "leftEarlySeconds": left_early_seconds}
 
-    pruned = [e for e in existing if e.get("date") and e["date"].astimezone(PACIFIC) >= keep_from]
-
     merged = False
     new_hours = []
-    for e in pruned:
+    for e in (e for e in existing if e.get("date")):
         if e["date"].astimezone(PACIFIC).date() == entry_day.date():
             merged_entry = {
                 **e,
@@ -583,8 +619,8 @@ def _open_session(data: dict):
 
 WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
 #hours run in fixed two-week periods (two Sun-Sat weeks, flipped through as a carousel), starting from this
-#Sunday and repeating every 14 days. When a period ends everything resets: the next clock-out prunes the old
-#period's hours, and the views only ever show the current period.
+#Sunday and repeating every 14 days. When a period ends its days move to the past-logs archive (see
+#_archive_past_periods), and My Hours only ever shows the current period.
 PAY_PERIOD_ANCHOR = date_cls(2026, 9, 27)
 PAY_PERIOD_DAYS = 14
 
@@ -841,6 +877,7 @@ def _auto_clock_out_if_needed(target_ref, data: dict) -> dict:
                                       auto_clocked_out=True, break_seconds=break_seconds, notes=data.get("lastCheckedInNotes"),
                                       worked_on=worked_on)
 
+    new_hours = _archive_past_periods(target_ref.id, data.get("besaName"), new_hours, now)
     update = {"biWeeklyHours": new_hours, "lastCheckedIn": None, "lastCheckedInActivities": [], **VISIT_FIELDS_RESET}
     target_ref.update(update)
     _log_activity(firestore.client(), target_ref.id, data, checked_in_at, effective_end, worked_on, estimated=True)
@@ -882,7 +919,7 @@ def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root
 # At clock-out the kiosk asks which activities were actually worked on and how the visit splits between them
 # (a timeline bar with a slider between each pair). Each share becomes actual minutes plus its share of the
 # visit's credited hours. It's saved on the visit (workedOn) AND appended to a top-level activity_log
-# collection, which - unlike biWeeklyHours - is never pruned at the end of a pay period, so the Manage Admins
+# collection, which - unlike biWeeklyHours - is never cleared at the end of a pay period, so the Manage Admins
 # analytics can look back as far as it likes. Firestore rules don't match activity_log, so only this backend
 # (Admin SDK) can read or write it.
 ACTIVITY_LOG_COLLECTION = "activity_log"
@@ -1014,6 +1051,7 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
                                                   break_seconds=_visit_break_seconds(data, now) + leave_early_seconds,
                                                   notes=data.get("lastCheckedInNotes"), worked_on=worked_on,
                                                   left_early_seconds=leave_early_seconds)
+    new_hours = _archive_past_periods(target_ref.id, data.get("besaName"), new_hours, now)
 
     target_ref.update({
         "biWeeklyHours": new_hours,
@@ -1107,6 +1145,7 @@ def canceledTour(request_data: CanceledTourRequest, root_user: dict = Depends(re
                                               data.get("lastCheckedInActivities") or [], now,
                                               break_seconds=_visit_break_seconds(data, now), canceled_tour=True,
                                               notes=data.get("lastCheckedInNotes"))
+    new_hours = _archive_past_periods(target_ref.id, data.get("besaName"), new_hours, now)
     target_ref.update({"biWeeklyHours": new_hours, "lastCheckedIn": None, "lastCheckedInActivities": [], **VISIT_FIELDS_RESET})
     return {"success": True, "besaName": data.get("besaName"), "dayHours": day_hours}
 
@@ -1256,15 +1295,45 @@ def _shown_weeks_hours(data: dict, roster_docs: list | None = None) -> list:
     shown_from = _period_start(datetime.now(PACIFIC))
     roster_doc = _roster_doc_for(data.get("besaName"), roster_docs if roster_docs is not None else _get_roster())
     entries = data.get("biWeeklyHours") or []
+    return _hours_for_display([e for e in entries if e.get("date") and e["date"].astimezone(PACIFIC) >= shown_from], roster_doc)
+
+
+#serialized hours entries, each with that day's break allowance
+def _hours_for_display(entries: list, roster_doc) -> list:
     shown = []
     for e in entries:
-        if not (e.get("date") and e["date"].astimezone(PACIFIC) >= shown_from):
-            continue
         day = e["date"].astimezone(PACIFIC).date()
         office_day = _office_day(roster_doc, day) if roster_doc else None
         basis = _break_basis_hours(office_day, _worked_hours_on(entries, day), None, datetime.now(PACIFIC))
         shown.append({**_serialize_hours_entry(e), "breakAllowanceMinutes": _break_allowance_minutes(basis)})
     return shown
+
+
+#besa/besaLead only - their finished pay periods (Profile's Past Logs), newest first, each with its days and
+#that period's office hours from BESA Booking
+@app.get("/my-hours/past")
+def myPastHours(user: dict = Depends(get_current_user)):
+    db = firestore.client()
+    target_ref = db.collection("training_data").document("data_root").collection("users").document(user.get("uid"))
+    doc = target_ref.get()
+    data = (doc.to_dict() or {}) if doc.exists else {}
+    if data.get("accountType") not in ("besa", "besaLead"):
+        raise HTTPException(status_code=403, detail="Only BESA accounts have hours.")
+    data = _roll_over_periods(target_ref, data)
+
+    roster_doc = _roster_doc_for(data.get("besaName"), _get_roster())
+    periods = []
+    for snap in db.collection(HOURS_ARCHIVE_COLLECTION).where(filter=FieldFilter("uid", "==", target_ref.id)).stream():
+        archived = snap.to_dict() or {}
+        start = date_cls.fromisoformat(archived["periodStart"])
+        entries = sorted((archived.get("days") or {}).values(), key=lambda e: e["date"])
+        periods.append({
+            "periodStart": archived["periodStart"],
+            "hours": _hours_for_display(entries, roster_doc),
+            "officeSchedule": [_office_day(roster_doc, start + timedelta(days=i)) for i in range(PAY_PERIOD_DAYS)] if roster_doc else None,
+        })
+    periods.sort(key=lambda p: p["periodStart"], reverse=True)
+    return {"success": True, "periods": periods}
 
 
 # ---- Root admin login (passcode on top of the already-signed-in root kiosk account) ----
@@ -1442,7 +1511,7 @@ class SetDayHoursRequest(BaseModel):
 
 
 #root admin only - overwrites (or clears, with 0 hours and no activities) one day's hours entry for a
-#besa/besaLead member. Restricted to the current week since older entries get pruned on the next clock-out.
+#besa/besaLead member. Restricted to the current period since older days are moved to the past-logs archive.
 @app.post("/root-admin/set-day-hours")
 def setDayHours(request_data: SetDayHoursRequest, root_user: dict = Depends(require_root_admin)):
     if (request_data.hours * 2) != int(request_data.hours * 2):
@@ -1506,7 +1575,7 @@ class DeleteDayNoteRequest(BaseModel):
 
 
 #the signed-in besa/besaLead's own user doc, plus the requested day (must be in the current period, since
-#older entries get pruned on the next clock-out anyway)
+#older days are moved to the past-logs archive)
 def _own_hours_day(user: dict, date_str: str):
     try:
         day = date_cls.fromisoformat(date_str)

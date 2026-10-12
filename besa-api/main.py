@@ -659,54 +659,22 @@ def _roster_doc_for(besa_name, roster_docs: list):
     return next((d for d in roster_docs if besa_name and d.get(BESA_ROSTER_NAME_FIELD) == besa_name), None)
 
 
-#one date's actual office hours on BESA Booking. Three layers, in order:
+#one date's office hours on BESA Booking:
 #  officeHours        - the weekly recurring schedule ({"monday": {"available", "timeSlots"}, ...})
 #  tempAdjustments    - [{date: "YYYY-MM-DD", timeSlots, reason?}] replaces that one date's hours outright
-#  tempUnavailability - [{date, allDay, start?, end?, reason?}] removes time from that date (all of it if allDay)
-#Returns the effective slots plus what changed, so the views can say why a day differs from the usual week.
+#tempUnavailability ("outs", e.g. meetings pulled in from their calendar) is deliberately ignored - an out
+#doesn't shrink the schedule, the break allowance, or the auto-clockout time, and isn't shown anywhere.
+#Returns the slots plus whether they're temporary, so the views can say why a day differs from the usual week.
 def _office_day(roster_doc: dict, day: date_cls) -> dict:
     key = day.isoformat()
     weekday = WEEKDAYS[(day.weekday() + 1) % 7]
 
     temp = next((a for a in roster_doc.get("tempAdjustments") or [] if isinstance(a, dict) and a.get("date") == key), None)
     if temp is not None:
-        base = _clean_slots(temp.get("timeSlots"))
+        slots = _clean_slots(temp.get("timeSlots"))
     else:
         weekly = (roster_doc.get("officeHours") or {}).get(weekday) or {}
-        base = _clean_slots(weekly.get("timeSlots")) if weekly.get("available", True) else []
-
-    slots = list(base)
-    unavailable = {}
-    for u in roster_doc.get("tempUnavailability") or []:
-        if not isinstance(u, dict) or u.get("date") != key:
-            continue
-        if u.get("allDay"):
-            u_start, u_end = 0, 24 * 60
-        else:
-            u_start, u_end = _hhmm_to_minutes(u.get("start")), _hhmm_to_minutes(u.get("end"))
-            if u_start is None or u_end is None or u_end <= u_start:
-                continue
-        #only list unavailability that actually cuts into their office hours that day (deduped - the booking
-        #site sometimes stores the same block twice, once by hand and once from the calendar)
-        if not any(u_start < e and u_end > st for st, e in base):
-            continue
-        sig = (bool(u.get("allDay")), u_start, u_end)
-        if sig in unavailable:
-            if not unavailable[sig]["reason"]:
-                unavailable[sig]["reason"] = u.get("reason") or ""  #prefer whichever copy says why
-            continue
-        unavailable[sig] = {"allDay": bool(u.get("allDay")), "start": None if u.get("allDay") else _minutes_to_hhmm(u_start),
-                            "end": None if u.get("allDay") else _minutes_to_hhmm(u_end), "reason": u.get("reason") or ""}
-        trimmed = []
-        for st, e in slots:
-            if u_end <= st or u_start >= e:
-                trimmed.append((st, e))
-                continue
-            if st < u_start:
-                trimmed.append((st, u_start))
-            if u_end < e:
-                trimmed.append((u_end, e))
-        slots = trimmed
+        slots = _clean_slots(weekly.get("timeSlots")) if weekly.get("available", True) else []
 
     scheduled_hours = sum(e - st for st, e in slots) / 60
     return {
@@ -715,7 +683,7 @@ def _office_day(roster_doc: dict, day: date_cls) -> dict:
         "slots": [{"start": _minutes_to_hhmm(st), "end": _minutes_to_hhmm(e)} for st, e in slots],
         "temporary": temp is not None,
         "temporaryReason": (temp or {}).get("reason") or "",
-        "unavailable": sorted(unavailable.values(), key=lambda u: u["start"] or ""),
+        "unavailable": [],  #outs are ignored (see above) - kept so older clients still get the field
         "scheduledHours": round(scheduled_hours, 2),
         "breakAllowanceMinutes": _break_allowance_minutes(scheduled_hours),
     }

@@ -84,24 +84,28 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
     })
     const total = days.reduce((sum, d) => sum + d.hours, 0)
     const cols = onEditDay
-        ? "grid-cols-[5rem_1fr_3rem_3.25rem] sm:grid-cols-[7rem_1fr_4rem_3.5rem]"
-        : "grid-cols-[5rem_1fr_3.5rem] sm:grid-cols-[7rem_1fr_5rem]"
+        //minmax(0,1fr), not 1fr - a plain 1fr column grows to fit its widest unbreakable line, pushing the
+        //Hours/Edit columns off the side of a phone screen. On a phone Edit sits under the hours instead of in
+        //its own column, leaving the middle column room to read.
+        ? "grid-cols-[3.75rem_minmax(0,1fr)_3.5rem] sm:grid-cols-[7rem_minmax(0,1fr)_4rem_3.5rem]"
+        : "grid-cols-[3.75rem_minmax(0,1fr)_3.5rem] sm:grid-cols-[7rem_minmax(0,1fr)_5rem]"
+    const editColumnSpacer = onEditDay && <div className="hidden sm:block"/>
 
     return (
         <div className="rounded-xl overflow-hidden border border-gray-700">
             <div className={"grid " + cols + " bg-amber-500 text-black text-sm font-semibold"}>
-                <div className="p-2 px-3">Date</div>
-                <div className="p-2 px-3">Time & Activities</div>
-                <div className="p-2 px-3 text-right">Hours</div>
-                {onEditDay && <div/>}
+                <div className="p-2 px-2 sm:px-3">Date</div>
+                <div className="p-2 px-2 sm:px-3">Time & Activities</div>
+                <div className="p-2 px-2 sm:px-3 text-right">Hours</div>
+                {editColumnSpacer}
             </div>
             {days.map((d, i) => (
                 <div key={i} className={"grid " + cols + " text-sm " + (i % 2 === 0 ? "bg-gray-800" : "bg-gray-800/60")}>
-                    <div className="p-2 px-3 text-gray-300 flex flex-col items-start gap-1">
+                    <div className="p-2 px-2 sm:px-3 text-gray-300 flex flex-col items-start gap-1">
                         <span>{DAY_LABELS[d.date.getDay()]} <span className="whitespace-nowrap">{(d.date.getMonth() + 1).toString().padStart(2, "0")}/{d.date.getDate().toString().padStart(2, "0")}</span></span>
                         {copyActivities && <CopyActivitiesButton activities={[...d.activities, ...(d.open?.activities || [])]}/>}
                     </div>
-                    <div className="p-2 px-3 text-gray-400 flex flex-col gap-1 min-w-0">
+                    <div className="p-2 px-2 sm:px-3 text-gray-400 flex flex-col gap-1 min-w-0">
                         {d.sessions.map((s, j) => (
                             <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} canceledTour={s.canceledTour} notes={s.notes} workedOn={s.workedOn} leftEarlySeconds={s.leftEarlySeconds}/>
                         ))}
@@ -116,7 +120,7 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
                         }
                         <DayNotes date={toDateKey(d.date)} notes={d.dayNotes} handlers={dayNoteHandlers}/>
                     </div>
-                    <div className="p-2 px-3 text-right flex flex-wrap items-center justify-end gap-1 content-center">
+                    <div className="p-2 px-1 sm:px-3 text-right flex flex-wrap items-center justify-end gap-1 content-center">
                         {d.editedByAdmin &&
                             <Badge label="EDITED" title="A root admin edited this day's hours - the total may not match the times shown" className="bg-sky-600 text-black"/>
                         }
@@ -124,18 +128,21 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
                             <Badge label="AUTO" title="Automatically clocked out - this account forgot to clock out that day" className="bg-yellow-600 text-black"/>
                         }
                         {d.hours || ""}
+                        {onEditDay &&
+                            <button onClick={() => onEditDay(d)} className="sm:hidden text-xs px-2 py-1 rounded-full bg-gray-700 hover:bg-gray-600">Edit</button>
+                        }
                     </div>
                     {onEditDay &&
-                        <div className="p-1 flex items-center justify-center">
+                        <div className="hidden sm:flex p-1 items-center justify-center">
                             <button onClick={() => onEditDay(d)} className="text-xs px-2 py-1 rounded-full bg-gray-700 hover:bg-gray-600">Edit</button>
                         </div>
                     }
                 </div>
             ))}
             <div className={"grid " + cols + " bg-amber-500 text-black text-sm font-semibold"}>
-                <div className="p-2 px-3 col-span-2">Total</div>
-                <div className="p-2 px-3 text-right">{total}</div>
-                {onEditDay && <div/>}
+                <div className="p-2 px-2 sm:px-3 col-span-2">Total</div>
+                <div className="p-2 px-2 sm:px-3 text-right">{total}</div>
+                {editColumnSpacer}
             </div>
         </div>
     )

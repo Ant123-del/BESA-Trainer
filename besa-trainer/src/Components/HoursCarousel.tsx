@@ -88,7 +88,7 @@ export default function HoursCarousel({entries, openSession, schedule, onEditDay
                 </button>
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_16rem] items-start">
+            <div className="grid gap-4 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_16rem] items-start">
                 <WeeklyHoursTable entries={entries} openSession={openSession} schedule={schedule}
                     onEditDay={onEditDay} dayNoteHandlers={dayNoteHandlers} copyActivities={copyActivities} weekStart={weekStart}/>
                 <OfficeHoursTable days={weekSchedule}/>

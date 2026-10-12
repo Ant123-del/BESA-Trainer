@@ -1,8 +1,9 @@
-import { useEffect, useState, type JSX } from "react"
+import { useEffect, useState, type JSX, type ReactNode } from "react"
 import { onAuthStateChanged, deleteUser, signOut, type User as FirebaseUser } from "firebase/auth"
 import { doc, getDoc } from "firebase/firestore"
 import { useNavigate } from "react-router-dom"
 import { MoonLoader } from "react-spinners"
+import { FaChevronDown } from "react-icons/fa"
 import Header from "../Components/Header"
 import { Loading } from "../Components/SectionEditor/Edit"
 import { getFirebaseAuth } from "../Tools/firebase"
@@ -12,7 +13,7 @@ import { fromDateKey, toDateKey } from "../Tools/dates"
 import type { User as CustomUser, DayHours } from "../Tools/types"
 import {
     addDayNote, changeRootAdminPasscode, checkAutoClockout, deleteDayNote, deleteRootAccount, getActivityTypes, getAllHours,
-    getPastHours, getRootAdminToken, rootAdminLogout, setMemberDayHours, type PastPeriod, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeScheduleDay
+    getAllPastHours, getPastHours, getRootAdminToken, rootAdminLogout, setMemberDayHours, type PastPeriod, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeScheduleDay
 } from "../Tools/Fetch"
 import { type OpenSession, type WeeklyHoursEntry } from "../Components/WeeklyHoursTable"
 import HoursCarousel from "../Components/HoursCarousel"
@@ -215,7 +216,7 @@ export default function Profile(): JSX.Element {
         <div className="bg-gray-900 w-full min-h-screen text-white">
             <Header/>
             <div className="h-16 relative top-0 left-0 w-full"></div>
-            <div className="w-5/6 max-w-5xl mx-auto py-10">
+            <div className="w-full px-4 sm:w-5/6 sm:px-0 max-w-5xl mx-auto py-6 sm:py-10">
                 <div className="flex items-center justify-between gap-4 flex-wrap mb-8">
                     <h1 className="text-2xl sm:text-3xl md:text-4xl tracking-wider">Profile</h1>
                     {isRoot && adminUnlocked &&
@@ -232,7 +233,7 @@ export default function Profile(): JSX.Element {
                     <RootAdminLogin notice={adminNotice} onUnlocked={() => { setAdminNotice(""); setAdminUnlocked(true) }}/>
                     :
                     <div className="flex flex-col gap-8">
-                        <section className="bg-gray-800 rounded-2xl p-6">
+                        <section className="bg-gray-800 rounded-2xl p-3 sm:p-6">
                             <h2 className="text-2xl tracking-wide mb-4">Manage Account Info</h2>
                             <div className="flex flex-col gap-2 text-sm mb-6">
                                 <InfoRow label="Email" value={firebaseUser?.email || "No email on file"}/>
@@ -251,7 +252,7 @@ export default function Profile(): JSX.Element {
                         }
 
                         {isRoot &&
-                            <section className="bg-gray-800 rounded-2xl p-6">
+                            <section className="bg-gray-800 rounded-2xl p-3 sm:p-6">
                                 <h2 className="text-2xl tracking-wide mb-4">Everyone's Hours (This 2-Week Period)</h2>
                                 <OfficeTimeDisclaimer className="mb-2"/>
                                 <BreakCriteria className="mb-4"/>
@@ -260,24 +261,27 @@ export default function Profile(): JSX.Element {
                                     : allHours.length === 0 ?
                                     <p className="text-gray-500 italic text-sm">No BESA accounts yet.</p>
                                     :
-                                    <div className="flex flex-col gap-6">
+                                    <div className="flex flex-col gap-3">
                                         {allHours.map(member => (
-                                            <div key={member.uid}>
-                                                <p className="font-semibold mb-2">{member.besaName || "(no name on file)"}</p>
+                                            <MemberHoursCard key={member.uid} name={member.besaName} hours={member.hours}>
                                                 <HoursCarousel entries={toWeeklyHoursEntries(member.hours)}
                                                     openSession={toOpenSession(member.openSession)}
                                                     schedule={member.officeSchedule ?? null}
                                                     periodStart={periodStart}
                                                     onEditDay={(day) => setEditing({member, day})}/>
-                                            </div>
+                                            </MemberHoursCard>
                                         ))}
                                     </div>
                                 }
                             </section>
                         }
 
+                        {isRoot &&
+                            <EveryonesPastLogsPanel onSessionExpired={() => lockAdmin(SESSION_EXPIRED_NOTICE)}/>
+                        }
+
                         {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&
-                            <section className="bg-gray-800 rounded-2xl p-6">
+                            <section className="bg-gray-800 rounded-2xl p-3 sm:p-6">
                                 <h2 className="text-2xl tracking-wide mb-4">My Hours (This 2-Week Period)</h2>
                                 <OfficeTimeDisclaimer className="mb-2"/>
                                 <BreakCriteria className="mb-4"/>
@@ -348,6 +352,93 @@ export default function Profile(): JSX.Element {
     )
 }
 
+//one member in root's Everyone's Hours / Everyone's Past Logs - their name and total, tapping opens their hours
+//and office hours. Starts open on a wide screen and closed on a phone, where the stacked tables get long.
+function MemberHoursCard({name, hours, children}: {name?: string, hours: {hours: number}[], children: ReactNode}) {
+    const [open, setOpen] = useState(() => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches)
+    const total = hours.reduce((sum, d) => sum + d.hours, 0)
+    return (
+        <div className="rounded-xl bg-gray-900/40 border border-gray-700">
+            <button onClick={() => setOpen(!open)} aria-expanded={open}
+                className="w-full flex items-center justify-between gap-3 p-3 text-left hover:bg-gray-700/40 rounded-xl">
+                <span className="font-semibold min-w-0 break-words">{name || "(no name on file)"}</span>
+                <span className="flex items-center gap-3 shrink-0 text-sm text-gray-300">
+                    <span><span className="text-white font-semibold">{total}</span> hrs</span>
+                    <FaChevronDown size={12} className={"transition-transform " + (open ? "rotate-180" : "")}/>
+                </span>
+            </button>
+            {open && <div className="p-1.5 pt-0 sm:p-3 sm:pt-0">{children}</div>}
+        </div>
+    )
+}
+
+//root admin only - every member's hours and office hours for one finished two-week period. Loaded the first
+//time it's opened, then again whenever a different period is picked.
+function EveryonesPastLogsPanel({onSessionExpired}: {onSessionExpired: () => void}) {
+    const [open, setOpen] = useState(false)
+    const [loading, setLoading] = useState(false)
+    const [error, setError] = useState("")
+    const [data, setData] = useState<{periods: string[], periodStart: string | null, members: {uid: string, besaName?: string, hours: ApiDayHours[], officeSchedule: OfficeScheduleDay[] | null}[]} | null>(null)
+
+    async function load(periodStart?: string) {
+        setLoading(true)
+        setError("")
+        const result = await getAllPastHours(periodStart)
+        setLoading(false)
+        if (result.success) {
+            setData(result)
+        } else if (result.status === 403) {
+            onSessionExpired()
+        } else {
+            setError(result.detail)
+        }
+    }
+
+    function toggle() {
+        setOpen(!open)
+        if (!open && data === null) void load()
+    }
+
+    return (
+        <section className="bg-gray-800 rounded-2xl p-3 sm:p-6">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+                <h2 className="text-2xl tracking-wide">Everyone's Past Logs</h2>
+                <button onClick={toggle} className="p-2 px-5 rounded-full bg-gray-700 hover:bg-gray-600 text-sm">
+                    {open ? "Hide" : "Show Past Logs"}
+                </button>
+            </div>
+            {open &&
+                <div className="mt-4">
+                    {error && <p className="text-red-400 text-sm mb-3">{error}</p>}
+                    {data === null ? (loading && <div className="flex justify-center py-10"><MoonLoader color="white" size={24}/></div>)
+                        : data.periods.length === 0 ?
+                        <p className="text-gray-500 italic text-sm">No past logs yet - each two-week period shows up here once it's over.</p>
+                        :
+                        <>
+                            <label className="block text-sm text-gray-400 mb-1">Pay period</label>
+                            <div className="flex items-center gap-3 mb-4">
+                                <select value={data.periodStart ?? ""} disabled={loading} onChange={(e) => void load(e.target.value)}
+                                    className="w-full sm:w-auto p-2 px-3 rounded-xl bg-gray-700 text-white disabled:opacity-60">
+                                    {data.periods.map(p => <option key={p} value={p}>{periodLabel(p)}</option>)}
+                                </select>
+                                {loading && <MoonLoader color="white" size={18}/>}
+                            </div>
+                            <div className="flex flex-col gap-3">
+                                {data.members.map(member => (
+                                    <MemberHoursCard key={`${data.periodStart}-${member.uid}`} name={member.besaName} hours={member.hours}>
+                                        <HoursCarousel entries={toWeeklyHoursEntries(member.hours)} schedule={member.officeSchedule}
+                                            periodStart={data.periodStart ?? undefined}/>
+                                    </MemberHoursCard>
+                                ))}
+                            </div>
+                        </>
+                    }
+                </div>
+            }
+        </section>
+    )
+}
+
 //"2026-09-27" -> "Sep 27 – Oct 10"
 function periodLabel(periodStart: string): string {
     const start = fromDateKey(periodStart)
@@ -374,7 +465,7 @@ function PastLogsPanel() {
     const period = periods?.[chosen]
 
     return (
-        <section className="bg-gray-800 rounded-2xl p-6">
+        <section className="bg-gray-800 rounded-2xl p-3 sm:p-6">
             <div className="flex items-center justify-between gap-4 flex-wrap">
                 <h2 className="text-2xl tracking-wide">Past Logs</h2>
                 <button onClick={toggle} className="p-2 px-5 rounded-full bg-gray-700 hover:bg-gray-600 text-sm">
@@ -442,7 +533,7 @@ function ChangePasscodePanel({onSessionExpired}: {onSessionExpired: () => void})
     }
 
     return (
-        <section className="bg-gray-800 rounded-2xl p-6">
+        <section className="bg-gray-800 rounded-2xl p-3 sm:p-6">
             <div className="flex items-center justify-between gap-4 flex-wrap">
                 <h2 className="text-2xl tracking-wide">Admin Passcode</h2>
                 {!open &&

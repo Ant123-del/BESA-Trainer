@@ -1322,18 +1322,23 @@ def myPastHours(user: dict = Depends(get_current_user)):
     data = _roll_over_periods(target_ref, data)
 
     roster_doc = _roster_doc_for(data.get("besaName"), _get_roster())
-    periods = []
-    for snap in db.collection(HOURS_ARCHIVE_COLLECTION).where(filter=FieldFilter("uid", "==", target_ref.id)).stream():
-        archived = snap.to_dict() or {}
-        start = date_cls.fromisoformat(archived["periodStart"])
-        entries = sorted((archived.get("days") or {}).values(), key=lambda e: e["date"])
-        periods.append({
-            "periodStart": archived["periodStart"],
-            "hours": _hours_for_display(entries, roster_doc),
-            "officeSchedule": [_office_day(roster_doc, start + timedelta(days=i)) for i in range(PAY_PERIOD_DAYS)] if roster_doc else None,
-        })
+    periods = [{"periodStart": archived["periodStart"], **_archived_period_view(archived, roster_doc)}
+               for archived in (snap.to_dict() or {} for snap in
+                                db.collection(HOURS_ARCHIVE_COLLECTION).where(filter=FieldFilter("uid", "==", target_ref.id)).stream())]
     periods.sort(key=lambda p: p["periodStart"], reverse=True)
     return {"success": True, "periods": periods}
+
+
+#one archived period doc -> its days (with break allowances) and that period's office hours from BESA Booking
+def _archived_period_view(archived: dict, roster_doc) -> dict:
+    start = date_cls.fromisoformat(archived["periodStart"])
+    entries = sorted((archived.get("days") or {}).values(), key=lambda e: e["date"])
+    return {
+        "hours": _hours_for_display(entries, roster_doc),
+        "officeSchedule": [_office_day(roster_doc, start + timedelta(days=i)) for i in range(PAY_PERIOD_DAYS)] if roster_doc else None,
+    }
+
+
 
 
 # ---- Root admin login (passcode on top of the already-signed-in root kiosk account) ----
@@ -1501,6 +1506,37 @@ def allHours(root_user: dict = Depends(require_root_admin), fresh: bool = False)
                         "hours": _shown_weeks_hours(data, roster_docs), "openSession": _open_session(data),
                         "officeSchedule": _office_schedule(data.get("besaName"), roster_docs)})
     return {"success": True, "members": members, "periodStart": _period_start(datetime.now(PACIFIC)).date().isoformat()}
+
+
+#root admin only - Everyone's Past Logs: which finished periods exist, and every member's hours and office hours
+#for one of them (periodStart, YYYY-MM-DD - the newest if left out). Members who have no hours that period
+#still show, so their office hours can be seen. Archives anyone's finished-period days still on their user doc first.
+@app.get("/root-admin/past-hours")
+def allPastHours(root_user: dict = Depends(require_root_admin), periodStart: str | None = None):
+    db = firestore.client()
+    members = []
+    for u in db.collection("training_data").document("data_root").collection("users").stream():
+        data = u.to_dict() or {}
+        if data.get("accountType") in ("besa", "besaLead"):
+            members.append((u.id, _roll_over_periods(u.reference, data)))
+
+    archived_by_period = {}
+    for snap in db.collection(HOURS_ARCHIVE_COLLECTION).stream():
+        archived = snap.to_dict() or {}
+        archived_by_period.setdefault(archived.get("periodStart"), {})[archived.get("uid")] = archived
+    periods = sorted((p for p in archived_by_period if p), reverse=True)
+    chosen = periodStart if periodStart in archived_by_period else (periods[0] if periods else None)
+    if chosen is None:
+        return {"success": True, "periods": [], "periodStart": None, "members": []}
+
+    roster_docs = _get_roster()
+    result = []
+    for uid, data in members:
+        roster_doc = _roster_doc_for(data.get("besaName"), roster_docs)
+        archived = archived_by_period[chosen].get(uid) or {"periodStart": chosen, "days": {}}
+        result.append({"uid": uid, "besaName": data.get("besaName"), **_archived_period_view(archived, roster_doc)})
+    result.sort(key=lambda m: (m["besaName"] or "").lower())
+    return {"success": True, "periods": periods, "periodStart": chosen, "members": result}
 
 
 class SetDayHoursRequest(BaseModel):

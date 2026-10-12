@@ -542,6 +542,13 @@ export function setMemberDayHours(targetUid: string, date: string, hours: number
 }
 
 //root admin only - every besa/besaLead member's current-week hours, for root's Profile view.
+//root admin only - Everyone's Past Logs: the finished periods that exist (newest first) and every member's hours
+//and office hours for one of them (the newest if periodStart is left out)
+export function getAllPastHours(periodStart?: string) {
+    return rootAdminRequest<{periods: string[], periodStart: string | null, members: {uid: string, besaName?: string, hours: ApiDayHours[], officeSchedule: OfficeScheduleDay[] | null}[]}>(
+        "root-admin/past-hours" + (periodStart ? `?periodStart=${encodeURIComponent(periodStart)}` : ""))
+}
+
 export function getAllHours(fresh = false) {
     return rootAdminRequest<{members: MemberHours[], periodStart: string}>("all-hours" + (fresh ? "?fresh=true" : ""))
 }

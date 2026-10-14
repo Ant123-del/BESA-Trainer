@@ -229,64 +229,71 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                     </button>
                 </div>
             }
-            {preview === null ?
-                <>
-                    <label className="block text-sm text-gray-400 mb-1">Enter School Id</label>
-                    <input
-                        ref={idInputRef}
-                        value={studentId}
-                        onChange={(e) => setStudentId(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") void handleNext() }}
-                        placeholder="Ex: 1234567"
-                        className="w-full p-3 rounded-xl bg-gray-700 text-white mb-4"
-                    />
-                    {message && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
-                    <button
-                        onClick={() => void handleNext()}
-                        disabled={busy || !studentId.trim()}
-                        className="w-full py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 mb-6"
-                    >
-                        {busy && <MoonLoader color="white" size={16}/>}
-                        Next
-                    </button>
-                </>
-                :
-                <div className="mb-6">
-                    <p className="text-center text-sm text-gray-300 mb-1">
-                        <span className="font-semibold text-white">{preview.besaName}</span> · in for {Math.round(preview.elapsedMinutes)} min
-                        {preview.leaveEarlySeconds > 0 &&
-                            <span className="text-emerald-300"> + {Math.round(preview.leaveEarlySeconds / 60)} min unused break · credited {preview.creditedHours} h</span>
-                        }
-                    </p>
-                    <h3 className="text-lg tracking-wide text-center mb-1">What activities did you actually work on?</h3>
-                    <p className="text-xs text-gray-400 text-center mb-3">
-                        Pick everything you worked on, then drag the dividers so the bar matches how your time was split.
-                    </p>
-                    <div className="flex flex-wrap gap-2 justify-center mb-4">
-                        {choices.map(name => (
-                            <ActivityChip key={name} label={name} selected={worked.includes(name)}
-                                onClick={() => setWorkedOn(worked.includes(name) ? worked.filter(a => a !== name) : [...worked, name])}/>
-                        ))}
-                    </div>
-                    {worked.length === 0 ?
-                        <p className="text-sm text-gray-400 text-center mb-3">Pick at least one activity you actually worked on.</p>
-                        :
-                        <div className="mb-4">
-                            <ActivitySplitBar activities={worked} fractions={fractions} onChange={setFractions}
-                                totalMinutes={preview.elapsedMinutes} colorOrder={choices} startTime={preview.clockedInAt}/>
+            <label className="block text-sm text-gray-400 mb-1">Enter School Id</label>
+            <input
+                ref={idInputRef}
+                value={studentId}
+                onChange={(e) => setStudentId(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !preview) void handleNext() }}
+                disabled={!!preview}
+                placeholder="Ex: 1234567"
+                className="w-full p-3 rounded-xl bg-gray-700 text-white mb-4"
+            />
+            {message && !preview && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
+            <button
+                onClick={() => void handleNext()}
+                disabled={busy || !studentId.trim() || !!preview}
+                className="w-full py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 mb-6"
+            >
+                {busy && !preview && <MoonLoader color="white" size={16}/>}
+                Next
+            </button>
+
+            {/* step 2 is a popup over a dark backdrop, not an in-place swap - in place it looked just like the School
+                Id step, so people kept pressing straight through it. Only Back or Confirm closes it. */}
+            {preview &&
+                <div role="dialog" aria-modal="true" aria-labelledby="worked-on-title"
+                    onKeyDown={(e) => { if (e.key === "Escape" && !busy) { reset(); setMessage(null) } }}
+                    className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6">
+                    <div className="bg-gray-900 border-2 border-amber-500 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-5 sm:p-7">
+                        <p className="text-center text-sm text-gray-300 mb-2">
+                            {leaveEarlyFor ? "Leave Early" : "Clock Out"} · <span className="font-semibold text-white">{preview.besaName}</span> · in for {Math.round(preview.elapsedMinutes)} min
+                            {preview.leaveEarlySeconds > 0 &&
+                                <span className="text-emerald-300"> + {Math.round(preview.leaveEarlySeconds / 60)} min unused break · credited {preview.creditedHours} h</span>
+                            }
+                        </p>
+                        <h3 id="worked-on-title" className="text-2xl sm:text-3xl font-semibold text-amber-400 text-center mb-2">
+                            What did you actually work on?
+                        </h3>
+                        <p className="text-sm text-gray-300 text-center mb-5">
+                            Pick everything you worked on, then drag the dividers so the bar matches how your time was split.
+                        </p>
+                        <div className="flex flex-wrap gap-2 justify-center mb-5">
+                            {choices.map(name => (
+                                <ActivityChip key={name} label={name} selected={worked.includes(name)}
+                                    onClick={() => setWorkedOn(worked.includes(name) ? worked.filter(a => a !== name) : [...worked, name])}/>
+                            ))}
                         </div>
-                    }
-                    {message && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
-                    <div className="flex gap-2">
-                        <button onClick={() => { reset(); setMessage(null) }} disabled={busy}
-                            className="flex-1 py-3 rounded-full border-solid border-2 border-gray-400 hover:bg-gray-700 disabled:opacity-40">
-                            Back
-                        </button>
-                        <button onClick={() => void handleConfirm()} disabled={busy || worked.length === 0}
-                            className="flex-[2] py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                            {busy && <MoonLoader color="white" size={16}/>}
-                            {leaveEarlyFor ? "Confirm Leave Early" : "Confirm Clock Out"}
-                        </button>
+                        {worked.length === 0 ?
+                            <p className="text-sm text-gray-400 text-center mb-4">Pick at least one activity you actually worked on.</p>
+                            :
+                            <div className="mb-5">
+                                <ActivitySplitBar activities={worked} fractions={fractions} onChange={setFractions}
+                                    totalMinutes={preview.elapsedMinutes} colorOrder={choices} startTime={preview.clockedInAt}/>
+                            </div>
+                        }
+                        {message && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
+                        <div className="flex gap-2">
+                            <button onClick={() => { reset(); setMessage(null) }} disabled={busy}
+                                className="flex-1 py-3 rounded-full border-solid border-2 border-gray-400 hover:bg-gray-700 disabled:opacity-40">
+                                Back
+                            </button>
+                            <button onClick={() => void handleConfirm()} disabled={busy || worked.length === 0}
+                                className="flex-[2] py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                                {busy && <MoonLoader color="white" size={16}/>}
+                                {leaveEarlyFor ? "Confirm Leave Early" : "Confirm Clock Out"}
+                            </button>
+                        </div>
                     </div>
                 </div>
             }

@@ -86,7 +86,14 @@ export function checkTaskNoteItem(task: string, itemId: string, done: boolean, t
     return kioskPost("task-notes/check", {targetUid, task, itemId, done})
 }
 
-//BESA Lead only - every besa/besaLead account here, for the admin-management page.
+//the root account's admin session (if it's unlocked) rides along, so root can use the BESA Lead pages it's
+//allowed into (Assign Tasks); the backend ignores it for everyone else
+function withRootAdminToken(headers: Record<string, string>): Record<string, string> {
+    const token = getRootAdminToken()
+    return token ? {...headers, "X-Root-Admin-Token": token} : headers
+}
+
+//BESA Lead (or unlocked root admin, for Assign Tasks) - every besa/besaLead account, for Manage Admins and Assign Tasks.
 export async function getBesaAccounts(): Promise<BesaAccount[] | void> {
     try {
         const auth = getAuth()
@@ -97,7 +104,7 @@ export async function getBesaAccounts(): Promise<BesaAccount[] | void> {
 
         const idToken = await user.getIdToken()
         const response = await fetch(url + "besa-accounts", {
-            headers: {"Authorization": `Bearer ${idToken}`}
+            headers: withRootAdminToken({"Authorization": `Bearer ${idToken}`})
         })
         if (!response.ok) {
             console.error(response.status)
@@ -242,9 +249,9 @@ export function assignTasks(targetUid: string, tasks: string[]): Promise<{succes
 
 //---- Root kiosk: clock in/out, current sessions, hours, activity types ----
 
-//root only - who this School Id is and what Clock In offers them: their assigned tasks, or every activity if
-//none are assigned yet (assigned: false)
-export function getClockInOptions(studentId: string): Promise<{success: boolean, detail?: string, besaName?: string, tasks?: string[], assigned?: boolean, alreadyClockedIn?: boolean, taskNotes?: TaskNote[]}> {
+//root only - who this School Id is and what Clock In offers them: every activity, with their assigned tasks
+//listed in recommended (highlighted as Lead recommended)
+export function getClockInOptions(studentId: string): Promise<{success: boolean, detail?: string, besaName?: string, tasks?: string[], recommended?: string[], alreadyClockedIn?: boolean, taskNotes?: TaskNote[]}> {
     return kioskPost("clock-in/options", {studentId})
 }
 
@@ -383,10 +390,10 @@ async function kioskPost(path: string, body: unknown): Promise<{success: boolean
         const idToken = await user.getIdToken()
         const response = await fetch(url + path, {
             method: "POST",
-            headers: {
+            headers: withRootAdminToken({
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${idToken}`
-            },
+            }),
             body: JSON.stringify(body)
         })
         const data = await response.json().catch(() => ({}))

@@ -237,10 +237,16 @@ export default function Profile(): JSX.Element {
                 <div className="flex items-center justify-between gap-4 flex-wrap mb-8">
                     <h1 className="text-2xl sm:text-3xl md:text-4xl tracking-wider">Profile</h1>
                     {isRoot && adminUnlocked &&
-                        <button onClick={() => void handleAdminLogout()}
-                            className="p-2 px-5 rounded-full border-solid border-2 border-gray-400 hover:bg-gray-800 text-sm">
-                            Lock Admin
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                            <button onClick={() => navigate("/assign-tasks")}
+                                className="p-2 px-5 rounded-full bg-blue-800 hover:bg-blue-900 text-sm">
+                                Assign Tasks
+                            </button>
+                            <button onClick={() => void handleAdminLogout()}
+                                className="p-2 px-5 rounded-full border-solid border-2 border-gray-400 hover:bg-gray-800 text-sm">
+                                Lock Admin
+                            </button>
+                        </div>
                     }
                 </div>
 

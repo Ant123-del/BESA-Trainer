@@ -12,10 +12,10 @@ const NOTE_ITEM_MAX_LENGTH = 200
 const NOTE_MAX_ITEMS = 20
 
 //BESA Lead only (gated by RequireAccess in App.tsx) - picks which activities each BESA and BESA Lead (leads
-//included, themselves too) can clock in for. The kiosk's Clock In only offers someone their assigned tasks (anyone
-//with none yet sees every activity). Clock-out still offers every activity, for anything extra they worked on.
+//included, themselves too) should work on. The kiosk's Clock In still offers every activity, but highlights
+//someone's assigned tasks as "Lead recommended". Clock-out offers every activity too.
 //Each assigned task can also carry a note for that person - a description plus checkboxes they tick off - which
-//shows at the kiosk when they clock in, in Current Sessions, and on their Profile.
+//shows at the kiosk when they pick that task to clock in, in Current Sessions, and on their Profile.
 export default function AssignTasks() {
     const [accounts, setAccounts] = useState<BesaAccount[] | null>(null)
     const [tasks, setTasks] = useState<string[] | null>(null)
@@ -90,8 +90,8 @@ export default function AssignTasks() {
             <div className="w-11/12 md:w-5/6 max-w-5xl mx-auto py-10">
                 <h1 className="text-2xl sm:text-3xl md:text-4xl tracking-wider mb-1">Assign Tasks</h1>
                 <p className="text-gray-400 text-sm mb-6">
-                    Choose what each BESA can clock in for - the kiosk's Clock In only shows someone the tasks assigned to them here.
-                    BESA Leads need tasks too, including your own. Clocking out still lists every activity, so anything extra can be recorded.
+                    Choose what each BESA should work on - at the kiosk's Clock In, the tasks assigned to someone here are highlighted as
+                    "Lead recommended" (they can still pick anything else). BESA Leads can have tasks too, including your own.
                 </p>
 
                 {accounts === null || tasks === null ?
@@ -100,7 +100,7 @@ export default function AssignTasks() {
                     <div className="flex flex-col gap-6">
                         {unassigned.length > 0 &&
                             <div className="rounded-xl bg-amber-900/40 border border-amber-600 p-3 text-sm text-amber-100">
-                                <span className="font-semibold">{unassigned.length === 1 ? "1 person has" : `${unassigned.length} people have`} no tasks yet, so they see every activity at clock-in:</span>{" "}
+                                <span className="font-semibold">{unassigned.length === 1 ? "1 person has" : `${unassigned.length} people have`} no recommended tasks yet:</span>{" "}
                                 {unassigned.map(a => a.besaName || "(no name on file)").join(", ")}
                             </div>
                         }
@@ -154,7 +154,7 @@ export default function AssignTasks() {
                                                     {account.accountType === "besaLead" ? "BESA Lead" : "BESA"}
                                                 </span>
                                                 <span className="text-xs text-gray-400">
-                                                    {assigned.length === 0 ? "No tasks - sees every activity" : `${assigned.length} task${assigned.length === 1 ? "" : "s"}`}
+                                                    {assigned.length === 0 ? "No recommended tasks" : `${assigned.length} task${assigned.length === 1 ? "" : "s"}`}
                                                 </span>
                                                 {saving && <MoonLoader color="white" size={14}/>}
                                             </div>

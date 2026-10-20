@@ -68,16 +68,32 @@ function ActivityChip({label, selected, onClick}: {label: string, selected: bool
     )
 }
 
+//a task a BESA Lead assigned this person (Assign Tasks) - ringed, with "Lead recommended" under the name
+function RecommendedChip({label, selected, onClick}: {label: string, selected: boolean, onClick: () => void}) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            className={"px-4 py-1.5 rounded-2xl text-sm font-semibold flex flex-col items-center leading-tight ring-2 ring-amber-400 " +
+                (selected ? "bg-amber-500 text-black" : "bg-amber-950/60 text-amber-100 hover:bg-amber-900/60")}
+        >
+            {label}
+            <span className={"text-[10px] font-normal uppercase tracking-wide " + (selected ? "text-black/70" : "text-amber-300")}>Lead recommended</span>
+        </button>
+    )
+}
+
 //how long after the last keystroke the School Id is looked up
 const LOOKUP_DELAY_MS = 400
 
 type ClockInLookup =
     | {status: "loading"}
-    | {status: "found", besaName: string, tasks: string[], assigned: boolean, alreadyClockedIn: boolean, taskNotes: TaskNote[]}
+    | {status: "found", besaName: string, tasks: string[], recommended: string[], alreadyClockedIn: boolean, taskNotes: TaskNote[]}
     | {status: "error", detail: string}
 
-//School Id, then the tasks a BESA Lead assigned that person (Assign Tasks) - only those can be picked. Someone
-//with none assigned yet gets every activity. The lookup runs a moment after they stop typing.
+//School Id, then every task to pick from - the ones a BESA Lead assigned that person (Assign Tasks) come first,
+//highlighted as Lead recommended, and picking one opens the lead's note on it. The lookup runs a moment after
+//they stop typing.
 function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
     const [studentId, setStudentId] = useState("")
     const [lookup, setLookup] = useState<ClockInLookup | null>(null)
@@ -105,7 +121,7 @@ function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
             const result = await getClockInOptions(id)
             if (latestId.current !== id) return // they kept typing - a newer lookup is on its way
             setLookup(result.success
-                ? {status: "found", besaName: result.besaName || "", tasks: result.tasks || [], assigned: !!result.assigned, alreadyClockedIn: !!result.alreadyClockedIn, taskNotes: result.taskNotes || []}
+                ? {status: "found", besaName: result.besaName || "", tasks: result.tasks || [], recommended: result.recommended || [], alreadyClockedIn: !!result.alreadyClockedIn, taskNotes: result.taskNotes || []}
                 : {status: "error", detail: result.detail || "Something went wrong."})
         }, LOOKUP_DELAY_MS)
     }
@@ -155,26 +171,26 @@ function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
             }
             {lookup?.status === "found" && <>
                 <label className="block text-sm text-gray-400 mb-2 text-center">
-                    <span className="text-white font-semibold">{lookup.besaName}</span>{lookup.assigned ? "'s tasks" : ""} - what are you working on? <span className="text-red-400">*</span>
+                    <span className="text-white font-semibold">{lookup.besaName}</span> - what are you working on? <span className="text-red-400">*</span>
                 </label>
                 {lookup.alreadyClockedIn ?
                     <p className="text-sm text-center text-amber-300 mb-4">{lookup.besaName} is already clocked in.</p>
                     : <>
-                        {!lookup.assigned &&
-                            <p className="text-xs text-center text-amber-300 mb-3">No tasks assigned yet, so every activity is shown. A BESA Lead can assign tasks on the Assign Tasks page.</p>
-                        }
-                        <div className="flex flex-wrap gap-2 justify-center mb-4">
-                            {lookup.tasks.map(name => (
+                        <div className="flex flex-wrap gap-2 justify-center items-center mb-4">
+                            {lookup.recommended.map(name => (
+                                <RecommendedChip key={name} label={name} selected={selected.includes(name)} onClick={() => toggleActivity(name)}/>
+                            ))}
+                            {lookup.tasks.filter(name => !lookup.recommended.includes(name)).map(name => (
                                 <ActivityChip key={name} label={name} selected={selected.includes(name)} onClick={() => toggleActivity(name)}/>
                             ))}
                         </div>
                         {selected.length === 0 &&
                             <p className="text-xs text-gray-400 text-center mb-3">Pick at least one task you intend to work on to clock in.</p>
                         }
-                        {/* the leads' guidance - open here so it's seen before picking; it's checked off from Current Sessions */}
-                        {lookup.taskNotes.length > 0 &&
+                        {/* the leads' guidance on the tasks they picked - it's checked off from Current Sessions */}
+                        {lookup.taskNotes.some(note => selected.includes(note.task)) &&
                             <div className="flex flex-col gap-2 mb-4">
-                                {lookup.taskNotes.map(note => <TaskNoteCard key={note.task} note={note} defaultOpen/>)}
+                                {lookup.taskNotes.filter(note => selected.includes(note.task)).map(note => <TaskNoteCard key={note.task} note={note} defaultOpen/>)}
                             </div>
                         }
                     </>

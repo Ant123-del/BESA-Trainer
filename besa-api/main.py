@@ -122,6 +122,18 @@ def require_besa_lead(user: dict = Depends(get_current_user)):
     return user
 
 
+#Assign Tasks: a BESA Lead, or the root account once its admin passcode is unlocked (it opens the page from Profile)
+def require_lead_or_root_admin(user: dict = Depends(get_current_user), x_root_admin_token: str = Header(default="")):
+    user_doc = _users_ref(firestore.client()).document(user.get("uid")).get()
+    account_type = (user_doc.to_dict() or {}).get("accountType") if user_doc.exists else None
+    if account_type == "besaLead":
+        return user
+    if account_type == "root" and _root_admin_session_valid(user.get("uid"), x_root_admin_token):
+        return user
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Admin login required." if account_type == "root" else "BESA Lead priviledges needed")
+
+
 #the shared kiosk account - clocks OTHER besa/besaLead accounts in/out by student id, so it needs its
 #own tier rather than piggybacking on admin/besaLead (which are about managing the roster, not this).
 def require_root(user: dict = Depends(get_current_user)):
@@ -313,7 +325,7 @@ def setAdminStatus(request_data: SetAdminStatusRequest, lead_user: dict = Depend
 
 
 @app.get("/besa-accounts")
-def besaAccounts(lead_user: dict = Depends(require_besa_lead)):
+def besaAccounts(lead_user: dict = Depends(require_lead_or_root_admin)):
     db = firestore.client()
     accounts = []
     for u in db.collection("training_data").document("data_root").collection("users").stream():
@@ -338,10 +350,9 @@ def besaAccounts(lead_user: dict = Depends(require_besa_lead)):
 
 
 # ---- Assigned tasks (BESA Leads' Assign Tasks page) ----
-# Leads pick which of the shared activity types each besa/besaLead (themselves included) may clock in for -
-# stored as assignedTasks on the member's user doc. The kiosk's Clock In only offers those; someone with none
-# assigned yet is offered every activity instead, so nobody's locked out while leads set things up. Clock-out
-# always offers every activity, for anything extra.
+# Leads pick which of the shared activity types each besa/besaLead (themselves included) should work on -
+# stored as assignedTasks on the member's user doc. The kiosk's Clock In still offers every activity, but
+# highlights these as "Lead recommended" for that person. Clock-out always offers every activity too.
 TASK_NAME_MAX_LENGTH = 40
 
 
@@ -351,7 +362,7 @@ class AssignTasksRequest(BaseModel):
 
 
 @app.post("/assign-tasks")
-def assignTasks(request_data: AssignTasksRequest, lead_user: dict = Depends(require_besa_lead)):
+def assignTasks(request_data: AssignTasksRequest, lead_user: dict = Depends(require_lead_or_root_admin)):
     db = firestore.client()
     target_ref = _users_ref(db).document(request_data.targetUid)
     target_doc = target_ref.get()
@@ -369,7 +380,8 @@ def assignTasks(request_data: AssignTasksRequest, lead_user: dict = Depends(requ
 # ---- Task notes (guidance a BESA Lead leaves on one member's task, for the next time they clock in) ----
 # taskNotes on the member's user doc: {task: {description, items: [{id, text, done, doneAt}], updatedAt}}. The
 # items are an optional checklist the member ticks off - at the kiosk (Current Sessions) or on their Profile - and
-# the leads see that progress on Assign Tasks. A note stays until a lead removes it.
+# the leads see that progress on Assign Tasks. A note stays until a lead removes it. Ticking the last checkbox
+# emails every BESA Lead and root account (see _notify_checklist_done).
 TASK_NOTE_DESCRIPTION_MAX_LENGTH = 1000
 TASK_NOTE_ITEM_MAX_LENGTH = 200
 TASK_NOTE_MAX_ITEMS = 20
@@ -401,9 +413,9 @@ class SetTaskNoteRequest(BaseModel):
     items: list[TaskNoteItem] = []
 
 
-#BESA Lead only - writes (or, when it's left empty, removes) the note on one member's task
+#BESA Lead (or root admin) - writes (or, when it's left empty, removes) the note on one member's task
 @app.post("/task-notes/set")
-def setTaskNote(request_data: SetTaskNoteRequest, lead_user: dict = Depends(require_besa_lead)):
+def setTaskNote(request_data: SetTaskNoteRequest, lead_user: dict = Depends(require_lead_or_root_admin)):
     db = firestore.client()
     target_ref, data = _besa_doc_by_uid(db, request_data.targetUid)
     task = request_data.task.strip()
@@ -464,18 +476,33 @@ def checkTaskNoteItem(request_data: CheckTaskNoteItemRequest, user: dict = Depen
     item = next((i for i in (note or {}).get("items") or [] if isinstance(i, dict) and i.get("id") == request_data.itemId), None)
     if item is None:
         raise HTTPException(status_code=404, detail="That checkbox was removed - reload to see the latest note.")
+    was_complete = all(i.get("done") for i in note["items"] if isinstance(i, dict))
     item["done"] = request_data.done
     item["doneAt"] = datetime.now(PACIFIC) if request_data.done else None
     target_ref.update({"taskNotes": notes})
+    #this tick finished the checklist - let the leads and root know, so they can follow up or leave a new note
+    if not was_complete and all(i.get("done") for i in note["items"] if isinstance(i, dict)):
+        _notify_checklist_done(data.get("besaName"), request_data.task, note)
     return {"success": True, "taskNotes": _serialize_task_notes(notes, _activity_types(db))}
 
 
-#what the member can clock in for: their assigned tasks that are still on the shared activity list (one removed
-#at the kiosk drops out), or every activity if none are assigned. The flag says which it is.
-def _clock_in_tasks(db, data: dict) -> tuple[list, bool]:
+#to every BESA Lead and root account, when someone ticks the last checkbox on a task note
+def _notify_checklist_done(besa_name, task: str, note: dict):
+    name = besa_name or "A BESA"
+    items = "\n".join(f"- [x] {i.get('text') or ''}" for i in note.get("items") or [] if isinstance(i, dict))
+    description = f'Note: "{note["description"]}"\n\n' if note.get("description") else ""
+    body = (f"{name} checked off everything on the {task} note.\n\n{description}{items}\n\n"
+            "To leave them a new note or remove this one, go to Assign Tasks.")
+    _send_alert_email(f"{name} finished the {task} checklist", body, lambda: _uids_of_type("besaLead", "root"),
+                      f"Checklist-done ({name}, {task})")
+
+
+#what the member can clock in for (every activity), and which of those a lead recommended - their assigned tasks
+#that are still on the shared activity list (one removed at the kiosk drops out)
+def _clock_in_tasks(db, data: dict) -> tuple[list, list]:
     available = _activity_types(db)
-    assigned = [t for t in data.get("assignedTasks") or [] if t in available]
-    return (assigned, True) if assigned else (available, False)
+    recommended = [t for t in data.get("assignedTasks") or [] if t in available]
+    return available, recommended
 
 
 #BESA Lead only (Manage Admins) - hours per activity per day from the permanent activity log, over the last
@@ -1012,7 +1039,7 @@ class ClockInOptionsRequest(BaseModel):
     studentId: str
 
 
-#root only - who a School Id belongs to and which tasks they're assigned, so the kiosk's Clock In can offer just those
+#root only - who a School Id belongs to, every task they can pick, and which ones a lead recommended (with notes)
 @app.post("/clock-in/options")
 def clockInOptions(request_data: ClockInOptionsRequest, root_user: dict = Depends(require_root)):
     db = firestore.client()
@@ -1020,8 +1047,8 @@ def clockInOptions(request_data: ClockInOptionsRequest, root_user: dict = Depend
     if target_ref is None:
         raise HTTPException(status_code=404, detail="No BESA account found with that School Id.")
     data = _auto_clock_out_if_needed(target_ref, data)
-    tasks, assigned = _clock_in_tasks(db, data)
-    return {"success": True, "besaName": data.get("besaName"), "tasks": tasks, "assigned": assigned,
+    tasks, recommended = _clock_in_tasks(db, data)
+    return {"success": True, "besaName": data.get("besaName"), "tasks": tasks, "recommended": recommended,
             "alreadyClockedIn": bool(data.get("lastCheckedIn")), "taskNotes": _serialize_task_notes(data.get("taskNotes"), tasks)}
 
 
@@ -1034,12 +1061,10 @@ def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root
     target_ref, data = _find_besa_by_student_id(db, request_data.studentId)
     if target_ref is None:
         raise HTTPException(status_code=404, detail="No BESA account found with that School Id.")
-    tasks, assigned = _clock_in_tasks(db, data)
-    not_allowed = [a for a in activities if a not in tasks]
+    available = _activity_types(db)
+    not_allowed = [a for a in activities if a not in available]
     if not_allowed:
-        detail = (f'"{not_allowed[0]}" isn\'t one of {data.get("besaName")}\'s assigned tasks.' if assigned
-                  else f'"{not_allowed[0]}" isn\'t on the activity list anymore.')
-        raise HTTPException(status_code=400, detail=detail)
+        raise HTTPException(status_code=400, detail=f'"{not_allowed[0]}" isn\'t on the activity list anymore.')
     #a forgotten session from an earlier day shouldn't block today's legitimate clock-in
     data = _auto_clock_out_if_needed(target_ref, data)
     if data.get("lastCheckedIn"):
@@ -1535,18 +1560,21 @@ def _start_admin_session(ref) -> dict:
     return {"success": True, "adminToken": token, "expiresAt": expires_at.isoformat()}
 
 
-def require_root_admin(root_user: dict = Depends(require_root), x_root_admin_token: str = Header(default="")):
-    doc = _root_admin_ref(root_user.get("uid")).get()
+def _root_admin_session_valid(uid: str, token: str) -> bool:
+    doc = _root_admin_ref(uid).get()
     data = (doc.to_dict() or {}) if doc.exists else {}
     stored_hash = data.get("sessionTokenHash")
     expires_at = data.get("sessionExpiresAt")
+    return bool(token and stored_hash and expires_at and expires_at >= datetime.now(PACIFIC)
+                and hmac.compare_digest(stored_hash, _hash_session_token(token)))
 
-    if (not x_root_admin_token or not stored_hash or not expires_at
-            or expires_at < datetime.now(PACIFIC)
-            or not hmac.compare_digest(stored_hash, _hash_session_token(x_root_admin_token))):
+
+def require_root_admin(root_user: dict = Depends(require_root), x_root_admin_token: str = Header(default="")):
+    if not _root_admin_session_valid(root_user.get("uid"), x_root_admin_token):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin login required.")
-
     return root_user
+
+
 
 
 def _validate_passcode(passcode: str):

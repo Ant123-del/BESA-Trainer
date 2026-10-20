@@ -512,7 +512,8 @@ def _roll_over_periods(target_ref, data: dict) -> dict:
 #Each day also keeps its individual sessions (arrive/leave time + activities) so the hours table can show
 #when someone was actually there - entries written before sessions existed just have none.
 #left_early_seconds: unused break they left early with (see /clock-out's leaveEarly) - credited as time in.
-def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False, notes: list | None = None, worked_on: list | None = None, left_early_seconds: int = 0):
+#extra: more fields to store on the session (an approved hours request's requested/requestReason/requestDetails).
+def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: datetime, activities: list, now: datetime, auto_clocked_out: bool = False, break_seconds: int = 0, canceled_tour: bool = False, notes: list | None = None, worked_on: list | None = None, left_early_seconds: int = 0, extra: dict | None = None):
     elapsed_hours = _credited_hours((effective_end - checked_in_at).total_seconds() + left_early_seconds)
     entry_day = checked_in_at.replace(hour=0, minute=0, second=0, microsecond=0)
     #once we know what they actually worked on, that's what the visit (and the day) records - the intended
@@ -521,7 +522,7 @@ def _merge_hours_entry(existing: list, checked_in_at: datetime, effective_end: d
         activities = [w["activity"] for w in worked_on]
     session = {"clockIn": checked_in_at, "clockOut": effective_end, "activities": activities, "autoClockedOut": auto_clocked_out,
                "breakSeconds": break_seconds, "canceledTour": canceled_tour, "notes": notes or [], "workedOn": worked_on or [],
-               "leftEarlySeconds": left_early_seconds}
+               "leftEarlySeconds": left_early_seconds, **(extra or {})}
 
     merged = False
     new_hours = []
@@ -583,6 +584,10 @@ def _serialize_hours_entry(e: dict) -> dict:
                 "notes": _serialize_notes(s.get("notes")),
                 "workedOn": s.get("workedOn") or [],
                 "leftEarlySeconds": s.get("leftEarlySeconds") or 0,
+                #added afterwards by an approved hours request rather than clocked at the kiosk
+                "requested": bool(s.get("requested")),
+                "requestReason": HOURS_REQUEST_REASONS.get(s.get("requestReason"), s.get("requestReason") or ""),
+                "requestDetails": s.get("requestDetails") or "",
             }
             for s in (e.get("sessions") or []) if s.get("clockIn") and s.get("clockOut")
         ],
@@ -1637,6 +1642,305 @@ def deleteDayNote(request_data: DeleteDayNoteRequest, user: dict = Depends(get_c
     hours = _update_day_notes(target_ref, data, day, entry_day,
                               lambda notes: [n for n in notes if n.get("id") != request_data.noteId])
     return {"success": True, "biWeeklyHours": hours}
+
+
+# ---- Hours requests (a member asks for time they weren't clocked in for; a root admin approves it) ----
+# From Profile a besa/besaLead picks a day on a calendar and lays out one or more time ranges on it, each with
+# what they worked on and why it wasn't clocked (forgot to clock in, worked outside the office, ...). Each range
+# is its own doc in hours_requests: {uid, besaName, date, start, end, activities, reason, details, status
+# (pending/approved/denied), createdAt, decidedAt, decisionNote}. Approving one adds it to that day exactly like
+# a kiosk visit (flagged requested), so it's rounded together with the day's other visits. Days from the current
+# and the previous pay period can be requested - an approved one in a finished period goes into its archive doc.
+# Firestore rules don't match hours_requests, so only this backend (Admin SDK) can read or write it.
+HOURS_REQUESTS_COLLECTION = "hours_requests"
+HOURS_REQUEST_REASONS = {
+    "forgotClockIn": "Forgot to clock in",
+    "forgotClockOut": "Forgot to clock out",
+    "outsideOffice": "Worked outside the office",
+    "other": "Other",
+}
+HOURS_REQUEST_DETAILS_MAX_LENGTH = 500
+HOURS_REQUESTS_MAX_PER_DAY = 10
+#decided requests stay listed (for the member and for root) this long after the decision
+HOURS_REQUEST_DECIDED_SHOWN_DAYS = 30
+
+
+#first and last day a member can ask for hours on: the start of the previous pay period through today
+def _request_window(now: datetime):
+    return (_period_start(now) - timedelta(days=PAY_PERIOD_DAYS)).date(), now.astimezone(PACIFIC).date()
+
+
+def _users_ref(db):
+    return db.collection("training_data").document("data_root").collection("users")
+
+
+#the signed-in besa/besaLead's own user doc, with any finished-period days already moved to the archive
+def _own_besa_doc(user: dict):
+    target_ref = _users_ref(firestore.client()).document(user.get("uid"))
+    doc = target_ref.get()
+    data = (doc.to_dict() or {}) if doc.exists else {}
+    if data.get("accountType") not in ("besa", "besaLead"):
+        raise HTTPException(status_code=403, detail="Only BESA accounts have hours.")
+    return target_ref, _roll_over_periods(target_ref, data)
+
+
+#a member's day entries for the pay period starting at period_start: off their user doc for the current period,
+#otherwise out of that period's archive doc. Expects the user doc to have been rolled over already.
+def _period_entries(db, uid: str, data: dict, period_start: datetime, now: datetime) -> list:
+    if period_start >= _period_start(now):
+        return data.get("biWeeklyHours") or []
+    snap = db.collection(HOURS_ARCHIVE_COLLECTION).document(f"{uid}_{period_start.date().isoformat()}").get()
+    return list(((snap.to_dict() or {}).get("days") or {}).values()) if snap.exists else []
+
+
+def _midnight(day: date_cls) -> datetime:
+    return datetime(day.year, day.month, day.day, tzinfo=PACIFIC)
+
+
+#the visits already logged on `day` (plus the one in progress, if they're clocked in that day) as (start, end)
+def _logged_ranges(db, uid: str, data: dict, day: date_cls, now: datetime) -> list:
+    entries = _period_entries(db, uid, data, _period_start(_midnight(day)), now)
+    entry = next((e for e in entries if e.get("date") and e["date"].astimezone(PACIFIC).date() == day), None)
+    ranges = [(_to_pacific(s["clockIn"]), _to_pacific(s["clockOut"]))
+              for s in (entry or {}).get("sessions") or [] if s.get("clockIn") and s.get("clockOut")]
+    if data.get("lastCheckedIn"):
+        opened = _to_pacific(data["lastCheckedIn"])
+        if opened.date() == day:
+            ranges.append((opened, now))
+    return ranges
+
+
+def _overlaps(a: tuple, b: tuple) -> bool:
+    return a[0] < b[1] and b[0] < a[1]
+
+
+def _request_time_label(start: datetime, end: datetime) -> str:
+    fmt = lambda d: d.strftime("%I:%M %p").lstrip("0")
+    return f"{fmt(start)} - {fmt(end)}"
+
+
+def _serialize_hours_request(req_id: str, r: dict) -> dict:
+    start, end = _to_pacific(r["start"]), _to_pacific(r["end"])
+    return {
+        "id": req_id,
+        "uid": r.get("uid"),
+        "besaName": r.get("besaName"),
+        "date": r.get("date"),
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "activities": r.get("activities") or [],
+        "reason": r.get("reason") or "",
+        "reasonLabel": HOURS_REQUEST_REASONS.get(r.get("reason"), r.get("reason") or ""),
+        "details": r.get("details") or "",
+        "status": r.get("status") or "pending",
+        "hours": _credited_hours((end - start).total_seconds()),
+        "createdAt": r["createdAt"].isoformat() if r.get("createdAt") else None,
+        "decidedAt": r["decidedAt"].isoformat() if r.get("decidedAt") else None,
+        "decisionNote": r.get("decisionNote") or "",
+    }
+
+
+def _member_requests(db, uid: str) -> list:
+    return [(snap.id, snap.to_dict() or {}) for snap in
+            db.collection(HOURS_REQUESTS_COLLECTION).where(filter=FieldFilter("uid", "==", uid)).stream()]
+
+
+#everything the member's Request Hours panel needs: the days they can pick, what's already logged on each of
+#them (so the day view can show it), and their pending + recently decided requests
+def _my_requests_view(db, target_ref, data: dict, now: datetime) -> dict:
+    first, last = _request_window(now)
+    logged = {}
+    for period_start in {_period_start(_midnight(first)), _period_start(now)}:
+        for e in _period_entries(db, target_ref.id, data, period_start, now):
+            day = e["date"].astimezone(PACIFIC).date() if e.get("date") else None
+            if day is None or not (first <= day <= last):
+                continue
+            logged[day.isoformat()] = [{"start": _to_pacific(s["clockIn"]).isoformat(), "end": _to_pacific(s["clockOut"]).isoformat()}
+                                       for s in e.get("sessions") or [] if s.get("clockIn") and s.get("clockOut")]
+    if data.get("lastCheckedIn"):
+        opened = _to_pacific(data["lastCheckedIn"])
+        logged.setdefault(opened.date().isoformat(), []).append({"start": opened.isoformat(), "end": None})
+
+    shown_since = now - timedelta(days=HOURS_REQUEST_DECIDED_SHOWN_DAYS)
+    requests_ = [_serialize_hours_request(rid, r) for rid, r in _member_requests(db, target_ref.id)
+                 if r.get("status") == "pending" or (r.get("decidedAt") and r["decidedAt"] >= shown_since)]
+    requests_.sort(key=lambda r: (r["date"], r["start"]), reverse=True)
+    return {"success": True, "firstDay": first.isoformat(), "lastDay": last.isoformat(), "now": now.isoformat(),
+            "logged": logged, "requests": requests_, "reasons": HOURS_REQUEST_REASONS}
+
+
+@app.get("/my-hours/requests")
+def myHoursRequests(user: dict = Depends(get_current_user)):
+    target_ref, data = _own_besa_doc(user)
+    return _my_requests_view(firestore.client(), target_ref, data, datetime.now(PACIFIC))
+
+
+class HoursRequestRange(BaseModel):
+    start: str  # "HH:MM", Pacific
+    end: str    # "HH:MM" - "24:00" is midnight at the end of the day
+    activities: list[str]
+    reason: str  # a key of HOURS_REQUEST_REASONS
+    details: str = ""
+
+
+class SubmitHoursRequestsRequest(BaseModel):
+    date: str  # YYYY-MM-DD
+    ranges: list[HoursRequestRange]
+
+
+@app.post("/my-hours/requests")
+def submitHoursRequests(request_data: SubmitHoursRequestsRequest, user: dict = Depends(get_current_user)):
+    target_ref, data = _own_besa_doc(user)
+    db = firestore.client()
+    now = datetime.now(PACIFIC)
+    try:
+        day = date_cls.fromisoformat(request_data.date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date.")
+    first, last = _request_window(now)
+    if not (first <= day <= last):
+        raise HTTPException(status_code=400, detail="Hours can only be requested for days in this or the last pay period, up to today.")
+    if not request_data.ranges:
+        raise HTTPException(status_code=400, detail="Add at least one time range.")
+
+    pending_today = [(_to_pacific(r["start"]), _to_pacific(r["end"])) for _, r in _member_requests(db, target_ref.id)
+                     if r.get("status") == "pending" and r.get("date") == day.isoformat()]
+    if len(pending_today) + len(request_data.ranges) > HOURS_REQUESTS_MAX_PER_DAY:
+        raise HTTPException(status_code=400, detail=f"A day can have at most {HOURS_REQUESTS_MAX_PER_DAY} pending requests.")
+    logged = _logged_ranges(db, target_ref.id, data, day, now)
+
+    new_docs = []
+    for rng in request_data.ranges:
+        start_minutes, end_minutes = _hhmm_to_minutes(rng.start), _hhmm_to_minutes(rng.end)
+        if start_minutes is None or end_minutes is None or not (0 <= start_minutes < end_minutes <= 24 * 60):
+            raise HTTPException(status_code=400, detail="Each time range needs a start before its end.")
+        start, end = _midnight(day) + timedelta(minutes=start_minutes), _midnight(day) + timedelta(minutes=end_minutes)
+        label = _request_time_label(start, end)
+        if end > now:
+            raise HTTPException(status_code=400, detail=f"{label} hasn't happened yet.")
+        if any(_overlaps((start, end), r) for r in logged):
+            raise HTTPException(status_code=400, detail=f"{label} overlaps time that's already logged.")
+        if any(_overlaps((start, end), r) for r in pending_today):
+            raise HTTPException(status_code=400, detail=f"{label} overlaps another of your requests.")
+        if rng.reason not in HOURS_REQUEST_REASONS:
+            raise HTTPException(status_code=400, detail=f"Pick a reason for {label}.")
+        details = rng.details.strip()
+        if len(details) > HOURS_REQUEST_DETAILS_MAX_LENGTH:
+            raise HTTPException(status_code=400, detail=f"Details can be at most {HOURS_REQUEST_DETAILS_MAX_LENGTH} characters.")
+        if rng.reason == "other" and not details:
+            raise HTTPException(status_code=400, detail=f'Say what happened for {label} (the reason is "Other").')
+        activities = [a for a in dict.fromkeys(a.strip() for a in rng.activities) if a]
+        if not activities:
+            raise HTTPException(status_code=400, detail=f"Pick what you worked on for {label}.")
+        if len(activities) > MAX_WORKED_ON:
+            raise HTTPException(status_code=400, detail=f"Pick at most {MAX_WORKED_ON} activities.")
+        pending_today.append((start, end))
+        new_docs.append({"uid": target_ref.id, "besaName": data.get("besaName"), "date": day.isoformat(), "start": start,
+                         "end": end, "activities": activities, "reason": rng.reason, "details": details,
+                         "status": "pending", "createdAt": now, "decidedAt": None, "decisionNote": ""})
+
+    batch = db.batch()
+    for d in new_docs:
+        batch.set(db.collection(HOURS_REQUESTS_COLLECTION).document(), d)
+    batch.commit()
+    return _my_requests_view(db, target_ref, data, now)
+
+
+class CancelHoursRequestRequest(BaseModel):
+    requestId: str
+
+
+@app.post("/my-hours/requests/cancel")
+def cancelHoursRequest(request_data: CancelHoursRequestRequest, user: dict = Depends(get_current_user)):
+    target_ref, data = _own_besa_doc(user)
+    db = firestore.client()
+    req_ref = db.collection(HOURS_REQUESTS_COLLECTION).document(request_data.requestId)
+    snap = req_ref.get()
+    req = (snap.to_dict() or {}) if snap.exists else {}
+    if req.get("uid") != target_ref.id:
+        raise HTTPException(status_code=404, detail="Request not found.")
+    if req.get("status") != "pending":
+        raise HTTPException(status_code=409, detail="That request has already been decided.")
+    req_ref.delete()
+    return _my_requests_view(db, target_ref, data, datetime.now(PACIFIC))
+
+
+#root admin's list: every pending request (oldest day first) plus the recently decided ones (newest first)
+def _root_requests_view(db, now: datetime) -> dict:
+    requests_ref = db.collection(HOURS_REQUESTS_COLLECTION)
+    pending = [_serialize_hours_request(s.id, s.to_dict() or {})
+               for s in requests_ref.where(filter=FieldFilter("status", "==", "pending")).stream()]
+    pending.sort(key=lambda r: (r["date"], r["start"]))
+    since = now - timedelta(days=HOURS_REQUEST_DECIDED_SHOWN_DAYS)
+    decided = [_serialize_hours_request(s.id, s.to_dict() or {})
+               for s in requests_ref.where(filter=FieldFilter("decidedAt", ">=", since)).stream()]
+    decided.sort(key=lambda r: r["decidedAt"] or "", reverse=True)
+    return {"success": True, "pending": pending, "decided": decided}
+
+
+@app.get("/root-admin/hours-requests")
+def hoursRequests(root_user: dict = Depends(require_root_admin)):
+    return _root_requests_view(firestore.client(), datetime.now(PACIFIC))
+
+
+class DecideHoursRequestRequest(BaseModel):
+    requestId: str
+    approve: bool
+    note: str = ""
+
+
+#adds an approved request to its day as a visit, on the user doc or (for a finished period) in its archive doc
+def _add_requested_visit(db, target_ref, data: dict, req: dict, now: datetime):
+    start, end = _to_pacific(req["start"]), _to_pacific(req["end"])
+    activities = req.get("activities") or []
+    seconds = (end - start).total_seconds()
+    worked_on = _work_split(_even_shares(activities), seconds / 60, _credited_hours(seconds))
+    extra = {"requested": True, "requestReason": req.get("reason"), "requestDetails": req.get("details") or ""}
+    period_start = _period_start(start)
+    if period_start >= _period_start(now):
+        new_hours, _ = _merge_hours_entry(data.get("biWeeklyHours") or [], start, end, activities, now, worked_on=worked_on, extra=extra)
+        target_ref.update({"biWeeklyHours": new_hours})
+    else:
+        archive_ref = db.collection(HOURS_ARCHIVE_COLLECTION).document(f"{target_ref.id}_{period_start.date().isoformat()}")
+        snap = archive_ref.get()
+        days = ((snap.to_dict() or {}).get("days") or {}) if snap.exists else {}
+        new_days, _ = _merge_hours_entry(list(days.values()), start, end, activities, now, worked_on=worked_on, extra=extra)
+        archive_ref.set({"uid": target_ref.id, "besaName": data.get("besaName"), "periodStart": period_start.date().isoformat(),
+                         "days": {e["date"].astimezone(PACIFIC).date().isoformat(): e for e in new_days},
+                         **({} if snap.exists else {"archivedAt": now})}, merge=True)
+    _log_activity(db, target_ref.id, data, start, end, worked_on, estimated=len(activities) > 1)
+
+
+@app.post("/root-admin/hours-requests/decide")
+def decideHoursRequest(request_data: DecideHoursRequestRequest, root_user: dict = Depends(require_root_admin)):
+    note = request_data.note.strip()
+    if len(note) > HOURS_REQUEST_DETAILS_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"The note can be at most {HOURS_REQUEST_DETAILS_MAX_LENGTH} characters.")
+    db = firestore.client()
+    now = datetime.now(PACIFIC)
+    req_ref = db.collection(HOURS_REQUESTS_COLLECTION).document(request_data.requestId)
+    snap = req_ref.get()
+    if not snap.exists:
+        raise HTTPException(status_code=404, detail="Request not found - the member may have canceled it.")
+    req = snap.to_dict() or {}
+    if req.get("status") != "pending":
+        raise HTTPException(status_code=409, detail="That request has already been decided.")
+
+    if request_data.approve:
+        target_ref = _users_ref(db).document(req.get("uid"))
+        target_doc = target_ref.get()
+        data = (target_doc.to_dict() or {}) if target_doc.exists else {}
+        if data.get("accountType") not in ("besa", "besaLead"):
+            raise HTTPException(status_code=404, detail="That member's account no longer exists.")
+        data = _roll_over_periods(target_ref, data)
+        start, end = _to_pacific(req["start"]), _to_pacific(req["end"])
+        #they may have clocked in for part of this time since asking - approving would count it twice
+        if any(_overlaps((start, end), r) for r in _logged_ranges(db, target_ref.id, data, start.date(), now)):
+            raise HTTPException(status_code=409, detail="This overlaps a visit that's been logged since it was requested - deny it, or edit the day by hand.")
+        _add_requested_visit(db, target_ref, data, req, now)
+
+    req_ref.update({"status": "approved" if request_data.approve else "denied", "decidedAt": now, "decisionNote": note})
+    return _root_requests_view(db, now)
 
 
 @app.get("/activity-types")

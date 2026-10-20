@@ -1,6 +1,6 @@
 import { useState, type JSX } from "react"
 import { FaCheck, FaRegCopy } from "react-icons/fa"
-import type { BreakState, OfficeScheduleDay, WorkedOn } from "../Tools/Fetch"
+import { HOURS_REQUEST_REASONS, type BreakState, type OfficeScheduleDay, type WorkedOn } from "../Tools/Fetch"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import { sameDay, startOfWeek, toDateKey } from "../Tools/dates"
 import SessionNotes from "./SessionNotes"
@@ -18,6 +18,9 @@ export type WeeklyHoursSession = {
     notes?: Note[]
     workedOn?: WorkedOn[] // what they actually worked on, split at clock-out
     leftEarlySeconds?: number // unused break they left early with - credited on top of the time shown
+    requested?: boolean // added by an approved hours request, not clocked at the kiosk
+    requestReason?: string
+    requestDetails?: string
 }
 
 export type WeeklyHoursEntry = {
@@ -107,7 +110,8 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
                     </div>
                     <div className="p-2 px-2 sm:px-3 text-gray-400 flex flex-col gap-1 min-w-0">
                         {d.sessions.map((s, j) => (
-                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} canceledTour={s.canceledTour} notes={s.notes} workedOn={s.workedOn} leftEarlySeconds={s.leftEarlySeconds}/>
+                            <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} canceledTour={s.canceledTour} notes={s.notes} workedOn={s.workedOn} leftEarlySeconds={s.leftEarlySeconds}
+                                requested={s.requested} requestReason={s.requestReason} requestDetails={s.requestDetails}/>
                         ))}
                         {d.open && <SessionLine clockIn={d.open.clockIn} activities={d.open.activities} notes={d.open.notes}/>}
                         {d.sessions.length === 0 && !d.open &&
@@ -174,10 +178,12 @@ function CopyActivitiesButton({activities}: {activities: string[]}) {
 }
 
 //"9:02 AM - 11:30 AM  Tours, Other" - clockOut omitted means they're still clocked in
-function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, canceledTour, notes, workedOn, leftEarlySeconds}: {
+function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, canceledTour, notes, workedOn, leftEarlySeconds, requested, requestReason, requestDetails}: {
     clockIn: Date, clockOut?: Date, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean,
-    notes?: Note[], workedOn?: WorkedOn[], leftEarlySeconds?: number
+    notes?: Note[], workedOn?: WorkedOn[], leftEarlySeconds?: number, requested?: boolean, requestReason?: string, requestDetails?: string
 }) {
+    //read straight off the user doc it's the reason's key; from the backend it's already the label
+    const reason = requestReason ? HOURS_REQUEST_REASONS[requestReason] ?? requestReason : ""
     //the break they left early with is shown on its own, not as a break taken
     const breakTaken = (breakSeconds || 0) - (leftEarlySeconds || 0)
     return (
@@ -194,6 +200,9 @@ function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSecond
                 }
                 {!!leftEarlySeconds &&
                     <Badge label={`LEFT EARLY · +${Math.round(leftEarlySeconds / 60)}m`} title="Left early with their unused break time - credited as if they'd stayed that much longer" className="bg-emerald-400 text-black"/>
+                }
+                {requested &&
+                    <Badge label="REQUESTED" title={`Added by an approved hours request${reason ? ` - ${reason}` : ""}${requestDetails ? `: ${requestDetails}` : ""}`} className="bg-violet-400 text-black"/>
                 }
                 {autoClockedOut &&
                     <Badge label="AUTO" title="Forgot to clock out - leave time is their scheduled office-hours end (or 8 PM)" className="bg-yellow-600 text-black"/>

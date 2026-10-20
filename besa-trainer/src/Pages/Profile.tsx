@@ -21,6 +21,8 @@ import RootAdminLogin from "../Components/RootAdminLogin"
 import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
 import BreakCriteria from "../Components/BreakCriteria"
 import type { DayNoteHandlers } from "../Components/DayNotes"
+import HoursRequestPanel from "../Components/HoursRequestPanel"
+import HoursRequestsReview from "../Components/HoursRequestsReview"
 
 type RawDayHours = DayHours | ApiDayHours
 
@@ -48,6 +50,9 @@ function toWeeklyHoursEntries(entries: RawDayHours[]): WeeklyHoursEntry[] {
             notes: toNotes(s.notes),
             workedOn: s.workedOn,
             leftEarlySeconds: s.leftEarlySeconds,
+            requested: s.requested,
+            requestReason: s.requestReason,
+            requestDetails: s.requestDetails,
         })),
         dayNotes: (e.dayNotes || []).map(n => ({id: n.id, text: n.text, at: n.at ? toDate(n.at) : null})),
     }))
@@ -144,7 +149,12 @@ export default function Profile(): JSX.Element {
 
     useEffect(() => {
         if (!isRoot || !adminUnlocked) return
-        getAllHours(true).then(result => {
+        loadAllHours(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isRoot, adminUnlocked])
+
+    function loadAllHours(fresh = false) {
+        getAllHours(fresh).then(result => {
             if (result.success) {
                 setAllHours(result.members)
                 setPeriodStart(result.periodStart)
@@ -154,7 +164,7 @@ export default function Profile(): JSX.Element {
                 setAllHours([])
             }
         })
-    }, [isRoot, adminUnlocked])
+    }
 
     //any admin call coming back 403 means the server-side session is gone (expired or logged out
     //elsewhere) - drop back to the passcode screen rather than showing a half-broken page.
@@ -252,6 +262,10 @@ export default function Profile(): JSX.Element {
                         }
 
                         {isRoot &&
+                            <HoursRequestsReview onApproved={() => loadAllHours()} onSessionExpired={() => lockAdmin(SESSION_EXPIRED_NOTICE)}/>
+                        }
+
+                        {isRoot &&
                             <section className="bg-gray-800 rounded-2xl p-3 sm:p-6">
                                 <h2 className="text-2xl tracking-wide mb-4">Everyone's Hours (This 2-Week Period)</h2>
                                 <OfficeTimeDisclaimer className="mb-2"/>
@@ -294,6 +308,10 @@ export default function Profile(): JSX.Element {
                                         : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || [], notes: toNotes(userData.lastCheckedInNotes)}
                                         : null}/>
                             </section>
+                        }
+
+                        {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&
+                            <HoursRequestPanel/>
                         }
 
                         {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&

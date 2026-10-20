@@ -401,7 +401,7 @@ export type ApiDayHours = {
     editedByAdmin?: boolean
     canceledTour?: boolean
     breakAllowanceMinutes?: number // that day's break total (larger of scheduled hours and time actually in)
-    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean, notes?: ApiSessionNote[], workedOn?: WorkedOn[], leftEarlySeconds?: number}[]
+    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean, notes?: ApiSessionNote[], workedOn?: WorkedOn[], leftEarlySeconds?: number, requested?: boolean, requestReason?: string, requestDetails?: string}[]
     dayNotes?: ApiDayNote[] // notes the member wrote on this day from their own My Hours
 }
 
@@ -659,6 +659,99 @@ export async function getPastHours(): Promise<PastPeriod[] | void> {
     } catch (e) {
         console.error(e)
     }
+}
+
+//---- Hours requests: a member asks for time they weren't clocked in for, a root admin approves or denies it ----
+
+//same keys and labels as the backend's HOURS_REQUEST_REASONS
+export const HOURS_REQUEST_REASONS: Record<string, string> = {
+    forgotClockIn: "Forgot to clock in",
+    forgotClockOut: "Forgot to clock out",
+    outsideOffice: "Worked outside the office",
+    other: "Other",
+}
+
+export type HoursRequest = {
+    id: string
+    uid: string
+    besaName?: string
+    date: string // YYYY-MM-DD
+    start: string // ISO
+    end: string // ISO
+    activities: string[]
+    reason: string
+    reasonLabel: string
+    details: string
+    status: "pending" | "approved" | "denied"
+    hours: number // what it would credit on its own (the day is rounded as a whole once it's added)
+    createdAt: string | null
+    decidedAt: string | null
+    decisionNote: string
+}
+
+//the member's Request Hours panel: the days they can pick (firstDay-lastDay), each day's already-logged visits
+//(end null = still clocked in), and their pending + recently decided requests
+export type MyHoursRequests = {
+    firstDay: string
+    lastDay: string
+    now: string
+    logged: Record<string, {start: string, end: string | null}[]>
+    requests: HoursRequest[]
+}
+
+//one time range of a day, "HH:MM" Pacific ("24:00" = midnight at the end of the day)
+export type HoursRequestRange = {start: string, end: string, activities: string[], reason: string, details: string}
+
+type MyHoursRequestsResult = (MyHoursRequests & {success: true}) | {success: false, detail: string}
+
+async function myHoursRequestsCall(path: string, body?: unknown): Promise<MyHoursRequestsResult> {
+    try {
+        const user = getAuth().currentUser
+        if (!user) {
+            return {success: false, detail: "Not logged in."}
+        }
+        const idToken = await user.getIdToken()
+        const headers: Record<string, string> = {"Authorization": `Bearer ${idToken}`}
+        if (body !== undefined) headers["Content-Type"] = "application/json"
+        const response = await fetch(url + path, {
+            method: body !== undefined ? "POST" : "GET",
+            headers,
+            body: body !== undefined ? JSON.stringify(body) : undefined,
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+            return {success: false, detail: typeof data.detail === "string" ? data.detail : `Request failed (${response.status})`}
+        }
+        return data
+    } catch (e) {
+        console.error(e)
+        return {success: false, detail: "Couldn't reach the server."}
+    }
+}
+
+//besa/besaLead only
+export function getMyHoursRequests() {
+    return myHoursRequestsCall("my-hours/requests")
+}
+
+//besa/besaLead only - one request per range, all on the same day
+export function submitHoursRequests(date: string, ranges: HoursRequestRange[]) {
+    return myHoursRequestsCall("my-hours/requests", {date, ranges})
+}
+
+//besa/besaLead only - withdraws one of their own pending requests
+export function cancelHoursRequest(requestId: string) {
+    return myHoursRequestsCall("my-hours/requests/cancel", {requestId})
+}
+
+//root admin only - every pending request plus the recently decided ones
+export function getHoursRequests() {
+    return rootAdminRequest<{pending: HoursRequest[], decided: HoursRequest[]}>("root-admin/hours-requests")
+}
+
+//root admin only - approving adds the time to that member's day as a visit
+export function decideHoursRequest(requestId: string, approve: boolean, note = "") {
+    return rootAdminRequest<{pending: HoursRequest[], decided: HoursRequest[]}>("root-admin/hours-requests/decide", {method: "POST", body: {requestId, approve, note}})
 }
 
 export async function checkAutoClockout(fresh = false): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null, periodStart?: string} | void> {

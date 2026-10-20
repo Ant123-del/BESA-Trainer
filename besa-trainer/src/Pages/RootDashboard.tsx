@@ -7,7 +7,7 @@ import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import { Loading } from "../Components/SectionEditor/Edit"
 import SessionNotes from "../Components/SessionNotes"
 import ActivitySplitBar from "../Components/ActivitySplitBar"
-import TaskNoteCard from "../Components/TaskNoteCard"
+import TaskNoteCard, { TaskNotesGroup } from "../Components/TaskNoteCard"
 import { evenFractions } from "../Tools/activityColors"
 import { FaPlus } from "react-icons/fa"
 import {
@@ -558,14 +558,18 @@ function SessionRow({session, onChanged, onLeaveEarly}: {session: KioskSession, 
                 }
             </div>
             <SessionNotes notes={session.notes}/>
-            {/* the leads' notes on what they clocked in for - closed until someone opens one */}
-            {(session.taskNotes || []).map(note => (
-                <TaskNoteCard key={note.task} note={note} onToggle={async (itemId, done) => {
-                    const result = await checkTaskNoteItem(note.task, itemId, done, session.uid)
-                    if (result.success) onChanged()
-                    return result.success ? null : result.detail || "Couldn't save that."
-                }}/>
-            ))}
+            {/* the leads' notes on what they clocked in for - all behind one closed dropdown */}
+            {(session.taskNotes || []).length > 0 &&
+                <TaskNotesGroup notes={session.taskNotes || []}>
+                    {(session.taskNotes || []).map(note => (
+                        <TaskNoteCard key={note.task} note={note} defaultOpen onToggle={async (itemId, done) => {
+                            const result = await checkTaskNoteItem(note.task, itemId, done, session.uid)
+                            if (result.success) onChanged()
+                            return result.success ? null : result.detail || "Couldn't save that."
+                        }}/>
+                    ))}
+                </TaskNotesGroup>
+            }
             {noteOpen ?
                 <div className="flex flex-col gap-2">
                     <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} disabled={busy} autoFocus

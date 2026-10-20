@@ -1,4 +1,4 @@
-import { useState, type JSX } from "react"
+import { useState, type JSX, type ReactNode } from "react"
 import { FaChevronDown, FaRegStickyNote } from "react-icons/fa"
 import type { TaskNote } from "../Tools/Fetch"
 
@@ -58,6 +58,30 @@ export default function TaskNoteCard({note, defaultOpen = false, onToggle}: {
                     {error && <p className="text-red-400 text-xs">{error}</p>}
                 </div>
             }
+        </div>
+    )
+}
+
+//every lead note on a kiosk Current Sessions row behind one dropdown that starts closed - the
+//cards inside start open, so one tap shows everything
+export function TaskNotesGroup({notes, children}: {notes: TaskNote[], children: ReactNode}): JSX.Element {
+    const [open, setOpen] = useState(false)
+    const done = notes.reduce((sum, n) => sum + n.items.filter(i => i.done).length, 0)
+    const total = notes.reduce((sum, n) => sum + n.items.length, 0)
+
+    return (
+        <div className="rounded-lg border border-amber-500/40 text-sm">
+            <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left">
+                <FaRegStickyNote className="text-amber-400 shrink-0" size={12}/>
+                <span className="font-semibold text-amber-200">Lead's notes</span>
+                <span className="text-xs text-gray-400">{notes.length} task{notes.length === 1 ? "" : "s"}</span>
+                {total > 0 &&
+                    <span className={"text-xs tabular-nums ml-auto " + (done === total ? "text-green-400" : "text-gray-300")}>{done}/{total} done</span>
+                }
+                <FaChevronDown size={10} className={"shrink-0 text-gray-400 transition-transform " + (total > 0 ? "" : "ml-auto ") + (open ? "rotate-180" : "")}/>
+            </button>
+            {open && <div className="px-2 pb-2 flex flex-col gap-2">{children}</div>}
         </div>
     )
 }

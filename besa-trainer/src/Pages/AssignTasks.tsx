@@ -1,14 +1,21 @@
 import { useEffect, useState } from "react"
 import { MoonLoader } from "react-spinners"
-import { FaPlus } from "react-icons/fa"
+import { FaPlus, FaRegStickyNote, FaTrash } from "react-icons/fa"
 import Header from "../Components/Header"
-import { addActivityType, assignTasks, getActivityTypes, getBesaAccounts, type BesaAccount } from "../Tools/Fetch"
+import TaskNoteCard from "../Components/TaskNoteCard"
+import { addActivityType, assignTasks, getActivityTypes, getBesaAccounts, setTaskNote, type BesaAccount, type TaskNote } from "../Tools/Fetch"
 
 const TASK_NAME_MAX_LENGTH = 40 // same cap as the backend's TASK_NAME_MAX_LENGTH
+//same caps as the backend's TASK_NOTE_* limits
+const NOTE_DESCRIPTION_MAX_LENGTH = 1000
+const NOTE_ITEM_MAX_LENGTH = 200
+const NOTE_MAX_ITEMS = 20
 
 //BESA Lead only (gated by RequireAccess in App.tsx) - picks which activities each BESA and BESA Lead (leads
 //included, themselves too) can clock in for. The kiosk's Clock In only offers someone their assigned tasks (anyone
 //with none yet sees every activity). Clock-out still offers every activity, for anything extra they worked on.
+//Each assigned task can also carry a note for that person - a description plus checkboxes they tick off - which
+//shows at the kiosk when they clock in, in Current Sessions, and on their Profile.
 export default function AssignTasks() {
     const [accounts, setAccounts] = useState<BesaAccount[] | null>(null)
     const [tasks, setTasks] = useState<string[] | null>(null)
@@ -151,7 +158,7 @@ export default function AssignTasks() {
                                                 </span>
                                                 {saving && <MoonLoader color="white" size={14}/>}
                                             </div>
-                                            <div className="flex flex-wrap gap-2">
+                                            <div className="flex flex-wrap gap-2 mb-3">
                                                 {tasks.map(task => {
                                                     const selected = assigned.includes(task)
                                                     return (
@@ -164,12 +171,128 @@ export default function AssignTasks() {
                                                     )
                                                 })}
                                             </div>
+                                            {assigned.length > 0 &&
+                                                <MemberTaskNotes account={account} tasks={assigned}
+                                                    onSaved={(taskNotes) => setAccounts(prev => prev && prev.map(a => a.uid === account.uid ? {...a, taskNotes} : a))}/>
+                                            }
                                         </div>
                                     )
                                 })
                             }
                         </section>
                     </div>
+                }
+            </div>
+        </div>
+    )
+}
+
+//one person's notes on their assigned tasks - each shown as it'll appear to them, with Edit; tasks with no note
+//get an "add note" button
+function MemberTaskNotes({account, tasks, onSaved}: {account: BesaAccount, tasks: string[], onSaved: (notes: TaskNote[]) => void}) {
+    const [editing, setEditing] = useState<string | null>(null)
+    const withoutNote = tasks.filter(t => !account.taskNotes.some(n => n.task === t))
+
+    return (
+        <div className="flex flex-col gap-2">
+            {tasks.map(task => {
+                const note = account.taskNotes.find(n => n.task === task)
+                if (editing === task) {
+                    return <TaskNoteEditor key={task} account={account} task={task} note={note}
+                        onDone={(notes) => { if (notes) onSaved(notes); setEditing(null) }}/>
+                }
+                if (!note) return null
+                return (
+                    <div key={task} className="flex items-start gap-2">
+                        <div className="flex-1 min-w-0"><TaskNoteCard note={note}/></div>
+                        <button onClick={() => setEditing(task)} disabled={editing !== null}
+                            className="text-xs px-3 py-2 rounded-full bg-gray-700 hover:bg-gray-600 disabled:opacity-40 shrink-0">
+                            Edit
+                        </button>
+                    </div>
+                )
+            })}
+            {withoutNote.length > 0 && editing === null &&
+                <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs text-gray-400">Add a note:</span>
+                    {withoutNote.map(task => (
+                        <button key={task} onClick={() => setEditing(task)}
+                            className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-gray-600 text-gray-300 hover:bg-gray-700">
+                            <FaRegStickyNote size={10}/> {task}
+                        </button>
+                    ))}
+                </div>
+            }
+        </div>
+    )
+}
+
+//writes one note: a description and any number of checkboxes. Saving it empty removes the note. Checkboxes keep
+//their ids, so ones the person already ticked stay ticked.
+function TaskNoteEditor({account, task, note, onDone}: {
+    account: BesaAccount, task: string, note?: TaskNote, onDone: (notes: TaskNote[] | null) => void
+}) {
+    const [description, setDescription] = useState(note?.description || "")
+    const [items, setItems] = useState<{key: number, id?: string, text: string, done: boolean}[]>(
+        () => (note?.items || []).map((i, k) => ({key: k, id: i.id, text: i.text, done: i.done})))
+    const [nextKey, setNextKey] = useState(items.length)
+    const [busy, setBusy] = useState(false)
+    const [error, setError] = useState("")
+
+    async function save(remove = false) {
+        setBusy(true)
+        setError("")
+        const result = await setTaskNote(account.uid, task, remove ? "" : description,
+            remove ? [] : items.filter(i => i.text.trim()).map(i => ({id: i.id, text: i.text})))
+        setBusy(false)
+        if (result.success) onDone(result.taskNotes || [])
+        else setError(result.detail || "Couldn't save the note.")
+    }
+
+    return (
+        <div className="rounded-lg border border-amber-500/60 bg-gray-900/50 p-3 flex flex-col gap-2 text-sm">
+            <p className="font-semibold text-amber-200">Note on {task} for {account.besaName || "this person"}</p>
+            <textarea value={description} maxLength={NOTE_DESCRIPTION_MAX_LENGTH} rows={3} disabled={busy} autoFocus
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What should they know or focus on next time?"
+                className="w-full p-2 rounded-lg bg-gray-700 text-white"/>
+            <p className="text-xs text-gray-400">Checkboxes (optional) - they tick these off, and you can see their progress here.</p>
+            {items.map(item => (
+                <div key={item.key} className="flex items-center gap-2">
+                    <input type="checkbox" checked={item.done} disabled aria-label={item.done ? "Done" : "Not done yet"}
+                        className="w-4 h-4 accent-amber-500 shrink-0"/>
+                    <input value={item.text} maxLength={NOTE_ITEM_MAX_LENGTH} disabled={busy}
+                        onChange={(e) => setItems(items.map(i => i.key === item.key ? {...i, text: e.target.value} : i))}
+                        placeholder="Something to do"
+                        className="flex-1 min-w-0 p-1.5 px-2 rounded-lg bg-gray-700 text-white"/>
+                    <button onClick={() => setItems(items.filter(i => i.key !== item.key))} disabled={busy} aria-label="Remove checkbox"
+                        className="p-2 rounded-full bg-gray-700 hover:bg-red-800 disabled:opacity-40">
+                        <FaTrash size={10}/>
+                    </button>
+                </div>
+            ))}
+            {items.length < NOTE_MAX_ITEMS &&
+                <button onClick={() => { setItems([...items, {key: nextKey, text: "", done: false}]); setNextKey(nextKey + 1) }} disabled={busy}
+                    className="self-start flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-gray-700 hover:bg-gray-600 disabled:opacity-40">
+                    <FaPlus size={9}/> Add checkbox
+                </button>
+            }
+            {error && <p className="text-red-400 text-xs">{error}</p>}
+            <div className="flex flex-wrap gap-2 mt-1">
+                <button onClick={() => void save()} disabled={busy || (!description.trim() && !items.some(i => i.text.trim()))}
+                    className="px-4 py-1.5 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 flex items-center gap-2">
+                    {busy && <MoonLoader color="white" size={12}/>}
+                    Save Note
+                </button>
+                <button onClick={() => onDone(null)} disabled={busy}
+                    className="px-4 py-1.5 rounded-full border border-gray-500 hover:bg-gray-700 disabled:opacity-40">
+                    Cancel
+                </button>
+                {note &&
+                    <button onClick={() => { if (window.confirm(`Remove the note on ${task}?`)) void save(true) }} disabled={busy}
+                        className="ml-auto px-4 py-1.5 rounded-full bg-red-800 hover:bg-red-900 disabled:opacity-40">
+                        Remove Note
+                    </button>
                 }
             </div>
         </div>

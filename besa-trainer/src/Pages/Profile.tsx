@@ -12,8 +12,8 @@ import { mapFirebaseAuthError } from "../Tools/authErrors"
 import { fromDateKey, toDateKey } from "../Tools/dates"
 import type { User as CustomUser, DayHours } from "../Tools/types"
 import {
-    addDayNote, changeRootAdminPasscode, checkAutoClockout, deleteDayNote, deleteRootAccount, getActivityTypes, getAllHours,
-    getAllPastHours, getPastHours, getRootAdminToken, rootAdminLogout, setMemberDayHours, type PastPeriod, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeScheduleDay
+    addDayNote, changeRootAdminPasscode, checkAutoClockout, checkTaskNoteItem, deleteDayNote, deleteRootAccount, getActivityTypes, getAllHours,
+    getAllPastHours, getPastHours, getRootAdminToken, rootAdminLogout, setMemberDayHours, type PastPeriod, type TaskNote, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeScheduleDay
 } from "../Tools/Fetch"
 import { type OpenSession, type WeeklyHoursEntry } from "../Components/WeeklyHoursTable"
 import HoursCarousel from "../Components/HoursCarousel"
@@ -24,6 +24,7 @@ import type { DayNoteHandlers } from "../Components/DayNotes"
 import HoursRequestPanel from "../Components/HoursRequestPanel"
 import HoursRequestsReview from "../Components/HoursRequestsReview"
 import RootHoursEditor from "../Components/RootHoursEditor"
+import TaskNoteCard from "../Components/TaskNoteCard"
 
 type RawDayHours = DayHours | ApiDayHours
 
@@ -101,6 +102,8 @@ export default function Profile(): JSX.Element {
     const [ownOpenSession, setOwnOpenSession] = useState<OpenSession | null | undefined>(undefined)
     //their BESA booking schedule, from the same check - undefined while loading
     const [ownSchedule, setOwnSchedule] = useState<OfficeScheduleDay[] | null | undefined>(undefined)
+    //the leads' notes on their tasks (Assign Tasks), from the same check
+    const [ownTaskNotes, setOwnTaskNotes] = useState<TaskNote[]>([])
 
     const isRoot = userData?.accountType === "root"
 
@@ -143,6 +146,7 @@ export default function Profile(): JSX.Element {
                         setOwnOpenSession(toOpenSession(result.openSession))
                         setOwnSchedule(result.officeSchedule ?? null)
                         setPeriodStart(result.periodStart)
+                        setOwnTaskNotes(result.taskNotes || [])
                     })
                 }
             })
@@ -299,6 +303,22 @@ export default function Profile(): JSX.Element {
 
                         {isRoot &&
                             <EveryonesPastLogsPanel onSessionExpired={() => lockAdmin(SESSION_EXPIRED_NOTICE)}/>
+                        }
+
+                        {(userData?.accountType === "besa" || userData?.accountType === "besaLead") && ownTaskNotes.length > 0 &&
+                            <section className="bg-gray-800 rounded-2xl p-3 sm:p-6">
+                                <h2 className="text-2xl tracking-wide mb-1">Task Notes</h2>
+                                <p className="text-sm text-gray-400 mb-4">Guidance from the BESA Leads on your tasks. Check things off as you do them - the leads can see your progress.</p>
+                                <div className="flex flex-col gap-2">
+                                    {ownTaskNotes.map(note => (
+                                        <TaskNoteCard key={note.task} note={note} onToggle={async (itemId, done) => {
+                                            const result = await checkTaskNoteItem(note.task, itemId, done)
+                                            if (result.success && result.taskNotes) setOwnTaskNotes(result.taskNotes)
+                                            return result.success ? null : result.detail || "Couldn't save that."
+                                        }}/>
+                                    ))}
+                                </div>
+                            </section>
                         }
 
                         {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&

@@ -331,6 +331,7 @@ def besaAccounts(lead_user: dict = Depends(require_besa_lead)):
             "accountType": data.get("accountType"),
             "admin": bool(data.get("admin")),
             "assignedTasks": data.get("assignedTasks") or [],
+            "taskNotes": _serialize_task_notes(data.get("taskNotes")),
         })
 
     return {"success": True, "accounts": accounts}
@@ -363,6 +364,110 @@ def assignTasks(request_data: AssignTasksRequest, lead_user: dict = Depends(requ
         raise HTTPException(status_code=400, detail=f'"{unknown[0]}" isn\'t on the task list anymore - reload the page.')
     target_ref.update({"assignedTasks": tasks})
     return {"success": True, "assignedTasks": tasks}
+
+
+# ---- Task notes (guidance a BESA Lead leaves on one member's task, for the next time they clock in) ----
+# taskNotes on the member's user doc: {task: {description, items: [{id, text, done, doneAt}], updatedAt}}. The
+# items are an optional checklist the member ticks off - at the kiosk (Current Sessions) or on their Profile - and
+# the leads see that progress on Assign Tasks. A note stays until a lead removes it.
+TASK_NOTE_DESCRIPTION_MAX_LENGTH = 1000
+TASK_NOTE_ITEM_MAX_LENGTH = 200
+TASK_NOTE_MAX_ITEMS = 20
+
+
+#notes as a list (only for `tasks`, in that order, when given - e.g. what they clocked in for)
+def _serialize_task_notes(notes, tasks: list | None = None) -> list:
+    notes = notes if isinstance(notes, dict) else {}
+    names = [t for t in tasks if t in notes] if tasks is not None else sorted(notes)
+    return [{
+        "task": task,
+        "description": notes[task].get("description") or "",
+        "items": [{"id": i.get("id"), "text": i.get("text") or "", "done": bool(i.get("done")),
+                   "doneAt": i["doneAt"].isoformat() if i.get("doneAt") else None}
+                  for i in notes[task].get("items") or [] if isinstance(i, dict)],
+        "updatedAt": notes[task]["updatedAt"].isoformat() if notes[task].get("updatedAt") else None,
+    } for task in names if isinstance(notes[task], dict)]
+
+
+class TaskNoteItem(BaseModel):
+    id: str | None = None  # an existing item keeps its id (and whether it's checked); new ones get one
+    text: str
+
+
+class SetTaskNoteRequest(BaseModel):
+    targetUid: str
+    task: str
+    description: str = ""
+    items: list[TaskNoteItem] = []
+
+
+#BESA Lead only - writes (or, when it's left empty, removes) the note on one member's task
+@app.post("/task-notes/set")
+def setTaskNote(request_data: SetTaskNoteRequest, lead_user: dict = Depends(require_besa_lead)):
+    db = firestore.client()
+    target_ref, data = _besa_doc_by_uid(db, request_data.targetUid)
+    task = request_data.task.strip()
+    if task not in _activity_types(db):
+        raise HTTPException(status_code=400, detail=f'"{task}" isn\'t on the task list anymore - reload the page.')
+    description = request_data.description.strip()
+    if len(description) > TASK_NOTE_DESCRIPTION_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"The description can be at most {TASK_NOTE_DESCRIPTION_MAX_LENGTH} characters.")
+    if len(request_data.items) > TASK_NOTE_MAX_ITEMS:
+        raise HTTPException(status_code=400, detail=f"A note can have at most {TASK_NOTE_MAX_ITEMS} checkboxes.")
+
+    notes = dict(data.get("taskNotes") or {})
+    old_items = {i.get("id"): i for i in (notes.get(task) or {}).get("items") or [] if isinstance(i, dict)}
+    items = []
+    for item in request_data.items:
+        text = item.text.strip()
+        if not text:
+            continue
+        if len(text) > TASK_NOTE_ITEM_MAX_LENGTH:
+            raise HTTPException(status_code=400, detail=f"Checkboxes can be at most {TASK_NOTE_ITEM_MAX_LENGTH} characters.")
+        old = old_items.get(item.id) if item.id else None
+        items.append({"id": old["id"] if old else secrets.token_hex(6), "text": text,
+                      "done": bool(old and old.get("done")), "doneAt": (old or {}).get("doneAt")})
+
+    if description or items:
+        notes[task] = {"description": description, "items": items, "updatedAt": datetime.now(PACIFIC)}
+    else:
+        notes.pop(task, None)
+    target_ref.update({"taskNotes": notes})
+    return {"success": True, "taskNotes": _serialize_task_notes(notes)}
+
+
+class CheckTaskNoteItemRequest(BaseModel):
+    targetUid: str | None = None  # the kiosk (root) says whose; a member checking their own leaves it out
+    task: str
+    itemId: str
+    done: bool
+
+
+#ticks a checkbox on a task note - the root kiosk for anyone (Current Sessions), or a member on their own Profile
+@app.post("/task-notes/check")
+def checkTaskNoteItem(request_data: CheckTaskNoteItemRequest, user: dict = Depends(get_current_user)):
+    db = firestore.client()
+    caller = _users_ref(db).document(user.get("uid")).get()
+    caller_type = (caller.to_dict() or {}).get("accountType") if caller.exists else None
+    if caller_type == "root":
+        if not request_data.targetUid:
+            raise HTTPException(status_code=400, detail="Whose note is this?")
+        target_uid = request_data.targetUid
+    elif caller_type in ("besa", "besaLead") and request_data.targetUid in (None, user.get("uid")):
+        target_uid = user.get("uid")
+    else:
+        raise HTTPException(status_code=403, detail="You can only check off your own task notes.")
+    target_ref, data = _besa_doc_by_uid(db, target_uid)
+
+    notes = dict(data.get("taskNotes") or {})
+    note = notes.get(request_data.task)
+    item = next((i for i in (note or {}).get("items") or [] if isinstance(i, dict) and i.get("id") == request_data.itemId), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="That checkbox was removed - reload to see the latest note.")
+    item["done"] = request_data.done
+    item["doneAt"] = datetime.now(PACIFIC) if request_data.done else None
+    target_ref.update({"taskNotes": notes})
+    return {"success": True, "taskNotes": _serialize_task_notes(notes, _activity_types(db))}
 
 
 #what the member can clock in for: their assigned tasks that are still on the shared activity list (one removed
@@ -917,7 +1022,7 @@ def clockInOptions(request_data: ClockInOptionsRequest, root_user: dict = Depend
     data = _auto_clock_out_if_needed(target_ref, data)
     tasks, assigned = _clock_in_tasks(db, data)
     return {"success": True, "besaName": data.get("besaName"), "tasks": tasks, "assigned": assigned,
-            "alreadyClockedIn": bool(data.get("lastCheckedIn"))}
+            "alreadyClockedIn": bool(data.get("lastCheckedIn")), "taskNotes": _serialize_task_notes(data.get("taskNotes"), tasks)}
 
 
 @app.post("/clock-in")
@@ -1114,6 +1219,7 @@ def checkAutoClockout(user: dict = Depends(get_current_user), fresh: bool = Fals
     data = _auto_clock_out_if_needed(target_ref, doc.to_dict() or {})
     hours = _shown_weeks_hours(data)
     return {"success": True, "biWeeklyHours": hours, "openSession": _open_session(data),
+            "taskNotes": _serialize_task_notes(data.get("taskNotes"), _activity_types(db)),
             "officeSchedule": _office_schedule(data.get("besaName"), _get_roster()),
             "periodStart": _period_start(datetime.now(PACIFIC)).date().isoformat()}
 
@@ -1142,6 +1248,8 @@ def currentSessions(root_user: dict = Depends(require_root), fresh: bool = False
             "break": _break_state(data, datetime.now(PACIFIC)),
             "canCancelTour": _can_cancel_tour(data),
             "notes": _serialize_notes(data.get("lastCheckedInNotes")),
+            #the leads' notes on the tasks they clocked in for
+            "taskNotes": _serialize_task_notes(data.get("taskNotes"), data.get("lastCheckedInActivities") or []),
         })
     return {"success": True, "sessions": sessions}
 

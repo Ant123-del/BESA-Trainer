@@ -64,6 +64,26 @@ export type BesaAccount = {
     accountType: AccountType
     admin: boolean
     assignedTasks: string[] // the activities they can clock in for (Assign Tasks)
+    taskNotes: TaskNote[]
+}
+
+//guidance a BESA Lead left on one member's task - a description plus an optional checklist the member ticks off
+export type TaskNote = {
+    task: string
+    description: string
+    items: {id: string, text: string, done: boolean, doneAt: string | null}[]
+    updatedAt: string | null
+}
+
+//BESA Lead only - writes the note on one member's task (an empty description and no checkboxes removes it).
+//Checkboxes that keep their id keep whether they're checked.
+export function setTaskNote(targetUid: string, task: string, description: string, items: {id?: string, text: string}[]): Promise<{success: boolean, detail?: string, taskNotes?: TaskNote[]}> {
+    return kioskPost("task-notes/set", {targetUid, task, description, items})
+}
+
+//ticks one checkbox - the root kiosk passes whose note it is; a member checking their own leaves targetUid out
+export function checkTaskNoteItem(task: string, itemId: string, done: boolean, targetUid?: string): Promise<{success: boolean, detail?: string, taskNotes?: TaskNote[]}> {
+    return kioskPost("task-notes/check", {targetUid, task, itemId, done})
 }
 
 //BESA Lead only - every besa/besaLead account here, for the admin-management page.
@@ -224,7 +244,7 @@ export function assignTasks(targetUid: string, tasks: string[]): Promise<{succes
 
 //root only - who this School Id is and what Clock In offers them: their assigned tasks, or every activity if
 //none are assigned yet (assigned: false)
-export function getClockInOptions(studentId: string): Promise<{success: boolean, detail?: string, besaName?: string, tasks?: string[], assigned?: boolean, alreadyClockedIn?: boolean}> {
+export function getClockInOptions(studentId: string): Promise<{success: boolean, detail?: string, besaName?: string, tasks?: string[], assigned?: boolean, alreadyClockedIn?: boolean, taskNotes?: TaskNote[]}> {
     return kioskPost("clock-in/options", {studentId})
 }
 
@@ -319,6 +339,7 @@ export type KioskSession = {
     break: BreakState
     canCancelTour: boolean // regular BESA who clocked in only for Tours - gets the Canceled Tour option
     notes: ApiSessionNote[]
+    taskNotes?: TaskNote[] // the leads' notes on the tasks they clocked in for
 }
 
 //root only - adds a note/comment to a clocked-in member's current visit
@@ -807,7 +828,7 @@ export function setMemberDay(targetUid: string, date: string, visits: MemberVisi
     return rootAdminRequest<MemberDays>("root-admin/member-day", {method: "POST", body: {targetUid, date, visits}})
 }
 
-export async function checkAutoClockout(fresh = false): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null, periodStart?: string} | void> {
+export async function checkAutoClockout(fresh = false): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null, periodStart?: string, taskNotes?: TaskNote[]} | void> {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -824,7 +845,7 @@ export async function checkAutoClockout(fresh = false): Promise<{success: boolea
             console.error(response.status)
             return
         }
-        return await response.json() as {success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null, periodStart?: string}
+        return await response.json() as {success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null, periodStart?: string, taskNotes?: TaskNote[]}
     } catch (e) {
         console.error(e)
     }

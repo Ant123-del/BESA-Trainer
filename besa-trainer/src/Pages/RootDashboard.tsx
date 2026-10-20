@@ -7,11 +7,12 @@ import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import { Loading } from "../Components/SectionEditor/Edit"
 import SessionNotes from "../Components/SessionNotes"
 import ActivitySplitBar from "../Components/ActivitySplitBar"
+import TaskNoteCard from "../Components/TaskNoteCard"
 import { evenFractions } from "../Tools/activityColors"
 import { FaPlus } from "react-icons/fa"
 import {
-    addActivityType, addSessionNote, canceledTour, clockIn, clockOut, clockOutPreview, endBreak, getActivityTypes, getClockInOptions, getCurrentSessions,
-    removeActivityType, startBreak, type KioskSession
+    addActivityType, addSessionNote, canceledTour, checkTaskNoteItem, clockIn, clockOut, clockOutPreview, endBreak, getActivityTypes, getClockInOptions, getCurrentSessions,
+    removeActivityType, startBreak, type KioskSession, type TaskNote
 } from "../Tools/Fetch"
 
 const NOTE_MAX_LENGTH = 500 //same cap as the backend's SESSION_NOTE_MAX_LENGTH
@@ -72,7 +73,7 @@ const LOOKUP_DELAY_MS = 400
 
 type ClockInLookup =
     | {status: "loading"}
-    | {status: "found", besaName: string, tasks: string[], assigned: boolean, alreadyClockedIn: boolean}
+    | {status: "found", besaName: string, tasks: string[], assigned: boolean, alreadyClockedIn: boolean, taskNotes: TaskNote[]}
     | {status: "error", detail: string}
 
 //School Id, then the tasks a BESA Lead assigned that person (Assign Tasks) - only those can be picked. Someone
@@ -104,7 +105,7 @@ function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
             const result = await getClockInOptions(id)
             if (latestId.current !== id) return // they kept typing - a newer lookup is on its way
             setLookup(result.success
-                ? {status: "found", besaName: result.besaName || "", tasks: result.tasks || [], assigned: !!result.assigned, alreadyClockedIn: !!result.alreadyClockedIn}
+                ? {status: "found", besaName: result.besaName || "", tasks: result.tasks || [], assigned: !!result.assigned, alreadyClockedIn: !!result.alreadyClockedIn, taskNotes: result.taskNotes || []}
                 : {status: "error", detail: result.detail || "Something went wrong."})
         }, LOOKUP_DELAY_MS)
     }
@@ -169,6 +170,12 @@ function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
                         </div>
                         {selected.length === 0 &&
                             <p className="text-xs text-gray-400 text-center mb-3">Pick at least one task you intend to work on to clock in.</p>
+                        }
+                        {/* the leads' guidance - open here so it's seen before picking; it's checked off from Current Sessions */}
+                        {lookup.taskNotes.length > 0 &&
+                            <div className="flex flex-col gap-2 mb-4">
+                                {lookup.taskNotes.map(note => <TaskNoteCard key={note.task} note={note} defaultOpen/>)}
+                            </div>
                         }
                     </>
                 }
@@ -535,6 +542,14 @@ function SessionRow({session, onChanged, onLeaveEarly}: {session: KioskSession, 
                 }
             </div>
             <SessionNotes notes={session.notes}/>
+            {/* the leads' notes on what they clocked in for - closed until someone opens one */}
+            {(session.taskNotes || []).map(note => (
+                <TaskNoteCard key={note.task} note={note} onToggle={async (itemId, done) => {
+                    const result = await checkTaskNoteItem(note.task, itemId, done, session.uid)
+                    if (result.success) onChanged()
+                    return result.success ? null : result.detail || "Couldn't save that."
+                }}/>
+            ))}
             {noteOpen ?
                 <div className="flex flex-col gap-2">
                     <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} disabled={busy} autoFocus

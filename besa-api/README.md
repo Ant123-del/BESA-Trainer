@@ -3,9 +3,9 @@
 The backend is hosted using firebase functions. It uses Python FastAPI. The main objectives of the backend are to:
  * Handle large API AI requests. 
  * Handle large requests for backend such as updating everyone's progress when there a section change. 
-## Break-ended emails
+## Alert emails
 
-When a BESA's break ends, the backend emails "<name>, your break has ended." to that BESA and every BESA Lead. Each person is BCC'd, so nobody sees the others' addresses. If a break is ended early from the kiosk, the email goes out right away. If the break timer runs out, the `break_end_alerts` scheduled function sends it within about a minute.
+When a BESA's break ends, the backend emails "<name>, your break has ended." to that BESA, every BESA Lead, and the root account. Each person is BCC'd, so nobody sees the others' addresses. If a break is ended early from the kiosk, the email goes out right away. If the break timer runs out, the `break_end_alerts` scheduled function sends it within about a minute.
 
 The emails are sent from a Gmail account. Setup:
 
@@ -17,5 +17,9 @@ The emails are sent from a Gmail account. Setup:
    firebase functions:secrets:set BREAK_ALERT_GMAIL_ADDRESS
    firebase functions:secrets:set BREAK_ALERT_GMAIL_APP_PASSWORD
    ```
+
+When a member sends hours requests from their Profile, the root account gets one email listing each time range, what was worked on, and the reason. The root admin approves or denies them in Profile under Hours Requests.
+
+Every email goes to the address each account signs in with (from Firebase Auth).
 
 If either secret is empty, the emails are off and nothing else is affected. A personal Gmail account can send about 500 emails a day, and each person on the BCC list (the BESA plus every Lead) counts toward that.

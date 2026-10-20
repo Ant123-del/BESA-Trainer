@@ -15,6 +15,7 @@ import QuestionsEditor from './Pages/QuestionsEditor'
 import QuestionsProgress from './Pages/QuestionsProgress'
 import BesaSignUp from './Pages/BesaSignUp'
 import ManageAdmins from './Pages/ManageAdmins'
+import AssignTasks from './Pages/AssignTasks'
 import RequireAccess from './Components/RequireAccess'
 
 //Router for naviation
@@ -26,6 +27,7 @@ const router = createBrowserRouter(createRoutesFromChildren(
     <Route path='/signin' element={<Login login={false}/>}/>,
     <Route path='/profile' element={<Profile/>}/>,
     <Route path='/manage-admins' element={<RequireAccess level="besaLead"><ManageAdmins/></RequireAccess>}/>,
+    <Route path='/assign-tasks' element={<RequireAccess level="besaLead"><AssignTasks/></RequireAccess>}/>,
     <Route path='/section-editor' element={<RequireAccess level="admin"><SectionEditor/></RequireAccess>}>
       <Route path='getting-started' element={<GettingStarted/>}/>
       <Route path='edit' element={<Edit/>}/>

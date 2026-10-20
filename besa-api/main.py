@@ -330,9 +330,47 @@ def besaAccounts(lead_user: dict = Depends(require_besa_lead)):
             "besaName": data.get("besaName"),
             "accountType": data.get("accountType"),
             "admin": bool(data.get("admin")),
+            "assignedTasks": data.get("assignedTasks") or [],
         })
 
     return {"success": True, "accounts": accounts}
+
+
+# ---- Assigned tasks (BESA Leads' Assign Tasks page) ----
+# Leads pick which of the shared activity types each besa/besaLead (themselves included) may clock in for -
+# stored as assignedTasks on the member's user doc. The kiosk's Clock In only offers those; someone with none
+# assigned yet is offered every activity instead, so nobody's locked out while leads set things up. Clock-out
+# always offers every activity, for anything extra.
+TASK_NAME_MAX_LENGTH = 40
+
+
+class AssignTasksRequest(BaseModel):
+    targetUid: str
+    tasks: list[str]
+
+
+@app.post("/assign-tasks")
+def assignTasks(request_data: AssignTasksRequest, lead_user: dict = Depends(require_besa_lead)):
+    db = firestore.client()
+    target_ref = _users_ref(db).document(request_data.targetUid)
+    target_doc = target_ref.get()
+    if not target_doc.exists or (target_doc.to_dict() or {}).get("accountType") not in ("besa", "besaLead"):
+        raise HTTPException(status_code=404, detail="No BESA account found with that id.")
+    available = _activity_types(db)
+    tasks = [t for t in dict.fromkeys(t.strip() for t in request_data.tasks) if t]
+    unknown = [t for t in tasks if t not in available]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f'"{unknown[0]}" isn\'t on the task list anymore - reload the page.')
+    target_ref.update({"assignedTasks": tasks})
+    return {"success": True, "assignedTasks": tasks}
+
+
+#what the member can clock in for: their assigned tasks that are still on the shared activity list (one removed
+#at the kiosk drops out), or every activity if none are assigned. The flag says which it is.
+def _clock_in_tasks(db, data: dict) -> tuple[list, bool]:
+    available = _activity_types(db)
+    assigned = [t for t in data.get("assignedTasks") or [] if t in available]
+    return (assigned, True) if assigned else (available, False)
 
 
 #BESA Lead only (Manage Admins) - hours per activity per day from the permanent activity log, over the last
@@ -588,6 +626,9 @@ def _serialize_hours_entry(e: dict) -> dict:
                 "requested": bool(s.get("requested")),
                 "requestReason": HOURS_REQUEST_REASONS.get(s.get("requestReason"), s.get("requestReason") or ""),
                 "requestDetails": s.get("requestDetails") or "",
+                #added or changed by a root admin on Edit Anyone's Hours, with their note if they left one
+                "adminEdited": bool(s.get("adminEdited")),
+                "adminNote": s.get("adminNote") or "",
             }
             for s in (e.get("sessions") or []) if s.get("clockIn") and s.get("clockOut")
         ],
@@ -862,6 +903,23 @@ class ClockInRequest(BaseModel):
     activities: list[str]
 
 
+class ClockInOptionsRequest(BaseModel):
+    studentId: str
+
+
+#root only - who a School Id belongs to and which tasks they're assigned, so the kiosk's Clock In can offer just those
+@app.post("/clock-in/options")
+def clockInOptions(request_data: ClockInOptionsRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _find_besa_by_student_id(db, request_data.studentId.strip())
+    if target_ref is None:
+        raise HTTPException(status_code=404, detail="No BESA account found with that School Id.")
+    data = _auto_clock_out_if_needed(target_ref, data)
+    tasks, assigned = _clock_in_tasks(db, data)
+    return {"success": True, "besaName": data.get("besaName"), "tasks": tasks, "assigned": assigned,
+            "alreadyClockedIn": bool(data.get("lastCheckedIn"))}
+
+
 @app.post("/clock-in")
 def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root)):
     activities = [a for a in request_data.activities if a.strip()]
@@ -871,6 +929,12 @@ def clockIn(request_data: ClockInRequest, root_user: dict = Depends(require_root
     target_ref, data = _find_besa_by_student_id(db, request_data.studentId)
     if target_ref is None:
         raise HTTPException(status_code=404, detail="No BESA account found with that School Id.")
+    tasks, assigned = _clock_in_tasks(db, data)
+    not_allowed = [a for a in activities if a not in tasks]
+    if not_allowed:
+        detail = (f'"{not_allowed[0]}" isn\'t one of {data.get("besaName")}\'s assigned tasks.' if assigned
+                  else f'"{not_allowed[0]}" isn\'t on the activity list anymore.')
+        raise HTTPException(status_code=400, detail=detail)
     #a forgotten session from an earlier day shouldn't block today's legitimate clock-in
     data = _auto_clock_out_if_needed(target_ref, data)
     if data.get("lastCheckedIn"):
@@ -1190,22 +1254,28 @@ def endBreak(request_data: EndBreakRequest, root_user: dict = Depends(require_ro
     return {"success": True, "besaName": data.get("besaName")}
 
 
-# ---- "Your break has ended" emails ----
-# Emailed to the BESA whose break it was plus every BESA Lead (BCC, so nobody sees the others' addresses)
-# whenever a break ends: right away
+# ---- Alert emails: "your break has ended" and new hours requests ----
+# Break ended: emailed to the BESA whose break it was plus every BESA Lead and root account (BCC, so nobody sees
+# the others' addresses) whenever a break ends: right away
 # when the kiosk ends it early (above), or by the break_end_alerts scheduled function (bottom of this file)
 # within about a minute of a break's timer running out. Sent from a Gmail account over SMTP using a Google
 # App Password. Off unless both BREAK_ALERT_GMAIL_ADDRESS and BREAK_ALERT_GMAIL_APP_PASSWORD are set.
+# Hours requests (see /my-hours/requests) are emailed the same way to every root account, so whoever runs the
+# kiosk knows there's something to approve.
 GMAIL_SMTP_HOST = "smtp.gmail.com"
 GMAIL_SMTP_PORT = 465
 #a break that ran out longer ago than this (e.g. the scheduler was down) is skipped, not announced late
 BREAK_ALERT_MAX_LATE = timedelta(minutes=10)
 
 
-#sign-in emails (they live on Firebase Auth, not the user docs) of the BESA whose break ended and every BESA Lead
-def _break_alert_emails(on_break_uid: str) -> list:
+#uids of every account of these types (e.g. "besaLead", "root")
+def _uids_of_type(*account_types: str) -> set:
     users_ref = firestore.client().collection("training_data").document("data_root").collection("users")
-    uids = {on_break_uid} | {u.id for u in users_ref.where(filter=FieldFilter("accountType", "==", "besaLead")).stream()}
+    return {u.id for t in account_types for u in users_ref.where(filter=FieldFilter("accountType", "==", t)).stream()}
+
+
+#sign-in emails of these accounts - they live on Firebase Auth, not the user docs
+def _auth_emails(uids) -> list:
     uids = sorted(uids)
     emails = []
     for i in range(0, len(uids), 100):  # get_users takes at most 100 identifiers per call
@@ -1214,27 +1284,34 @@ def _break_alert_emails(on_break_uid: str) -> list:
     return emails
 
 
-def _notify_break_ended(on_break_uid: str, besa_name):
+#sends one alert email to the accounts recipient_uids() returns (BCC'd). Does nothing if the Gmail secrets aren't
+#set, and never raises - an alert failing must never fail the action that triggered it.
+def _send_alert_email(subject: str, body: str, recipient_uids, what: str):
     sender = os.getenv("BREAK_ALERT_GMAIL_ADDRESS")
     app_password = os.getenv("BREAK_ALERT_GMAIL_APP_PASSWORD")
     if not sender or not app_password:
         return
-    name = besa_name or "A BESA"
     try:
-        recipients = _break_alert_emails(on_break_uid)
+        recipients = _auth_emails(recipient_uids())
         if not recipients:
             return
         message = EmailMessage()
-        message["Subject"] = f"{name}, your break has ended"
+        message["Subject"] = subject
         message["From"] = sender
         message["To"] = sender  # everyone else is BCC'd
-        message.set_content(f"{name}, your break has ended.")
+        message.set_content(body)
         with smtplib.SMTP_SSL(GMAIL_SMTP_HOST, GMAIL_SMTP_PORT, timeout=10) as smtp:
             smtp.login(sender, app_password)
             smtp.send_message(message, to_addrs=[sender] + recipients)
     except Exception as e:
-        #an alert failing must never fail the kiosk action that triggered it
-        print(f"Break-ended email for {name} failed: {e}")
+        print(f"{what} email failed: {e}")
+
+
+#to the BESA whose break it was, every BESA Lead, and the root account(s)
+def _notify_break_ended(on_break_uid: str, besa_name):
+    name = besa_name or "A BESA"
+    _send_alert_email(f"{name}, your break has ended", f"{name}, your break has ended.",
+                      lambda: {on_break_uid} | _uids_of_type("besaLead", "root"), f"Break-ended ({name})")
 
 
 #every break whose timer has run out and hasn't been announced yet - claimed in a transaction first so an
@@ -1843,7 +1920,25 @@ def submitHoursRequests(request_data: SubmitHoursRequestsRequest, user: dict = D
     for d in new_docs:
         batch.set(db.collection(HOURS_REQUESTS_COLLECTION).document(), d)
     batch.commit()
+    _notify_hours_requested(data.get("besaName"), day, new_docs)
     return _my_requests_view(db, target_ref, data, now)
+
+
+#emails the root account(s) that there's something to approve - one email per submit, listing every range
+def _notify_hours_requested(besa_name, day: date_cls, docs: list):
+    name = besa_name or "A BESA"
+    day_text = f"{day.strftime('%A, %B')} {day.day}"
+    lines = []
+    for d in docs:
+        line = (f"- {_request_time_label(d['start'], d['end'])} ({_credited_hours((d['end'] - d['start']).total_seconds())} h): "
+                f"{', '.join(d['activities'])}. Reason: {HOURS_REQUEST_REASONS.get(d['reason'], d['reason'])}")
+        if d["details"]:
+            line += f' - "{d["details"]}"'
+        lines.append(line)
+    count = "an hours request" if len(docs) == 1 else f"{len(docs)} hours requests"
+    body = (f"{name} sent {count} for {day_text}:\n\n" + "\n".join(lines) +
+            "\n\nTo approve or deny, open Profile on the root account, unlock admin, and go to Hours Requests.")
+    _send_alert_email(f"Hours request from {name} for {day_text}", body, lambda: _uids_of_type("root"), f"Hours-request ({name})")
 
 
 class CancelHoursRequestRequest(BaseModel):
@@ -1943,12 +2038,234 @@ def decideHoursRequest(request_data: DecideHoursRequestRequest, root_user: dict 
     return _root_requests_view(db, now)
 
 
-@app.get("/activity-types")
-def getActivityTypes(user: dict = Depends(get_current_user)):
+# ---- Root admin editing a member's visits directly (Profile's Edit Anyone's Hours) ----
+# The same calendar + day timeline as Request Hours, but nothing to approve: root admin sees every visit on the
+# member's day and can add, move, resize (lowering or raising the hours) or delete them, then saves the whole day
+# at once. Visits keep everything else they recorded (breaks, notes, kiosk flags); added or changed ones are
+# flagged adminEdited. The day's hours are re-rounded from its visits, so a total that was set by hand
+# (editedByAdmin) or a canceled-tour day's fixed 30 minutes is replaced by the visits' time.
+
+def _visit_view(index: int, sess: dict) -> dict:
+    worked_on = sess.get("workedOn") or []
+    return {
+        "index": index,
+        "start": _to_pacific(sess["clockIn"]).isoformat(),
+        "end": _to_pacific(sess["clockOut"]).isoformat(),
+        "activities": [w["activity"] for w in worked_on] if worked_on else (sess.get("activities") or []),
+        "autoClockedOut": bool(sess.get("autoClockedOut")),
+        "canceledTour": bool(sess.get("canceledTour")),
+        "requested": bool(sess.get("requested")),
+        "adminEdited": bool(sess.get("adminEdited")),
+        "adminNote": sess.get("adminNote") or "",
+        "leftEarlySeconds": sess.get("leftEarlySeconds") or 0,
+    }
+
+
+#one member's days in the editable window (this and the last pay period): each day's visits (index = its place in
+#the stored list, which saving refers back to), its hours, and whether its total was set by hand; plus the visit
+#in progress and pending requests, which show on the timeline but can't be edited there
+def _member_days_view(db, target_ref, data: dict, now: datetime) -> dict:
+    first, last = _request_window(now)
+    days = {}
+    for period_start in {_period_start(_midnight(first)), _period_start(now)}:
+        for e in _period_entries(db, target_ref.id, data, period_start, now):
+            day = e["date"].astimezone(PACIFIC).date() if e.get("date") else None
+            if day is None or not (first <= day <= last):
+                continue
+            days[day.isoformat()] = {
+                "hours": _day_hours(e),
+                "handSet": bool(e.get("editedByAdmin") or e.get("canceledTour")) or (bool(e.get("hours")) and not e.get("sessions")),
+                "visits": [_visit_view(i, sess) for i, sess in enumerate(e.get("sessions") or []) if sess.get("clockIn") and sess.get("clockOut")],
+            }
+    open_session = None
+    if data.get("lastCheckedIn"):
+        open_session = {"start": _to_pacific(data["lastCheckedIn"]).isoformat()}
+    pending = [{"date": r.get("date"), "start": _to_pacific(r["start"]).isoformat(), "end": _to_pacific(r["end"]).isoformat()}
+               for _, r in _member_requests(db, target_ref.id) if r.get("status") == "pending"]
+    return {"success": True, "uid": target_ref.id, "besaName": data.get("besaName"), "firstDay": first.isoformat(),
+            "lastDay": last.isoformat(), "now": now.isoformat(), "days": days, "openSession": open_session, "pending": pending}
+
+
+def _besa_doc_by_uid(db, uid: str):
+    target_ref = _users_ref(db).document(uid)
+    doc = target_ref.get()
+    data = (doc.to_dict() or {}) if doc.exists else {}
+    if data.get("accountType") not in ("besa", "besaLead"):
+        raise HTTPException(status_code=404, detail="No BESA account found with that id.")
+    return target_ref, _roll_over_periods(target_ref, data)
+
+
+@app.get("/root-admin/member-days")
+def memberDays(uid: str, root_user: dict = Depends(require_root_admin)):
     db = firestore.client()
+    target_ref, data = _besa_doc_by_uid(db, uid)
+    return _member_days_view(db, target_ref, data, datetime.now(PACIFIC))
+
+
+class MemberVisit(BaseModel):
+    source: int | None = None  # the stored visit this was (its index from /root-admin/member-days), None for a new one
+    start: str  # "HH:MM", Pacific
+    end: str    # "HH:MM" - "24:00" is midnight at the end of the day
+    activities: list[str]
+    note: str = ""
+
+
+class SetMemberDayRequest(BaseModel):
+    targetUid: str
+    date: str  # YYYY-MM-DD
+    visits: list[MemberVisit]  # the day's whole list - stored visits left out are deleted
+
+
+#replaces a day's entries in the period they belong to: the user doc for the current period, otherwise the archive doc
+def _write_period_entries(db, target_ref, data: dict, period_start: datetime, entries: list, now: datetime):
+    if period_start >= _period_start(now):
+        target_ref.update({"biWeeklyHours": entries})
+        return
+    archive_ref = db.collection(HOURS_ARCHIVE_COLLECTION).document(f"{target_ref.id}_{period_start.date().isoformat()}")
+    snap = archive_ref.get()
+    archived = (snap.to_dict() or {}) if snap.exists else {"uid": target_ref.id, "besaName": data.get("besaName"),
+                                                           "periodStart": period_start.date().isoformat(), "archivedAt": now}
+    archive_ref.set({**archived, "days": {e["date"].astimezone(PACIFIC).date().isoformat(): e for e in entries}})
+
+
+#drops the activity_log records of visits that were changed or deleted (matched by their clock-in time)
+def _unlog_activity(db, uid: str, clock_ins: list):
+    if not clock_ins:
+        return
+    stamps = {ci.timestamp() for ci in clock_ins}
+    for snap in db.collection(ACTIVITY_LOG_COLLECTION).where(filter=FieldFilter("uid", "==", uid)).stream():
+        logged_in = (snap.to_dict() or {}).get("clockIn")
+        if logged_in and logged_in.timestamp() in stamps:
+            snap.reference.delete()
+
+
+@app.post("/root-admin/member-day")
+def setMemberDay(request_data: SetMemberDayRequest, root_user: dict = Depends(require_root_admin)):
+    db = firestore.client()
+    now = datetime.now(PACIFIC)
+    target_ref, data = _besa_doc_by_uid(db, request_data.targetUid)
+    try:
+        day = date_cls.fromisoformat(request_data.date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date.")
+    first, last = _request_window(now)
+    if not (first <= day <= last):
+        raise HTTPException(status_code=400, detail="Only days in this or the last pay period, up to today, can be edited here.")
+
+    period_start = _period_start(_midnight(day))
+    entries = _period_entries(db, target_ref.id, data, period_start, now)
+    is_day = lambda e: e.get("date") and e["date"].astimezone(PACIFIC).date() == day
+    existing = next((e for e in entries if is_day(e)), None)
+    old_sessions = (existing or {}).get("sessions") or []
+
+    in_progress = None
+    if data.get("lastCheckedIn") and _to_pacific(data["lastCheckedIn"]).date() == day:
+        in_progress = (_to_pacific(data["lastCheckedIn"]), now)
+
+    sources_seen = set()
+    taken = []
+    new_sessions, changed, changed_sources = [], [], set()
+    for visit in request_data.visits:
+        start_minutes, end_minutes = _hhmm_to_minutes(visit.start), _hhmm_to_minutes(visit.end)
+        if start_minutes is None or end_minutes is None or not (0 <= start_minutes < end_minutes <= 24 * 60):
+            raise HTTPException(status_code=400, detail="Each visit needs a start before its end.")
+        start, end = _midnight(day) + timedelta(minutes=start_minutes), _midnight(day) + timedelta(minutes=end_minutes)
+        label = _request_time_label(start, end)
+        if end > now:
+            raise HTTPException(status_code=400, detail=f"{label} hasn't happened yet.")
+        if in_progress and _overlaps((start, end), in_progress):
+            raise HTTPException(status_code=400, detail=f"{label} overlaps the visit they're clocked in for right now.")
+        if any(_overlaps((start, end), t) for t in taken):
+            raise HTTPException(status_code=400, detail=f"{label} overlaps another visit that day.")
+        taken.append((start, end))
+        activities = [a for a in dict.fromkeys(a.strip() for a in visit.activities) if a]
+        if not activities:
+            raise HTTPException(status_code=400, detail=f"Pick what was worked on for {label}.")
+        if len(activities) > MAX_WORKED_ON:
+            raise HTTPException(status_code=400, detail=f"Pick at most {MAX_WORKED_ON} activities.")
+        note = visit.note.strip()
+        if len(note) > HOURS_REQUEST_DETAILS_MAX_LENGTH:
+            raise HTTPException(status_code=400, detail=f"Notes can be at most {HOURS_REQUEST_DETAILS_MAX_LENGTH} characters.")
+
+        if visit.source is not None:
+            if not (0 <= visit.source < len(old_sessions)) or visit.source in sources_seen:
+                raise HTTPException(status_code=409, detail="This day changed since it was loaded - reload and try again.")
+            sources_seen.add(visit.source)
+            base = old_sessions[visit.source]
+        else:
+            base = None
+
+        base_activities = _visit_view(0, base)["activities"] if base else None
+        same = (base is not None and _to_pacific(base["clockIn"]) == start and _to_pacific(base["clockOut"]) == end
+                and base_activities == activities and (base.get("adminNote") or "") == note)
+        if same:
+            new_sessions.append(base)
+            continue
+
+        seconds = (end - start).total_seconds()
+        #same activities keep the split chosen at clock-out, just rescaled to the new length; otherwise an even split
+        old_split = {w["activity"]: w["fraction"] for w in (base or {}).get("workedOn") or []}
+        shares = ([{"activity": a, "fraction": old_split[a]} for a in activities]
+                  if base and set(old_split) == set(activities) else _even_shares(activities))
+        worked_on = _work_split(shares, seconds / 60, _credited_hours(seconds + ((base or {}).get("leftEarlySeconds") or 0)))
+        times_changed = base is None or _to_pacific(base["clockIn"]) != start or _to_pacific(base["clockOut"]) != end
+        new_sessions.append({
+            **(base or {"breakSeconds": 0, "canceledTour": False, "notes": [], "leftEarlySeconds": 0}),
+            "clockIn": start, "clockOut": end, "activities": activities, "workedOn": worked_on,
+            #a forgotten clock-out's guessed leave time is no longer a guess once root admin sets it
+            "autoClockedOut": bool((base or {}).get("autoClockedOut")) and not times_changed,
+            "adminEdited": True, "adminNote": note,
+        })
+        changed.append(new_sessions[-1])
+        if visit.source is not None:
+            changed_sources.add(visit.source)
+
+    removed = [s for i, s in enumerate(old_sessions) if i not in sources_seen]
+    if not changed and not removed:
+        return _member_days_view(db, target_ref, data, now)
+
+    new_sessions.sort(key=lambda sess: sess["clockIn"])
+    remaining = [e for e in entries if not is_day(e)]
+    if new_sessions or (existing or {}).get("dayNotes"):
+        entry = {
+            **(existing or {"date": _midnight(day)}),
+            "activities": sorted({a for sess in new_sessions for a in sess.get("activities") or []}),
+            "autoClockedOut": any(sess.get("autoClockedOut") for sess in new_sessions),
+            "editedByAdmin": False,
+            "canceledTour": False,
+            "sessions": new_sessions,
+        }
+        entry["hours"] = _day_hours(entry) if new_sessions else 0
+        remaining.append(entry)
+    _write_period_entries(db, target_ref, data, period_start, remaining, now)
+    if period_start >= _period_start(now):
+        data = {**data, "biWeeklyHours": remaining}
+
+    #keep the analytics' permanent log in step: changed/deleted visits' old records out, changed/new ones' in
+    _unlog_activity(db, target_ref.id, [_to_pacific(sess["clockIn"]) for i, sess in enumerate(old_sessions)
+                                        if i not in sources_seen or i in changed_sources])
+    for sess in changed:
+        _log_activity(db, target_ref.id, data, sess["clockIn"], sess["clockOut"], sess["workedOn"], estimated=False)
+    return _member_days_view(db, target_ref, data, now)
+
+
+def _activity_types(db) -> list:
     root_doc = db.collection("training_data").document("data_root").get()
     types = (root_doc.to_dict() or {}).get("activityTypes") if root_doc.exists else None
-    return {"success": True, "activityTypes": types or ACTIVITY_TYPES_DEFAULT}
+    return types or ACTIVITY_TYPES_DEFAULT
+
+
+@app.get("/activity-types")
+def getActivityTypes(user: dict = Depends(get_current_user)):
+    return {"success": True, "activityTypes": _activity_types(firestore.client())}
+
+
+#the kiosk (root) and BESA Leads (Assign Tasks, to make a new task to hand out) can add to the shared list
+def require_root_or_lead(user: dict = Depends(get_current_user)):
+    user_doc = _users_ref(firestore.client()).document(user.get("uid")).get()
+    if not user_doc.exists or (user_doc.to_dict() or {}).get("accountType") not in ("root", "besaLead"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Root or BESA Lead priviledges needed")
+    return user
 
 
 class ActivityTypeRequest(BaseModel):
@@ -1956,7 +2273,12 @@ class ActivityTypeRequest(BaseModel):
 
 
 @app.post("/activity-types/add")
-def addActivityType(request_data: ActivityTypeRequest, root_user: dict = Depends(require_root)):
+def addActivityType(request_data: ActivityTypeRequest, root_user: dict = Depends(require_root_or_lead)):
+    name = request_data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="The name is empty.")
+    if len(name) > TASK_NAME_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Names can be at most {TASK_NAME_MAX_LENGTH} characters.")
     db = firestore.client()
     root_ref = db.collection("training_data").document("data_root")
     #seed the defaults on the doc the first time anyone touches this list, so "add" from a fresh
@@ -1964,8 +2286,8 @@ def addActivityType(request_data: ActivityTypeRequest, root_user: dict = Depends
     root_doc = root_ref.get()
     current = (root_doc.to_dict() or {}).get("activityTypes") if root_doc.exists else None
     base = current if current is not None else ACTIVITY_TYPES_DEFAULT
-    if request_data.name not in base:
-        base = base + [request_data.name]
+    if name not in base:
+        base = base + [name]
     root_ref.set({"activityTypes": base}, merge=True)
     return {"success": True, "activityTypes": base}
 

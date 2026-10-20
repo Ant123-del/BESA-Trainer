@@ -10,7 +10,7 @@ import ActivitySplitBar from "../Components/ActivitySplitBar"
 import { evenFractions } from "../Tools/activityColors"
 import { FaPlus } from "react-icons/fa"
 import {
-    addActivityType, addSessionNote, canceledTour, clockIn, clockOut, clockOutPreview, endBreak, getActivityTypes, getCurrentSessions,
+    addActivityType, addSessionNote, canceledTour, clockIn, clockOut, clockOutPreview, endBreak, getActivityTypes, getClockInOptions, getCurrentSessions,
     removeActivityType, startBreak, type KioskSession
 } from "../Tools/Fetch"
 
@@ -46,7 +46,7 @@ export default function RootDashboard() {
             <Header/>
             <div className="h-16 relative top-0 left-0 w-full"></div>
             <div className="w-5/6 max-w-3xl mx-auto py-10 flex flex-col gap-8">
-                <ClockInPanel activityTypes={activityTypes} onClockedIn={() => refreshSessions()}/>
+                <ClockInPanel onClockedIn={() => refreshSessions()}/>
                 <ClockOutPanel sessions={sessions} activityTypes={activityTypes} onChanged={() => refreshSessions()}/>
                 <ActivityTypesPanel activityTypes={activityTypes} setActivityTypes={setActivityTypes}/>
             </div>
@@ -67,18 +67,54 @@ function ActivityChip({label, selected, onClick}: {label: string, selected: bool
     )
 }
 
-function ClockInPanel({activityTypes, onClockedIn}: {activityTypes: string[] | null, onClockedIn: () => void}) {
+//how long after the last keystroke the School Id is looked up
+const LOOKUP_DELAY_MS = 400
+
+type ClockInLookup =
+    | {status: "loading"}
+    | {status: "found", besaName: string, tasks: string[], assigned: boolean, alreadyClockedIn: boolean}
+    | {status: "error", detail: string}
+
+//School Id, then the tasks a BESA Lead assigned that person (Assign Tasks) - only those can be picked. Someone
+//with none assigned yet gets every activity. The lookup runs a moment after they stop typing.
+function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
     const [studentId, setStudentId] = useState("")
+    const [lookup, setLookup] = useState<ClockInLookup | null>(null)
     const [selected, setSelected] = useState<string[]>([])
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState<{text: string, error: boolean} | null>(null)
+    const lookupTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const latestId = useRef("")
+
+    useEffect(() => () => { if (lookupTimer.current) clearTimeout(lookupTimer.current) }, [])
+
+    function changeStudentId(value: string) {
+        setStudentId(value)
+        setSelected([])
+        setMessage(null)
+        if (lookupTimer.current) clearTimeout(lookupTimer.current)
+        const id = value.trim()
+        latestId.current = id
+        if (!id) {
+            setLookup(null)
+            return
+        }
+        setLookup({status: "loading"})
+        lookupTimer.current = setTimeout(async () => {
+            const result = await getClockInOptions(id)
+            if (latestId.current !== id) return // they kept typing - a newer lookup is on its way
+            setLookup(result.success
+                ? {status: "found", besaName: result.besaName || "", tasks: result.tasks || [], assigned: !!result.assigned, alreadyClockedIn: !!result.alreadyClockedIn}
+                : {status: "error", detail: result.detail || "Something went wrong."})
+        }, LOOKUP_DELAY_MS)
+    }
 
     function toggleActivity(name: string) {
         setSelected(prev => prev.includes(name) ? prev.filter(a => a !== name) : [...prev, name])
     }
 
     //every clock-in has to say what they came in to work on
-    const canSubmit = !!studentId.trim() && selected.length > 0
+    const canSubmit = lookup?.status === "found" && !lookup.alreadyClockedIn && selected.length > 0
 
     async function handleSubmit() {
         if (!canSubmit) return
@@ -88,6 +124,8 @@ function ClockInPanel({activityTypes, onClockedIn}: {activityTypes: string[] | n
         if (result?.success) {
             setMessage({text: `Clocked in ${result.besaName || ""}.`, error: false})
             setStudentId("")
+            setLookup(null)
+            latestId.current = ""
             setSelected([])
             onClockedIn()
         } else {
@@ -103,22 +141,38 @@ function ClockInPanel({activityTypes, onClockedIn}: {activityTypes: string[] | n
             <label className="block text-sm text-gray-400 mb-1">Enter School Id</label>
             <input
                 value={studentId}
-                onChange={(e) => setStudentId(e.target.value)}
+                onChange={(e) => changeStudentId(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") void handleSubmit() }}
                 placeholder="Ex: 1234567"
                 className="w-full p-3 rounded-xl bg-gray-700 text-white mb-4"
             />
-            <label className="block text-sm text-gray-400 mb-2 text-center">Activities Intended <span className="text-red-400">*</span></label>
-            <div className="flex flex-wrap gap-2 justify-center mb-4">
-                {activityTypes === null ?
-                    <MoonLoader color="white" size={20}/>
-                    : activityTypes.map(name => (
-                        <ActivityChip key={name} label={name} selected={selected.includes(name)} onClick={() => toggleActivity(name)}/>
-                    ))
-                }
-            </div>
-            {selected.length === 0 && activityTypes !== null &&
-                <p className="text-xs text-gray-400 text-center mb-3">Pick at least one activity you intend to work on to clock in.</p>
+            {lookup?.status === "loading" &&
+                <div className="flex justify-center mb-4"><MoonLoader color="white" size={20}/></div>
             }
+            {lookup?.status === "error" &&
+                <p className="text-sm text-center text-red-400 mb-4">{lookup.detail}</p>
+            }
+            {lookup?.status === "found" && <>
+                <label className="block text-sm text-gray-400 mb-2 text-center">
+                    <span className="text-white font-semibold">{lookup.besaName}</span>{lookup.assigned ? "'s tasks" : ""} - what are you working on? <span className="text-red-400">*</span>
+                </label>
+                {lookup.alreadyClockedIn ?
+                    <p className="text-sm text-center text-amber-300 mb-4">{lookup.besaName} is already clocked in.</p>
+                    : <>
+                        {!lookup.assigned &&
+                            <p className="text-xs text-center text-amber-300 mb-3">No tasks assigned yet, so every activity is shown. A BESA Lead can assign tasks on the Assign Tasks page.</p>
+                        }
+                        <div className="flex flex-wrap gap-2 justify-center mb-4">
+                            {lookup.tasks.map(name => (
+                                <ActivityChip key={name} label={name} selected={selected.includes(name)} onClick={() => toggleActivity(name)}/>
+                            ))}
+                        </div>
+                        {selected.length === 0 &&
+                            <p className="text-xs text-gray-400 text-center mb-3">Pick at least one task you intend to work on to clock in.</p>
+                        }
+                    </>
+                }
+            </>}
             {message && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
             <button
                 onClick={() => void handleSubmit()}

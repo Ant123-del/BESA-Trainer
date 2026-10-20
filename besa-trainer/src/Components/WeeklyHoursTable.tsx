@@ -21,6 +21,8 @@ export type WeeklyHoursSession = {
     requested?: boolean // added by an approved hours request, not clocked at the kiosk
     requestReason?: string
     requestDetails?: string
+    adminEdited?: boolean // added or changed by a root admin
+    adminNote?: string
 }
 
 export type WeeklyHoursEntry = {
@@ -111,7 +113,8 @@ export default function WeeklyHoursTable({entries, openSession, schedule, onEdit
                     <div className="p-2 px-2 sm:px-3 text-gray-400 flex flex-col gap-1 min-w-0">
                         {d.sessions.map((s, j) => (
                             <SessionLine key={j} clockIn={s.clockIn} clockOut={s.clockOut} activities={s.activities} autoClockedOut={s.autoClockedOut} breakSeconds={s.breakSeconds} canceledTour={s.canceledTour} notes={s.notes} workedOn={s.workedOn} leftEarlySeconds={s.leftEarlySeconds}
-                                requested={s.requested} requestReason={s.requestReason} requestDetails={s.requestDetails}/>
+                                requested={s.requested} requestReason={s.requestReason} requestDetails={s.requestDetails}
+                                adminEdited={s.adminEdited} adminNote={s.adminNote}/>
                         ))}
                         {d.open && <SessionLine clockIn={d.open.clockIn} activities={d.open.activities} notes={d.open.notes}/>}
                         {d.sessions.length === 0 && !d.open &&
@@ -178,9 +181,10 @@ function CopyActivitiesButton({activities}: {activities: string[]}) {
 }
 
 //"9:02 AM - 11:30 AM  Tours, Other" - clockOut omitted means they're still clocked in
-function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, canceledTour, notes, workedOn, leftEarlySeconds, requested, requestReason, requestDetails}: {
+function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSeconds, canceledTour, notes, workedOn, leftEarlySeconds, requested, requestReason, requestDetails, adminEdited, adminNote}: {
     clockIn: Date, clockOut?: Date, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean,
-    notes?: Note[], workedOn?: WorkedOn[], leftEarlySeconds?: number, requested?: boolean, requestReason?: string, requestDetails?: string
+    notes?: Note[], workedOn?: WorkedOn[], leftEarlySeconds?: number, requested?: boolean, requestReason?: string, requestDetails?: string,
+    adminEdited?: boolean, adminNote?: string
 }) {
     //read straight off the user doc it's the reason's key; from the backend it's already the label
     const reason = requestReason ? HOURS_REQUEST_REASONS[requestReason] ?? requestReason : ""
@@ -203,6 +207,9 @@ function SessionLine({clockIn, clockOut, activities, autoClockedOut, breakSecond
                 }
                 {requested &&
                     <Badge label="REQUESTED" title={`Added by an approved hours request${reason ? ` - ${reason}` : ""}${requestDetails ? `: ${requestDetails}` : ""}`} className="bg-violet-400 text-black"/>
+                }
+                {adminEdited &&
+                    <Badge label="ADMIN" title={`Added or changed by a root admin${adminNote ? `: ${adminNote}` : ""}`} className="bg-sky-400 text-black"/>
                 }
                 {autoClockedOut &&
                     <Badge label="AUTO" title="Forgot to clock out - leave time is their scheduled office-hours end (or 8 PM)" className="bg-yellow-600 text-black"/>

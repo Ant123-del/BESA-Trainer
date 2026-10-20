@@ -13,7 +13,7 @@ import { db } from "../Tools/firestore"
 
 import { CiLogout } from "react-icons/ci";
 import { MdEdit } from "react-icons/md";
-import { FaUserShield } from "react-icons/fa";
+import { FaClipboardList, FaUserShield } from "react-icons/fa";
 
 const navClass = "h-fit text-sm"
 
@@ -119,6 +119,11 @@ export default function Header(): JSX.Element {
                         <NavLink to={"/manage-admins"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-gray-400 hover:brightness-75 bg-white"}>
                             <FaUserShield className="border-solid rounded-full border-2 border-gray-300 w-5 h-5 fill-blue-900 p-2 box-content"/>
                             <span>Manage Admins</span>
+                        </NavLink>)}
+                        {userData?.accountType === "besaLead" && (
+                        <NavLink to={"/assign-tasks"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-gray-400 hover:brightness-75 bg-white"}>
+                            <FaClipboardList className="border-solid rounded-full border-2 border-gray-300 w-5 h-5 fill-blue-900 p-2 box-content"/>
+                            <span>Assign Tasks</span>
                         </NavLink>)}
                     </div>
                 </div>

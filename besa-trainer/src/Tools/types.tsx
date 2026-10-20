@@ -46,6 +46,8 @@ export type HoursSession = {
     requested?: boolean // added by an approved hours request (Profile's Request Hours), not clocked at the kiosk
     requestReason?: string // why it wasn't clocked - a HOURS_REQUEST_REASONS key on the doc, its label from the backend
     requestDetails?: string
+    adminEdited?: boolean // added or changed by a root admin on Edit Anyone's Hours
+    adminNote?: string
 }
 
 //will be used to keep track of personalized vll scripts

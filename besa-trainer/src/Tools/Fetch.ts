@@ -63,6 +63,7 @@ export type BesaAccount = {
     besaName?: string
     accountType: AccountType
     admin: boolean
+    assignedTasks: string[] // the activities they can clock in for (Assign Tasks)
 }
 
 //BESA Lead only - every besa/besaLead account here, for the admin-management page.
@@ -214,7 +215,18 @@ export async function reconcileProgress(floorId: string, markerTimes: number[]) 
     }
 }
 
+//BESA Lead only - sets which activities a besa/besaLead can clock in for
+export function assignTasks(targetUid: string, tasks: string[]): Promise<{success: boolean, detail?: string, assignedTasks?: string[]}> {
+    return kioskPost("assign-tasks", {targetUid, tasks})
+}
+
 //---- Root kiosk: clock in/out, current sessions, hours, activity types ----
+
+//root only - who this School Id is and what Clock In offers them: their assigned tasks, or every activity if
+//none are assigned yet (assigned: false)
+export function getClockInOptions(studentId: string): Promise<{success: boolean, detail?: string, besaName?: string, tasks?: string[], assigned?: boolean, alreadyClockedIn?: boolean}> {
+    return kioskPost("clock-in/options", {studentId})
+}
 
 //root only - looks up the besa/besaLead account with this studentId and starts their session.
 export async function clockIn(studentId: string, activities: string[]): Promise<{success: boolean, besaName?: string, clockedInAt?: string, detail?: string} | void> {
@@ -401,7 +413,7 @@ export type ApiDayHours = {
     editedByAdmin?: boolean
     canceledTour?: boolean
     breakAllowanceMinutes?: number // that day's break total (larger of scheduled hours and time actually in)
-    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean, notes?: ApiSessionNote[], workedOn?: WorkedOn[], leftEarlySeconds?: number, requested?: boolean, requestReason?: string, requestDetails?: string}[]
+    sessions?: {clockIn: string, clockOut: string, activities: string[], autoClockedOut?: boolean, breakSeconds?: number, canceledTour?: boolean, notes?: ApiSessionNote[], workedOn?: WorkedOn[], leftEarlySeconds?: number, requested?: boolean, requestReason?: string, requestDetails?: string, adminEdited?: boolean, adminNote?: string}[]
     dayNotes?: ApiDayNote[] // notes the member wrote on this day from their own My Hours
 }
 
@@ -577,7 +589,7 @@ export async function getActivityTypes(): Promise<string[] | void> {
     }
 }
 
-//root only - adds a new activity type to the shared list, returning the updated list.
+//root or BESA Lead (Assign Tasks) - adds a new activity type to the shared list, returning the updated list.
 export async function addActivityType(name: string): Promise<string[] | void> {
     try {
         const auth = getAuth()
@@ -752,6 +764,47 @@ export function getHoursRequests() {
 //root admin only - approving adds the time to that member's day as a visit
 export function decideHoursRequest(requestId: string, approve: boolean, note = "") {
     return rootAdminRequest<{pending: HoursRequest[], decided: HoursRequest[]}>("root-admin/hours-requests/decide", {method: "POST", body: {requestId, approve, note}})
+}
+
+//---- Root admin editing a member's visits directly (Edit Anyone's Hours) ----
+
+export type MemberVisit = {
+    index: number // its place in the day's stored visits - what saving refers back to
+    start: string // ISO
+    end: string // ISO
+    activities: string[]
+    autoClockedOut: boolean
+    canceledTour: boolean
+    requested: boolean
+    adminEdited: boolean
+    adminNote: string
+    leftEarlySeconds: number
+}
+
+//one member's editable days (this and the last pay period, up to today)
+export type MemberDays = {
+    uid: string
+    besaName?: string
+    firstDay: string
+    lastDay: string
+    now: string
+    //handSet: the day's total was set by hand (or is a canceled tour's 30 minutes) - saving visits replaces it
+    days: Record<string, {hours: number, handSet: boolean, visits: MemberVisit[]}>
+    openSession: {start: string} | null // clocked in right now - shown, but can't be edited
+    pending: {date: string, start: string, end: string}[] // their requests waiting for approval
+}
+
+//one visit as saved: source = the stored visit it was (MemberVisit.index), left out for a new one
+export type MemberVisitEdit = {source?: number, start: string, end: string, activities: string[], note: string}
+
+//root admin only
+export function getMemberDays(uid: string) {
+    return rootAdminRequest<MemberDays>(`root-admin/member-days?uid=${encodeURIComponent(uid)}`)
+}
+
+//root admin only - replaces the day's visits with `visits` (stored ones left out are deleted)
+export function setMemberDay(targetUid: string, date: string, visits: MemberVisitEdit[]) {
+    return rootAdminRequest<MemberDays>("root-admin/member-day", {method: "POST", body: {targetUid, date, visits}})
 }
 
 export async function checkAutoClockout(fresh = false): Promise<{success: boolean, biWeeklyHours: ApiDayHours[], openSession?: ApiOpenSession | null, officeSchedule?: OfficeScheduleDay[] | null, periodStart?: string} | void> {

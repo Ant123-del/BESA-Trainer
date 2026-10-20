@@ -23,6 +23,7 @@ import BreakCriteria from "../Components/BreakCriteria"
 import type { DayNoteHandlers } from "../Components/DayNotes"
 import HoursRequestPanel from "../Components/HoursRequestPanel"
 import HoursRequestsReview from "../Components/HoursRequestsReview"
+import RootHoursEditor from "../Components/RootHoursEditor"
 
 type RawDayHours = DayHours | ApiDayHours
 
@@ -53,6 +54,8 @@ function toWeeklyHoursEntries(entries: RawDayHours[]): WeeklyHoursEntry[] {
             requested: s.requested,
             requestReason: s.requestReason,
             requestDetails: s.requestDetails,
+            adminEdited: s.adminEdited,
+            adminNote: s.adminNote,
         })),
         dayNotes: (e.dayNotes || []).map(n => ({id: n.id, text: n.text, at: n.at ? toDate(n.at) : null})),
     }))
@@ -263,6 +266,10 @@ export default function Profile(): JSX.Element {
 
                         {isRoot &&
                             <HoursRequestsReview onApproved={() => loadAllHours()} onSessionExpired={() => lockAdmin(SESSION_EXPIRED_NOTICE)}/>
+                        }
+
+                        {isRoot &&
+                            <RootHoursEditor members={allHours} onSaved={() => loadAllHours()} onSessionExpired={() => lockAdmin(SESSION_EXPIRED_NOTICE)}/>
                         }
 
                         {isRoot &&

@@ -31,3 +31,6 @@ dist-ssr
 */.venv
 */venv
 */serviceAccountKey.json
+# Python bytecode caches
+__pycache__/
+*.pyc

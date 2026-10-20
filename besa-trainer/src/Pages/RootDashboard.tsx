@@ -162,6 +162,14 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
     //also the color order, so an activity's color matches the analytics chart
     const choices = [...(activityTypes || []), ...(preview?.intendedActivities || []).filter(a => !(activityTypes || []).includes(a))]
 
+    //lock the page behind the popup so scrolling stays inside it
+    useEffect(() => {
+        if (!preview) return
+        const previous = document.body.style.overflow
+        document.body.style.overflow = "hidden"
+        return () => { document.body.style.overflow = previous }
+    }, [preview])
+
     function setWorkedOn(next: string[]) {
         setWorked(next)
         setFractions(evenFractions(next.length))
@@ -255,35 +263,39 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                 <div role="dialog" aria-modal="true" aria-labelledby="worked-on-title"
                     onKeyDown={(e) => { if (e.key === "Escape" && !busy) { reset(); setMessage(null) } }}
                     className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6">
-                    <div className="bg-gray-900 border-2 border-amber-500 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto p-5 sm:p-7">
-                        <p className="text-center text-sm text-gray-300 mb-2">
-                            {leaveEarlyFor ? "Leave Early" : "Clock Out"} · <span className="font-semibold text-white">{preview.besaName}</span> · in for {Math.round(preview.elapsedMinutes)} min
-                            {preview.leaveEarlySeconds > 0 &&
-                                <span className="text-emerald-300"> + {Math.round(preview.leaveEarlySeconds / 60)} min unused break · credited {preview.creditedHours} h</span>
-                            }
-                        </p>
-                        <h3 id="worked-on-title" className="text-2xl sm:text-3xl font-semibold text-amber-400 text-center mb-2">
-                            What did you actually work on?
-                        </h3>
-                        <p className="text-sm text-gray-300 text-center mb-5">
-                            Pick everything you worked on, then drag the dividers so the bar matches how your time was split.
-                        </p>
-                        <div className="flex flex-wrap gap-2 justify-center mb-5">
-                            {choices.map(name => (
-                                <ActivityChip key={name} label={name} selected={worked.includes(name)}
-                                    onClick={() => setWorkedOn(worked.includes(name) ? worked.filter(a => a !== name) : [...worked, name])}/>
-                            ))}
-                        </div>
-                        {worked.length === 0 ?
-                            <p className="text-sm text-gray-400 text-center mb-4">Pick at least one activity you actually worked on.</p>
-                            :
-                            <div className="mb-5">
-                                <ActivitySplitBar activities={worked} fractions={fractions} onChange={setFractions}
-                                    totalMinutes={preview.elapsedMinutes} colorOrder={choices} startTime={preview.clockedInAt}/>
+                    {/* the body scrolls on its own and the Back/Confirm row stays pinned to the bottom, so Confirm is
+                        always on screen no matter how many activities are picked */}
+                    <div className="bg-gray-900 border-2 border-amber-500 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92dvh] flex flex-col overflow-hidden">
+                        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-5 sm:p-7 pb-3 sm:pb-3">
+                            <p className="text-center text-sm text-gray-300 mb-2">
+                                {leaveEarlyFor ? "Leave Early" : "Clock Out"} · <span className="font-semibold text-white">{preview.besaName}</span> · in for {Math.round(preview.elapsedMinutes)} min
+                                {preview.leaveEarlySeconds > 0 &&
+                                    <span className="text-emerald-300"> + {Math.round(preview.leaveEarlySeconds / 60)} min unused break · credited {preview.creditedHours} h</span>
+                                }
+                            </p>
+                            <h3 id="worked-on-title" className="text-2xl sm:text-3xl font-semibold text-amber-400 text-center mb-2">
+                                What did you actually work on?
+                            </h3>
+                            <p className="text-sm text-gray-300 text-center mb-5">
+                                Pick everything you worked on, then drag the dividers so the bar matches how your time was split.
+                            </p>
+                            <div className="flex flex-wrap gap-2 justify-center mb-5">
+                                {choices.map(name => (
+                                    <ActivityChip key={name} label={name} selected={worked.includes(name)}
+                                        onClick={() => setWorkedOn(worked.includes(name) ? worked.filter(a => a !== name) : [...worked, name])}/>
+                                ))}
                             </div>
-                        }
-                        {message && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
-                        <div className="flex gap-2">
+                            {worked.length === 0 ?
+                                <p className="text-sm text-gray-400 text-center mb-2">Pick at least one activity you actually worked on.</p>
+                                :
+                                <div className="mb-2">
+                                    <ActivitySplitBar activities={worked} fractions={fractions} onChange={setFractions}
+                                        totalMinutes={preview.elapsedMinutes} colorOrder={choices} startTime={preview.clockedInAt}/>
+                                </div>
+                            }
+                            {message && <p className={"text-sm text-center " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
+                        </div>
+                        <div className="shrink-0 flex gap-2 px-5 sm:px-7 py-4 border-t border-gray-700 bg-gray-900">
                             <button onClick={() => { reset(); setMessage(null) }} disabled={busy}
                                 className="flex-1 py-3 rounded-full border-solid border-2 border-gray-400 hover:bg-gray-700 disabled:opacity-40">
                                 Back

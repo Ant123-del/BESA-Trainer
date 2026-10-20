@@ -87,7 +87,7 @@ export default function ActivitySplitBar({activities, fractions, onChange, total
     const labelLines = Math.max(1, lastOnLine.length)
 
     return (
-        <div>
+        <div className="select-none">
             <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-300 tabular-nums whitespace-nowrap shrink-0 text-right w-16" title="Clocked in">
                     {formatClock(startTime)}
@@ -120,6 +120,12 @@ export default function ActivitySplitBar({activities, fractions, onChange, total
                             aria-valuetext={`${activities[i]} ${Math.round(fractions[i] * 100)}%, ${activities[i + 1]} ${Math.round(fractions[i + 1] * 100)}%`}
                             onKeyDown={(e) => onKeyDown(i, e)}
                             onPointerDown={(e) => {
+                                if (e.button !== 0) return
+                                //without this the browser also starts a text selection, which grabs the times and
+                                //labels around the bar and fights the drag - focus by hand since it's blocked too
+                                e.preventDefault()
+                                e.currentTarget.focus({preventScroll: true})
+                                window.getSelection()?.removeAllRanges()
                                 draggingRef.current = i
                                 e.currentTarget.setPointerCapture(e.pointerId)
                             }}
@@ -128,6 +134,7 @@ export default function ActivitySplitBar({activities, fractions, onChange, total
                             }}
                             onPointerUp={() => { draggingRef.current = null }}
                             onPointerCancel={() => { draggingRef.current = null }}
+                            onLostPointerCapture={() => { draggingRef.current = null }}
                             className="absolute top-[-6px] bottom-[-6px] w-6 -ml-3 flex items-center justify-center cursor-ew-resize group outline-none"
                             style={{left: `${b * 100}%`}}>
                             <span className="h-full w-2 rounded-full bg-white shadow ring-2 ring-gray-900 group-hover:scale-x-125 group-focus-visible:ring-amber-400 transition-transform"/>

@@ -4,11 +4,14 @@ import { IoMdSettings } from "react-icons/io";
 import { FaBook } from "react-icons/fa";
 import { floorNameDecoder, Loading } from "../Components/SectionEditor/Edit";
 import { useEffect, useRef, useState } from "react";
-import { createPlayer, selectTime, selectVolume, videoFeatures } from "@videojs/react";
+import { createPlayer, selectPlaybackRate, selectTime, selectVolume, videoFeatures } from "@videojs/react";
 import { Video } from "@videojs/react/video";
 import { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } from "firebase/firestore";
-import { db, ensurePersonalScript } from "../Tools/firestore";
-import { type CosScript, type User, type Floor, type Marker, type Progress, type PracticeTypes, type FloorCode } from "../Tools/types";
+import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
+import { v4 as uuidv4 } from "uuid";
+import { db, removeCustomScript } from "../Tools/firestore";
+import { getScript } from "../Tools/Fetch";
+import { type CosScript, type User, type Floor, type Marker, type Progress, type PracticeTypes, type FloorCode, type Fill, type Script } from "../Tools/types";
 import { FaArrowRight, FaPause, FaLock } from "react-icons/fa";
 import { FaPlay } from "react-icons/fa";
 import { MoonLoader } from "react-spinners";
@@ -17,14 +20,36 @@ import { AiFillMuted } from "react-icons/ai";
 import { HiMiniSpeakerWave } from "react-icons/hi2";
 import { formatTime } from "../Components/SectionEditor/VideoEditor";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
-import { getSectionBounds, getVtt, isLineInSection, type Line } from "../Tools/ScriptDecoder";
+import { getPrecedingSectionBounds, getSectionBounds, getVtt, isLineInSection, type Line } from "../Tools/ScriptDecoder";
 import MicrophoneTest from "../Components/SimulatorTests/MicrophoneTest";
 import { FillTest } from "../Components/SimulatorTests/FillTest";
 import { TextTest } from "../Components/SimulatorTests/TextTest";
 import SimulatorInfo from "../Components/SimulatorTests/SimulatorInfo";
-import ScriptViewer from "../Components/SimulatorTests/ScriptViewer";
+import ScriptViewer, { type ScriptSource } from "../Components/SimulatorTests/ScriptViewer";
 
 const Player = createPlayer({features: videoFeatures})
+
+export const VIDEO_SPEED_OPTIONS = [0.5, 0.75, 1, 1.5, 1.75, 2] as const
+
+//checks whether a section marker actually has a test to complete under the active practice type.
+//In "fill" mode, sections without any highlighted question are skipped over so trainees never get stuck.
+export function isSectionTestable(
+    marker: Marker,
+    sections: Marker[],
+    practiceType: PracticeTypes,
+    fill: Fill | null,
+    scriptText: string | null
+): boolean {
+    if (practiceType === "fill") {
+        return (fill?.fillings || []).some(f => f.section.markTime === marker.markTime)
+    }
+    if (scriptText !== null) {
+        const {lower, upper} = getPrecedingSectionBounds(sections, marker)
+        const text = getVtt(scriptText).filter(l => isLineInSection(l, lower, upper)).map(l => l.text).join(" ")
+        return text.trim().length > 0
+    }
+    return true
+}
 
 //Firestore stores Date fields as Timestamps and hands them back as such when a doc is read - not as
 //plain Dates - so anything coming straight off a snapshot needs normalizing before calling .getTime() etc.
@@ -58,7 +83,11 @@ export default function Simulator() {
     //personal userInfo
     const [userInfo, setUserInfo] = useState<User | null>(null)
     const [cosScript, setCosScript] = useState<CosScript | null>(null)
-    const [script, setScript] = useState<string | null>(null)
+    const [defaultScript, setDefaultScript] = useState<string | null>(null)
+    const [customScript, setCustomScript] = useState<string | null>(null)
+    const [scriptSource, setScriptSource] = useState<ScriptSource>("default")
+    const [deletingCustomScript, setDeletingCustomScript] = useState(false)
+    const [fill, setFill] = useState<Fill | null>(null)
     const [practiceType, setPracticeType] = useState<PracticeTypes>("fill")
     const [progress, setProgress] = useState<Progress | null>(null)
     const [sectionLocked, setSectionLocked] = useState(false)
@@ -70,30 +99,61 @@ export default function Simulator() {
     const [pendingPracticeType, setPendingPracticeType] = useState<PracticeTypes>(practiceType)
     const [settingsSaving, setSettingsSaving] = useState(false)
 
+    const hasCustomScript = !!cosScript
+    const activeScriptSource: ScriptSource = hasCustomScript ? scriptSource : "default"
+    const script = activeScriptSource === "custom" ? (customScript ?? defaultScript) : defaultScript
+
     //regular (non-BESA) accounts never practice/test - they just watch the tour, so there's no practice
     //type to choose and nothing below the video ever locks.
     const isBesaAccount = userInfo?.accountType === "besa" || userInfo?.accountType === "besaLead"
 
-    //retrives user data and tries to implement custom script
+    //retrieves the floor's default script and any existing custom script for the signed-in user
     useEffect(() => {
         //script fetching needs Draft.defScriptId, so there is nothing to do until the floor doc has loaded
         if (!Draft) {
+            setFill(null)
+            setDefaultScript(null)
+            setCustomScript(null)
+            setCosScript(null)
+            setScriptSource("default")
             return
         }
         const floor = Draft
+        setScriptSource("default")
+        setDefaultScript(null)
+        setCustomScript(null)
+        setCosScript(null)
         //retrieving user information from database
         setInitalLoading(true)
         const auth = getAuth()
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            if (!user) {
-                setInitalLoading(false)
-                return
-            }
-
-            //wraps every awaited step below - any of them failing (permission error, network hiccup,
-            //missing script, etc.) used to leave initialLoading stuck true forever, which is why the
-            //"Lets Go!" button would spin indefinitely. The finally guarantees it always clears.
             try {
+                // Always fetch from the floor's default script by default
+                try {
+                    const scriptDocSnap = await getDoc(doc(db, "training_data", "data_root", "scripts", floor.defScriptId))
+                    if (scriptDocSnap.exists()) {
+                        const scriptDoc = scriptDocSnap.data() as Script
+                        const defText = await getScript(scriptDoc.src)
+                        setDefaultScript(defText || "")
+                    } else {
+                        setDefaultScript("")
+                    }
+                } catch (e) {
+                    console.error("Failed to fetch default script:", e)
+                    setDefaultScript("")
+                }
+
+                try {
+                    const fillSnap = await getDoc(doc(db, "training_data", "data_root", "fills", floor.id))
+                    setFill(fillSnap.exists() ? fillSnap.data() as Fill : null)
+                } catch {
+                    setFill(null)
+                }
+
+                if (!user) {
+                    return
+                }
+
                 const userPath = "training_data/data_root/users/" + user.uid
                 const userD = doc(db, userPath)
                 const userDoc = await getDoc(userD)
@@ -125,12 +185,16 @@ export default function Simulator() {
                 //pick which practice type to start with (asked once they hit "Continue")
                 setNeedsPracticeTypeChoice(!latestProgress || latestProgress.progress.length === 0)
 
-                //retrieving/creating this floor's personal script copy ------------
-                if (foundUser.scriptPaths) {
-                    const {cosScript, scriptText, scriptPaths} = await ensurePersonalScript(foundUser.uid, foundUser.scriptPaths, floor)
-                    setCosScript(cosScript)
-                    setScript(scriptText)
-                    foundUser.scriptPaths = scriptPaths
+                // Only load an existing custom script if the user already has one for this floor
+                // (never auto-create a custom script on load).
+                const existing = foundUser.scriptPaths?.find(s => s.floorCode === floor.floorCode)
+                if (existing?.src) {
+                    const customText = await getScript(existing.src)
+                    setCosScript(existing)
+                    setCustomScript(customText || "")
+                } else {
+                    setCosScript(null)
+                    setCustomScript(null)
                 }
             } catch (e) {
                 console.error(e)
@@ -174,13 +238,16 @@ export default function Simulator() {
     }, [Draft?.src])
 
     //jumps playback to a marker and locks straight into its test - same behavior as clicking a marker
-    //dot on the timeline. Used by the script panel's "go to next section" button.
+    //dot on the timeline. Used by the script panel's "go to next section" button. If a section has no
+    //highlighted question (or isn't testable), it skips locking so the user is never stuck.
     function goToMarker(marker: Marker) {
         playBack?.seek(marker.markTime)
-        playerActions.pause()
-        setCurrentSection(marker)
-        if (isBesaAccount) {
+        if (isBesaAccount && Draft && isSectionTestable(marker, Draft.markers, practiceType, fill, script)) {
+            playerActions.pause()
+            setCurrentSection(marker)
             setSectionLocked(true)
+        } else {
+            setSectionLocked(false)
         }
     }
 
@@ -268,39 +335,93 @@ export default function Simulator() {
         setSettingsPopup(false)
     }
 
+    async function handleSaveCustomScript(newScriptText: string) {
+        if (!Draft || !userInfo) {
+            return
+        }
+        const storage = getStorage()
+        if (cosScript) {
+            const scriptRef = ref(storage, cosScript.path)
+            await uploadBytes(scriptRef, new Blob([newScriptText], {type: "text/vtt"}))
+            setCustomScript(newScriptText)
+            setScriptSource("custom")
+            return
+        }
+
+        const copyScriptId = uuidv4()
+        const scriptPath = "scripts/" + copyScriptId
+        const scriptRef = ref(storage, scriptPath)
+        const snap = await uploadBytes(scriptRef, new Blob([newScriptText], {type: "text/vtt"}))
+        const newCosScript: CosScript = {
+            path: scriptPath,
+            src: await getDownloadURL(snap.ref),
+            floorCode: Draft.floorCode,
+            id: copyScriptId,
+            isPublic: false,
+            scriptDeviationId: Draft.defScriptId
+        }
+        const newScriptPaths = [
+            ...(userInfo.scriptPaths || []).filter(s => s.floorCode !== Draft.floorCode),
+            newCosScript
+        ]
+        await updateDoc(doc(db, "training_data", "data_root", "users", userInfo.uid), {scriptPaths: newScriptPaths})
+        setCosScript(newCosScript)
+        setUserInfo({...userInfo, scriptPaths: newScriptPaths})
+        setCustomScript(newScriptText)
+        setScriptSource("custom")
+    }
+
+    async function handleDeleteCustomScript() {
+        if (!userInfo || !cosScript || deletingCustomScript) {
+            return
+        }
+        setDeletingCustomScript(true)
+        try {
+            const newScriptPaths = await removeCustomScript(userInfo.uid, userInfo.scriptPaths || [], cosScript)
+            setUserInfo({...userInfo, scriptPaths: newScriptPaths})
+            setCosScript(null)
+            setCustomScript(null)
+            setScriptSource("default")
+        } catch (e) {
+            console.error("Failed to delete custom script:", e)
+        } finally {
+            setDeletingCustomScript(false)
+        }
+    }
+
     return (
-        <div className="bg-gray-900 w-full min-h-screen text-white">
+        <div className="bg-be-navy-darker w-full min-h-screen text-white font-sans">
             {/* custom header for the simulator */}
-              <header className="p-3 flex flex-wrap justify-between items-center gap-3 border-b-2 border-b-solid border-b-gray-500">
+              <header className="p-3 px-5 flex flex-wrap justify-between items-center gap-3 border-b-4 border-b-solid border-b-be-orange bg-be-navy text-white">
                 <div className="">
                     <h1
-                        className="text-2xl sm:text-3xl md:text-4xl tracking-wider"
+                        className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-wider"
                     >{toTitleCase(tour as string)} Tour
                     </h1>
                 </div>
                 <div className="flex justify-between items-center gap-3 sm:gap-0 w-auto sm:w-1/6">
                     {/* Going to have to change back warning once progress is made, say that it wont save */}
-                    <div onClick={() => setBackWarning(true)} className="flex justify-center gap-2 items-center hover:text-gray-400 p-2 cursor-pointer ">
+                    <div onClick={() => setBackWarning(true)} className="flex justify-center gap-2 items-center hover:text-be-yellow font-medium p-2 cursor-pointer transition-colors">
                         <IoMdArrowRoundBack/>
                         <span>Back</span>
                     </div>
                     {Draft &&
-                        <FaBook onClick={() => setScriptViewerOpen(true)} title="Script Viewer" className="fill-white hover:fill-gray-400 cursor-pointer w-4 h-4 mr-3"/>
+                        <FaBook onClick={() => setScriptViewerOpen(true)} title="Script Viewer" className="fill-white hover:fill-be-yellow cursor-pointer w-4 h-4 mr-3 transition-colors"/>
                     }
                     {isBesaAccount &&
-                        <IoMdSettings onClick={openSettings} className="fill-white hover:fill-gray-400 cursor-pointer w-5 h-5 mr-3"/>
+                        <IoMdSettings onClick={openSettings} className="fill-white hover:fill-be-yellow cursor-pointer w-5 h-5 mr-3 transition-colors"/>
                     }
                 </div>
               </header>
               {/* Container for main simulator */}
-              <div className="w-11/12 box-border mx-auto my-3 rounded-2xl bg-gray-800">
+              <div className="w-11/12 box-border mx-auto my-5 rounded-2xl bg-be-navy shadow-lg overflow-hidden">
                 {!(initalCheck || initialLoading) ? 
                     Draft ? 
                     (<><Player.Container className="flex flex-col lg:flex-row justify-center items-center relative w-full">
                         <div className="relative w-full lg:w-4/6">
                             {!videoLoaded &&
-                                <div className="absolute top-0 left-0 w-full h-96 rounded-t-2xl lg:rounded-t-none lg:rounded-tl-2xl bg-gray-800 z-20 overflow-hidden flex items-center justify-center">
-                                    <ContentLoader className="w-full h-full" backgroundColor="#374151" foregroundColor="#F59E0B">
+                                <div className="absolute top-0 left-0 w-full h-96 rounded-t-2xl lg:rounded-t-none lg:rounded-tl-2xl bg-be-navy-dark z-20 overflow-hidden flex items-center justify-center">
+                                    <ContentLoader className="w-full h-full" backgroundColor="#003c6c" foregroundColor="#f29813">
                                         <rect x="0" y="0" className="w-full h-full"/>
                                     </ContentLoader>
                                 </div>
@@ -309,27 +430,55 @@ export default function Simulator() {
                             onMouseOver={handleVideoHover} onMouseMove={handleVideoHover} onMouseOut={() => setPauseState(false)}
                             onClick={handleToggle} onLoadedData={() => setVideoLoaded(true)}>
                             </Video>
-                            <VideoControls sections={Draft.markers} progress={progress} sectionLocked={sectionLocked} currentSection={currentSection} setSectionLocked={setSectionLocked} setCurrentSection={setCurrentSection} isBesaAccount={isBesaAccount}/>
+                            <VideoControls
+                                sections={Draft.markers}
+                                progress={progress}
+                                practiceType={practiceType}
+                                fill={fill}
+                                scriptText={script}
+                                sectionLocked={sectionLocked}
+                                currentSection={currentSection}
+                                setSectionLocked={setSectionLocked}
+                                setCurrentSection={setCurrentSection}
+                                isBesaAccount={isBesaAccount}
+                            />
                             {pauseState && <div className="transition-all absolute top-0 left-0 rounded-t-2xl lg:rounded-t-none lg:rounded-tl-2xl bg-black/40 w-full h-96 z-30" style={{pointerEvents: "none"}}>
                                 {/* This is where the pause button will show when hovered over the video */}
                             </div>}
                         </div>
                         {/* Container for script / other  */}
-                        <ScriptHandler vttText={script || ""} sections={Draft.markers} sectionLocked={sectionLocked} currentSection={currentSection} progress={progress} onGoToMarker={goToMarker} isBesaAccount={isBesaAccount}/>
+                        <ScriptHandler
+                            vttText={script || ""}
+                            sections={Draft.markers}
+                            practiceType={practiceType}
+                            fill={fill}
+                            sectionLocked={sectionLocked}
+                            currentSection={currentSection}
+                            progress={progress}
+                            onGoToMarker={goToMarker}
+                            isBesaAccount={isBesaAccount}
+                            hasCustomScript={hasCustomScript}
+                            scriptSource={activeScriptSource}
+                            onScriptSourceChange={setScriptSource}
+                            onDeleteCustomScript={handleDeleteCustomScript}
+                            deletingCustomScript={deletingCustomScript}
+                        />
 
                     </Player.Container>
                     {/* Below the video */}
                     {isBesaAccount &&
-                        <div className="p-5">
-                            <h3 className="text-gray-500 text-sm mb-2">Practice type: {practiceType}</h3>
+                        <div className="p-5 border-t border-be-navy-dark">
+                            <h3 className="text-be-light-gray text-sm font-medium mb-2">Practice type: {practiceType}</h3>
                             {sectionLocked && currentSection &&
                                 <SectionTest
                                     floorId={Draft.id}
                                     section={currentSection}
                                     sections={Draft.markers}
                                     scriptText={script || ""}
+                                    customBaseScriptText={customScript ?? defaultScript ?? ""}
+                                    fill={fill}
                                     cosScript={cosScript}
-                                    onScriptUpdated={setScript}
+                                    onScriptUpdated={handleSaveCustomScript}
                                     practiceType={practiceType}
                                     progress={progress}
                                     setProgress={setProgress}
@@ -342,16 +491,16 @@ export default function Simulator() {
                     }
                     </>) :
                     // placeHolder
-                    <p>No Video set up yet.</p> : 
+                    <p className="p-6 text-be-light-gray">No Video set up yet.</p> : 
                     //Placeholder for when things load up and start running
-                    <div className="w-full bg-gray-900">
-                        <h2 className="text-light-blue-300 text-3xl sm:text-4xl md:text-6xl tracking-wider my-10 px-4">Welcome to {floorNameDecoder(f || " the Simulation")}</h2>
-                        <hr></hr>
+                    <div className="w-full bg-be-navy-darker p-4">
+                        <h2 className="text-be-yellow font-bold text-3xl sm:text-4xl md:text-6xl tracking-wider my-10 px-4">Welcome to {floorNameDecoder(f || " the Simulation")}</h2>
+                        <hr className="border-be-orange border-t-2"></hr>
                         {isBesaAccount ? <SimulatorInfo/> : <TourWelcomeInfo/>}
-                        <div className="fixed bottom-0 right-0 p-3 flex justify-end items-center gap-3 text-2xl bg-gray-900 w-full">
-                            <span className="flex justify-center gap-2 items-center">{isBesaAccount ? "Continue to Training" : "Continue to Tour"} <FaArrowRight/></span>
+                        <div className="fixed bottom-0 right-0 p-4 flex justify-end items-center gap-4 text-xl sm:text-2xl bg-be-navy border-t-2 border-be-orange w-full z-40">
+                            <span className="flex justify-center gap-2 items-center font-medium">{isBesaAccount ? "Continue to Training" : "Continue to Tour"} <FaArrowRight className="text-be-orange"/></span>
                             <button
-                            className={"p-2 rounded-full inline" + (initialLoading ? " bg-blue-gray-400" : " bg-blue-800 hover:bg-blue-900")}
+                            className={"py-2 px-6 rounded-full font-bold inline transition-colors" + (initialLoading ? " bg-be-dark-gray text-white" : " bg-be-orange hover:bg-be-orange-dark text-black")}
                             disabled={initialLoading}
                             onClick={handleContinue}>
                                 {initialLoading ? <MoonLoader color="white" size={20}/> : <span>Lets Go!</span>}
@@ -365,35 +514,35 @@ export default function Simulator() {
               {/* Popup for going back if there is progress */}
               {BackWarning && 
                 <Loading>
-                    <div className="bg-gray-900 w-11/12 sm:w-2/3 md:w-1/4 max-w-sm p-3 rounded-2xl text-center">
-                        <h3 className="text-2xl">
+                    <div className="bg-be-navy border-2 border-be-orange w-11/12 sm:w-2/3 md:w-1/4 max-w-sm p-5 rounded-2xl text-center shadow-xl">
+                        <h3 className="text-2xl font-bold">
                             Are You Sure You Want to Exit?
                         </h3>
-                        <hr className="w-3/4 fill-gray-400 mx-auto my-2"/>
-                        <p className="text-sm text-gray-400 text-center">Exiting right now will not save progress</p>
+                        <hr className="w-3/4 border-be-light-gray/40 mx-auto my-2"/>
+                        <p className="text-sm text-be-light-gray text-center">Exiting right now will not save progress</p>
                         <Link 
                         to={"/"}
-                        className="block rounded-full w-3/4 mt-3 bg-red-500 mx-auto hover:bg-red-400 p-2">Exit</Link>
+                        className="block rounded-full w-3/4 mt-4 bg-red-600 text-white font-bold mx-auto hover:bg-red-700 p-2 transition-colors">Exit</Link>
                         <button onClick={() => setBackWarning(false)}
-                        className="rounded-full w-3/4 mt-3 border-solid border-2 border-gray-400 hover:bg-gray-800 mx-auto p-2">Cancel</button>
+                        className="rounded-full w-3/4 mt-3 border-solid border-2 border-be-light-gray hover:bg-be-navy-dark font-bold mx-auto p-2 transition-colors">Cancel</button>
                     </div>
                 </Loading>}
 
               {/* Popup for picking a practice type before starting, when none has been done yet on this floor */}
               {practiceTypePopup &&
                 <Loading>
-                    <div className="bg-gray-900 w-11/12 sm:w-2/3 md:w-1/3 max-w-md p-5 rounded-2xl text-center">
-                        <h3 className="text-2xl mb-1">
+                    <div className="bg-be-navy border-2 border-be-orange w-11/12 sm:w-2/3 md:w-1/3 max-w-md p-6 rounded-2xl text-center shadow-xl">
+                        <h3 className="text-2xl font-bold mb-1">
                             How Do You Want To Practice?
                         </h3>
-                        <p className="text-sm text-gray-400">You haven't started this floor yet, pick a practice type to begin.</p>
+                        <p className="text-sm text-be-light-gray">You haven't started this floor yet, pick a practice type to begin.</p>
                         <div className="flex flex-col gap-3 mt-5">
                             <button onClick={() => handleChoosePracticeType("fill")}
-                            className="rounded-full w-full bg-blue-800 hover:bg-blue-900 p-2">Fill In The Blank</button>
+                            className="rounded-full w-full bg-be-orange hover:bg-be-orange-dark text-black font-bold p-2.5 transition-colors">Fill In The Blank</button>
                             <button onClick={() => handleChoosePracticeType("text")}
-                            className="rounded-full w-full bg-blue-800 hover:bg-blue-900 p-2">Retype Script</button>
+                            className="rounded-full w-full bg-be-orange hover:bg-be-orange-dark text-black font-bold p-2.5 transition-colors">Retype Script</button>
                             <button onClick={() => handleChoosePracticeType("microphone")}
-                            className="rounded-full w-full bg-blue-800 hover:bg-blue-900 p-2">Speak Script</button>
+                            className="rounded-full w-full bg-be-orange hover:bg-be-orange-dark text-black font-bold p-2.5 transition-colors">Speak Script</button>
                         </div>
                     </div>
                 </Loading>}
@@ -401,15 +550,15 @@ export default function Simulator() {
               {/* Settings popup, exits via the X or by clicking outside of it */}
               {settingsPopup &&
                 <Loading onClose={() => setSettingsPopup(false)}>
-                    <div className="bg-gray-900 w-11/12 sm:w-2/3 md:w-1/3 max-w-md p-5 rounded-2xl text-center relative">
+                    <div className="bg-be-navy border-2 border-be-orange w-11/12 sm:w-2/3 md:w-1/3 max-w-md p-6 rounded-2xl text-center relative shadow-xl">
                         <button onClick={() => setSettingsPopup(false)}
-                        className="absolute top-3 right-3 text-gray-400 hover:text-white text-xl leading-none">&times;</button>
-                        <h3 className="text-2xl mb-1">Settings</h3>
-                        <p className="text-sm text-gray-400">Choose how you want to practice.</p>
+                        className="absolute top-3 right-3 text-be-light-gray hover:text-white text-xl leading-none">&times;</button>
+                        <h3 className="text-2xl font-bold mb-1">Settings</h3>
+                        <p className="text-sm text-be-light-gray">Choose how you want to practice.</p>
                         <div className="flex flex-col gap-3 mt-5">
                             {([["fill", "Fill In The Blank"], ["text", "Retype Script"], ["microphone", "Speak Script"]] as [PracticeTypes, string][]).map(([type, label]) => (
                                 <button key={type} onClick={() => setPendingPracticeType(type)}
-                                className={"rounded-full w-full p-2 border-2 " + (pendingPracticeType === type ? "bg-blue-800 border-blue-800" : "border-gray-600 hover:bg-gray-800")}>
+                                className={"rounded-full w-full p-2.5 border-2 font-bold transition-colors " + (pendingPracticeType === type ? "bg-be-orange text-black border-be-orange" : "border-be-light-gray text-white hover:bg-be-navy-dark")}>
                                     {label}
                                 </button>
                             ))}
@@ -417,7 +566,7 @@ export default function Simulator() {
                         <button
                         onClick={handleSaveSettings}
                         disabled={pendingPracticeType === practiceType || settingsSaving}
-                        className={"rounded-full w-full mt-5 p-2 " + (pendingPracticeType === practiceType || settingsSaving ? "bg-blue-gray-400 cursor-not-allowed" : "bg-blue-800 hover:bg-blue-900")}>
+                        className={"rounded-full w-full mt-5 p-2.5 font-bold transition-colors " + (pendingPracticeType === practiceType || settingsSaving ? "bg-be-dark-gray text-be-light-gray cursor-not-allowed" : "bg-be-orange hover:bg-be-orange-dark text-black")}>
                             {settingsSaving ? <MoonLoader color="white" size={20} className="m-auto"/> : "Save Changes"}
                         </button>
                     </div>
@@ -425,7 +574,17 @@ export default function Simulator() {
 
               {/* Script Viewer - a plain read-through of the script, exits via the X or by clicking outside of it */}
               {scriptViewerOpen && Draft &&
-                <ScriptViewer floor={Draft} myScript={script || ""} onClose={() => setScriptViewerOpen(false)}/>
+                <ScriptViewer
+                    floor={Draft}
+                    defaultScript={defaultScript}
+                    customScript={customScript}
+                    hasCustomScript={hasCustomScript}
+                    scriptSource={activeScriptSource}
+                    onScriptSourceChange={setScriptSource}
+                    onDeleteCustomScript={handleDeleteCustomScript}
+                    deletingCustomScript={deletingCustomScript}
+                    onClose={() => setScriptViewerOpen(false)}
+                />
               }
         </div>
     )
@@ -437,32 +596,60 @@ export default function Simulator() {
 function TourWelcomeInfo() {
     return (
         <section className="p-5 pb-24 max-w-3/4 mx-auto text-center px-4">
-            <h3 className="text-amber-500 text-3xl tracking-wide my-5">Take A Look Around</h3>
-            <p className="p-2 text-gray-300">
+            <h3 className="text-be-orange font-bold text-3xl tracking-wide my-5">Take A Look Around</h3>
+            <p className="p-2 text-be-light-gray leading-relaxed">
                 Sit back and watch the tour play through. Use the markers on the timeline below the video to
-                jump to any part you're curious about, and open the <FaBook className="inline mb-1"/> script
+                jump to any part you're curious about, and open the <FaBook className="inline mb-1 text-be-yellow"/> script
                 panel any time if you'd rather read along with what's being said.
             </p>
         </section>
     )
 }
 
-//the single source of truth for "how far is this user actually allowed to go": the earliest section
-//that hasn't been completed yet under the given progress record. Nothing at or beyond this marker can
-//be watched, tested, or jumped to (via the scrubber, a marker click, or the script panel's goto button)
-//until it's cleared - every one of those controls has to agree on this same boundary, or a bypass opens.
-function getIncompleteBoundary(sections: Marker[], progress: Progress | null): Marker | undefined {
+//the single source of truth for "how far is this user actually allowed to go": the earliest testable section
+//that hasn't been completed yet under the given progress record. Any section without a highlighted question
+//(in fill mode) or without script text is automatically skipped over so trainees never get stuck on it.
+function getIncompleteBoundary(
+    sections: Marker[],
+    progress: Progress | null,
+    practiceType: PracticeTypes,
+    fill: Fill | null,
+    scriptText: string | null
+): Marker | undefined {
     if (sections.length === 0) {
         return undefined
     }
 
-    //exact-match against each marker's own current markTime (same check ShowSections/handleMarkerClick
     const completedTimes = new Set(progress?.progress.map(p => p.sectionTime) ?? [])
     const sortedSections = [...sections].sort((a, b) => a.markTime - b.markTime)
-    return sortedSections.find(m => !completedTimes.has(m.markTime))
+    return sortedSections.find(m =>
+        isSectionTestable(m, sections, practiceType, fill, scriptText) && !completedTimes.has(m.markTime)
+    )
 }
 
-function VideoControls({sections, progress, sectionLocked, currentSection, setSectionLocked, setCurrentSection, isBesaAccount}:{sections: Marker[], progress: Progress | null, sectionLocked: boolean, currentSection: Marker | null, setSectionLocked: (locked: boolean) => void, setCurrentSection: (section: Marker | null) => void, isBesaAccount: boolean}) {
+function VideoControls({
+    sections,
+    progress,
+    practiceType,
+    fill,
+    scriptText,
+    sectionLocked,
+    currentSection,
+    setSectionLocked,
+    setCurrentSection,
+    isBesaAccount
+}: {
+    sections: Marker[],
+    progress: Progress | null,
+    practiceType: PracticeTypes,
+    fill: Fill | null,
+    scriptText: string | null,
+    sectionLocked: boolean,
+    currentSection: Marker | null,
+    setSectionLocked: (locked: boolean) => void,
+    setCurrentSection: (section: Marker | null) => void,
+    isBesaAccount: boolean
+}) {
     const playerActions = Player.usePlayer()
     const isPaused = Player.usePlayer((state) => state.paused)
     const isMuted = Player.usePlayer((state) => state.muted)
@@ -471,10 +658,14 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
     const currentTime = Player.usePlayer((state) => state.currentTime) || 0
     const playBack = Player.usePlayer(selectTime)
     const vol = Player.usePlayer(selectVolume)
+    const rateControl = Player.usePlayer(selectPlaybackRate)
+    const currentRate = rateControl?.playbackRate ?? 1
 
     const progressPercentage = (currentTime / duration) * 100
 
     const [sound, setSound] = useState(false)
+    const [speedMenuOpen, setSpeedMenuOpen] = useState(false)
+    const speedMenuRef = useRef<HTMLDivElement>(null)
 
     function handleToggle() {
         if (sectionLocked) {
@@ -489,8 +680,77 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
 
     //regular accounts have nothing mandatory to complete, so there's no boundary to enforce.
     function getNextMarker(): Marker | undefined {
-        return isBesaAccount ? getIncompleteBoundary(sections, progress) : undefined
+        return isBesaAccount ? getIncompleteBoundary(sections, progress, practiceType, fill, scriptText) : undefined
     }
+
+    //close the speed settings bar when clicking outside of it
+    useEffect(() => {
+        if (!speedMenuOpen) return
+        function handleClickOutside(e: MouseEvent) {
+            if (speedMenuRef.current && !speedMenuRef.current.contains(e.target as Node)) {
+                setSpeedMenuOpen(false)
+            }
+        }
+        document.addEventListener("mousedown", handleClickOutside)
+        return () => document.removeEventListener("mousedown", handleClickOutside)
+    }, [speedMenuOpen])
+
+    //keyboard controls: Space pauses/plays, Left/Right arrow keys skip 5 seconds backward/forward
+    useEffect(() => {
+        function handleKeyDown(e: KeyboardEvent) {
+            const target = e.target as HTMLElement | null
+            if (
+                target &&
+                (target.tagName === "TEXTAREA" ||
+                 target.isContentEditable ||
+                 (target.tagName === "INPUT" && (target as HTMLInputElement).type !== "range"))
+            ) {
+                return
+            }
+
+            if (e.key === " " || e.code === "Space") {
+                if (sectionLocked) {
+                    return
+                }
+                e.preventDefault()
+                if (isPaused) {
+                    playerActions.play()
+                } else {
+                    playerActions.pause()
+                }
+                return
+            }
+
+            if (e.key === "ArrowLeft") {
+                e.preventDefault()
+                const newTime = Math.max(0, currentTime - 5)
+                playBack?.seek(newTime)
+                if (sectionLocked && currentSection && newTime !== currentSection.markTime) {
+                    setSectionLocked(false)
+                }
+                return
+            }
+
+            if (e.key === "ArrowRight") {
+                e.preventDefault()
+                const desiredTime = Math.min(duration, currentTime + 5)
+                const nextMarker = getNextMarker()
+                const targetTime = (!nextMarker || nextMarker.markTime >= desiredTime) ? desiredTime : nextMarker.markTime
+                playBack?.seek(targetTime)
+                if (nextMarker && targetTime >= nextMarker.markTime) {
+                    playerActions.pause()
+                    setCurrentSection(nextMarker)
+                    setSectionLocked(true)
+                } else if (sectionLocked && currentSection && targetTime !== currentSection.markTime) {
+                    setSectionLocked(false)
+                }
+            }
+        }
+
+        window.addEventListener("keydown", handleKeyDown)
+        return () => window.removeEventListener("keydown", handleKeyDown)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentTime, duration, isPaused, sectionLocked, currentSection, progress, practiceType, fill, scriptText, isBesaAccount])
 
     //clicking a completed marker (to review it) or the next marker (to jump straight into it) locks the
     //player into that section's test. anything further ahead than "next" can't be jumped to. Regular
@@ -501,7 +761,17 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
             return
         }
 
+        const testable = isSectionTestable(marker, sections, practiceType, fill, scriptText)
         const nextMarker = getNextMarker()
+
+        if (!testable) {
+            if (!nextMarker || marker.markTime <= nextMarker.markTime) {
+                playBack?.seek(marker.markTime)
+                setSectionLocked(false)
+            }
+            return
+        }
+
         const completed = progress?.progress.some(p => p.sectionTime === marker.markTime) ?? false
         const isNext = nextMarker?.markTime === marker.markTime
         if (!completed && !isNext) {
@@ -546,6 +816,13 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
             return
         }
 
+        //if the currently locked section isn't testable under the current practice type (eg. no highlighted
+        //question in fill mode), unlock immediately so playback skips right over it.
+        if (currentSection && !isSectionTestable(currentSection, sections, practiceType, fill, scriptText)) {
+            setSectionLocked(false)
+            return
+        }
+
         //don't auto-unlock a deliberate review of an already-completed section (eg. reactivated via the
         //script panel's goto button) just because it isn't the mandatory next-up boundary - only currentTime
         //drifting below the boundary for some other reason (a manual backward scrub, a stale lock left over
@@ -554,59 +831,98 @@ function VideoControls({sections, progress, sectionLocked, currentSection, setSe
         if (!isDeliberateReview) {
             setSectionLocked(false)
         }
-    }, [currentTime, progress, currentSection, isBesaAccount])
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentTime, progress, currentSection, isBesaAccount, practiceType, fill, scriptText])
 
     return (
         <>
         {sectionLocked &&
-            <div className="absolute top-0 left-0 w-full h-96 z-40 rounded-t-2xl lg:rounded-t-none lg:rounded-tl-2xl bg-black/60 flex items-center justify-center">
-                <p className="text-xl font-semibold tracking-wide text-center px-6">Please answer this Section Down Below</p>
+            <div className="absolute top-0 left-0 w-full h-96 z-40 rounded-t-2xl lg:rounded-t-none lg:rounded-tl-2xl bg-be-navy-darker/85 flex items-center justify-center">
+                <p className="text-xl font-bold tracking-wide text-center px-6 text-white">Please answer this Section Down Below</p>
             </div>
         }
-        <div className="absolute bottom-0 left-0 right-0 w-11/12 mx-auto bg-black/20 h-10 z-30 flex items-center justify-between gap-3 box-border p-2 rounded-full">
-            <div className="flex items-center justify-center gap-3">
-                <div onClick={handleToggle} className={"hover:text-gray-400 bg-black/50 p-2 rounded-full" + (sectionLocked ? " opacity-50 cursor-not-allowed" : "")}>
-                    {!isLoading ? isPaused ? <FaPlay/> : <FaPause/> : <MoonLoader color="white" size={20}/>}
+        <div className="absolute bottom-2 left-0 right-0 w-11/12 mx-auto bg-be-navy-darker/80 h-12 z-30 flex items-center justify-between gap-3 box-border px-3 py-2 rounded-full border border-be-light-gray/20">
+            <div className="flex items-center justify-center gap-2 shrink-0">
+                <div onClick={handleToggle} title="Play / Pause (Space)" className={"hover:text-be-orange bg-be-navy p-2 rounded-full cursor-pointer transition-colors" + (sectionLocked ? " opacity-50 cursor-not-allowed" : "")}>
+                    {!isLoading ? isPaused ? <FaPlay/> : <FaPause/> : <MoonLoader color="white" size={18}/>}
                 </div>
-                <div className="rounded-full p-2 bg-black/50 cursor-pointer flex justify-start items-center 
+                <div className="rounded-full p-2 bg-be-navy cursor-pointer flex justify-start items-center 
                     transition-all duration-200 transition-normal" 
                     onMouseOver={() => setSound(true)} onMouseLeave={() => setSound(false)}>
                     <div onClick={() => vol?.toggleMuted()} >
                         {isMuted ? <AiFillMuted className="w-4"/> : <HiMiniSpeakerWave className="w-4"/>}
                     </div>
                     <input type="range"
-        
                         value={vol?.volume}
                         min={0}
                         step={0.1}
                         max={1}
-                        className={"transition-all duration-200 transition-normal overflow-x-hidden " + (sound ? "w-4/6 ml-1.5" : "w-0 mr-0")}
+                        className={"transition-all duration-200 transition-normal overflow-x-hidden accent-be-orange " + (sound ? "w-16 sm:w-20 ml-1.5" : "w-0 mr-0")}
                         disabled={isMuted}
                         onChange={({target}) => vol?.setVolume(parseFloat(target.value))}
                         />
                 </div>
             </div>
             {/* Progress Bar */}
-             <div className="w-4/6 mx-auto p-2 relative">
-                <span>{formatTime(currentTime)} / {formatTime(duration)}</span>
+             <div className="flex-1 mx-2 relative">
+                <span className="text-xs font-medium text-white block mb-0.5">{formatTime(currentTime)} / {formatTime(duration)}</span>
                 <div className="w-full relative">
                     {/* Markers and points */}
                     <ShowSections sections={sections} progress={progress} nextMarker={getNextMarker()} onMarkerClick={handleMarkerClick} isBesaAccount={isBesaAccount}/>
                     <input
-                        className="w-full h-3 bg-gray-600 rounded-full appearance-none cursor-pointer accent-amber-800 
-                        hover:accent-amber-900 focus:outline-none [&::-webkit-slider-runnable-track]:bg-transparent z-30"
+                        className="w-full h-3 bg-be-dark-gray rounded-full appearance-none cursor-pointer accent-be-orange 
+                        hover:accent-be-yellow focus:outline-none [&::-webkit-slider-runnable-track]:bg-transparent z-30"
                         step={0.1}
                         min={0}
                         max={duration}
                         value={currentTime}
                         onChange={handleScub}
                         type="range"
-                        style={{background: `linear-gradient(to right, #000000CC 0%, #000000CC ${progressPercentage}%, #FFFFFF80 ${progressPercentage}%, #FFFFFF80 100%)`}}
+                        style={{background: `linear-gradient(to right, #003c6c 0%, #003c6c ${progressPercentage}%, #d0d0ce80 ${progressPercentage}%, #d0d0ce80 100%)`}}
                     />
                 </div>
             </div>
-            <div>
-
+            {/* Video Speed Settings Bar */}
+            <div className="relative shrink-0" ref={speedMenuRef}>
+                <button
+                    type="button"
+                    onClick={() => setSpeedMenuOpen(open => !open)}
+                    title="Playback Speed"
+                    className="flex items-center gap-1.5 bg-be-navy hover:bg-be-navy-dark text-white text-xs font-bold px-3 py-1.5 rounded-full border border-be-orange transition-colors"
+                >
+                    <IoMdSettings className="w-4 h-4 text-be-orange"/>
+                    <span>{currentRate}x</span>
+                </button>
+                {speedMenuOpen && (
+                    <div
+                        role="menu"
+                        aria-label="Playback Speed"
+                        className="absolute bottom-full right-0 mb-2 bg-be-navy-darker border-2 border-be-orange rounded-xl p-1.5 shadow-xl flex flex-col gap-1 min-w-[9.5rem] z-50"
+                    >
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-be-yellow px-2.5 py-1 border-b border-be-navy">
+                            Playback Speed
+                        </span>
+                        {VIDEO_SPEED_OPTIONS.map((rate) => {
+                            const isCurrent = Math.abs(currentRate - rate) < 0.01
+                            return (
+                                <button
+                                    key={rate}
+                                    type="button"
+                                    role="menuitemradio"
+                                    aria-checked={isCurrent}
+                                    onClick={() => {
+                                        rateControl?.setPlaybackRate(rate)
+                                        setSpeedMenuOpen(false)
+                                    }}
+                                    className={"text-left text-xs px-3 py-1.5 rounded-lg font-bold transition-colors " +
+                                        (isCurrent ? "bg-be-orange text-black" : "text-white hover:bg-be-navy")}
+                                >
+                                    {rate}x{isCurrent ? " (current)" : ""}
+                                </button>
+                            )
+                        })}
+                    </div>
+                )}
             </div>
         </div>
         </>
@@ -624,7 +940,7 @@ function ShowSections({sections, progress, nextMarker, onMarkerClick, isBesaAcco
             return true
         }
         const completed = progress?.progress.some(p => p.sectionTime === m.markTime) ?? false
-        return completed || nextMarker?.markTime === m.markTime
+        return completed || !nextMarker || m.markTime <= nextMarker.markTime
     }
 
     //detecting if it is on the marker
@@ -633,22 +949,22 @@ function ShowSections({sections, progress, nextMarker, onMarkerClick, isBesaAcco
         setOnMarker(sections.find(mark => Math.abs(mark.markTime - currentTime) < markerWidth) || null)
     }, [currentTime])
 
-    //hard = red, good = yellow, easy = green. no answer yet keeps the default amber.
+    //hard = red, good = yellow, easy = green. no answer yet keeps the default orange.
     function getMarkerColor(m: Marker): string {
         if (onMarker?.markTime == m.markTime) {
-            return "bg-white/70"
+            return "bg-white"
         }
 
         const entry = progress?.progress.find(p => p.sectionTime === m.markTime)
         if (!entry) {
-            return "bg-amber-600"
+            return "bg-be-orange"
         }
 
         if (entry.confidence === 0) {
             return "bg-red-600"
         }
         if (entry.confidence === 1) {
-            return "bg-yellow-500"
+            return "bg-be-yellow"
         }
         return "bg-green-600"
     }
@@ -661,12 +977,13 @@ function ShowSections({sections, progress, nextMarker, onMarkerClick, isBesaAcco
                 return (
                     // Marker
                 <div
+                    key={m.markTime}
                     onClick={clickable ? () => onMarkerClick(m) : undefined}
                     className=
                     {"w-5 h-5 top-0 bottom-0 absolute transition-all rounded-full group hover:w-5 hover:bg-white " + getMarkerColor(m) + (clickable ? " cursor-pointer" : " cursor-default")}
                     style={{left: percentage + "%", pointerEvents: "all"}}
                     >
-                    <div className="absolute bottom-full w-max left-1/2 -translate-x-1/2 mb-2 px-3 py-1 bg-black/70 text-white text-sm rounded opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+                    <div className="absolute bottom-full w-max left-1/2 -translate-x-1/2 mb-2 px-3 py-1 bg-be-navy-darker text-white text-sm font-medium rounded border border-be-orange opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
                         {m.markerName}
                     </div>
                 </div>)
@@ -676,13 +993,15 @@ function ShowSections({sections, progress, nextMarker, onMarkerClick, isBesaAcco
 }
 
 //routes to the right quiz UI for the practice type currently in use, once a section has locked playback.
-function SectionTest({floorId, section, sections, scriptText, cosScript, onScriptUpdated, practiceType, progress, setProgress, userInfo, setUserInfo, setSectionLocked}: {
+function SectionTest({floorId, section, sections, scriptText, customBaseScriptText, fill, cosScript, onScriptUpdated, practiceType, progress, setProgress, userInfo, setUserInfo, setSectionLocked}: {
     floorId: string,
     section: Marker,
     sections: Marker[],
     scriptText: string,
+    customBaseScriptText: string,
+    fill: Fill | null,
     cosScript: CosScript | null,
-    onScriptUpdated: (newScriptText: string) => void,
+    onScriptUpdated: (newScriptText: string) => Promise<void> | void,
     practiceType: PracticeTypes,
     progress: Progress | null,
     setProgress: (p: Progress) => void,
@@ -710,6 +1029,7 @@ function SectionTest({floorId, section, sections, scriptText, cosScript, onScrip
             <FillTest
                 floorId={floorId}
                 section={section}
+                initialFill={fill}
                 progress={progress}
                 setProgress={setProgress}
                 userInfo={userInfo}
@@ -728,6 +1048,7 @@ function SectionTest({floorId, section, sections, scriptText, cosScript, onScrip
                 section={section}
                 sections={sections}
                 scriptText={scriptText}
+                customBaseScriptText={customBaseScriptText}
                 cosScript={cosScript}
                 onScriptUpdated={onScriptUpdated}
                 progress={progress}
@@ -747,6 +1068,7 @@ function SectionTest({floorId, section, sections, scriptText, cosScript, onScrip
             section={section}
             sections={sections}
             scriptText={scriptText}
+            customBaseScriptText={customBaseScriptText}
             cosScript={cosScript}
             onScriptUpdated={onScriptUpdated}
             progress={progress}
@@ -790,7 +1112,37 @@ export async function saveConfidence({confidence, section, floorId, practiceType
 }
 
 
-function ScriptHandler({vttText, sections, sectionLocked, currentSection, progress, onGoToMarker, isBesaAccount}: {vttText: string, sections: Marker[], sectionLocked: boolean, currentSection: Marker | null, progress: Progress | null, onGoToMarker: (marker: Marker) => void, isBesaAccount: boolean}) {
+function ScriptHandler({
+    vttText,
+    sections,
+    practiceType,
+    fill,
+    sectionLocked,
+    currentSection,
+    progress,
+    onGoToMarker,
+    isBesaAccount,
+    hasCustomScript,
+    scriptSource,
+    onScriptSourceChange,
+    onDeleteCustomScript,
+    deletingCustomScript
+}: {
+    vttText: string,
+    sections: Marker[],
+    practiceType: PracticeTypes,
+    fill: Fill | null,
+    sectionLocked: boolean,
+    currentSection: Marker | null,
+    progress: Progress | null,
+    onGoToMarker: (marker: Marker) => void,
+    isBesaAccount: boolean,
+    hasCustomScript: boolean,
+    scriptSource: ScriptSource,
+    onScriptSourceChange: (source: ScriptSource) => void,
+    onDeleteCustomScript: () => void,
+    deletingCustomScript: boolean
+}) {
     const [searchParams, setSearchParams] = useSearchParams()
     const {tour} = useParams()
     const navigate = useNavigate()
@@ -808,14 +1160,14 @@ function ScriptHandler({vttText, sections, sectionLocked, currentSection, progre
     const {lower, upper} = getSectionBounds(sections, currentTime)
     const visibleLines = lines.filter(line => isLineInSection(line, lower, upper))
 
-    //the button's target normally tracks wherever playback currently is - the next marker chronologically
+    //the button's target normally tracks wherever playback currently is - the next testable marker chronologically
     //ahead of currentTime, whether that section's already been completed (reviewing) or not (the real next
-    //test). But it can never point past the mandatory boundary (the earliest not-yet-completed section) -
-    //without that cap, a momentary desync between sectionLocked and currentTime (eg. from scrubbing) would
-    //let this button jump straight over a required, unfinished section. Regular accounts have no such
-    //boundary - the button just always tracks the next chapter chronologically.
-    const boundary = isBesaAccount ? getIncompleteBoundary(sections, progress) : undefined
-    const rawNext = [...sections].sort((a, b) => a.markTime - b.markTime).find(m => m.markTime > currentTime)
+    //test). Sections without a highlighted question (in fill mode) are skipped over so the user can always
+    //advance through the simulator.
+    const boundary = isBesaAccount ? getIncompleteBoundary(sections, progress, practiceType, fill, vttText) : undefined
+    const rawNext = [...sections]
+        .sort((a, b) => a.markTime - b.markTime)
+        .find(m => m.markTime > currentTime && (!isBesaAccount || isSectionTestable(m, sections, practiceType, fill, vttText)))
     const nextMarker = boundary && (!rawNext || rawNext.markTime > boundary.markTime) ? boundary : rawNext
     const nextFloorCode = f ? getNextFloorCode(f) : null
 
@@ -850,23 +1202,66 @@ function ScriptHandler({vttText, sections, sectionLocked, currentSection, progre
                     : "Finish Tour"
 
     return (
-        <div style={{background: "linear-gradient(180deg, #C65B11 0%, var(--t-orange, #F97316) 50%, #93440D 100%)"}} className="w-full lg:w-2/6 h-96 rounded-b-2xl lg:rounded-b-none lg:rounded-tr-2xl p-5 relative flex flex-col">
+        <div className="w-full lg:w-2/6 h-96 rounded-b-2xl lg:rounded-b-none lg:rounded-tr-2xl p-5 relative flex flex-col bg-be-navy-dark border-t-4 lg:border-t-0 lg:border-l-4 border-be-orange">
+            <div className="flex items-center justify-between gap-2 shrink-0 flex-wrap mb-1 z-50">
+                <h1 className="tracking-wider text-2xl xl:text-3xl font-bold shrink-0 text-be-yellow">{floorNameDecoder(f || "")}</h1>
+                {hasCustomScript && (
+                    <div className="flex items-center gap-1.5 ml-auto">
+                        <div
+                            role="group"
+                            aria-label="Script Source Toggle"
+                            className="inline-flex items-center bg-be-navy-darker p-1 rounded-full border border-be-orange/60"
+                        >
+                            <button
+                                type="button"
+                                onClick={() => onScriptSourceChange("default")}
+                                className={"px-2.5 py-1 rounded-full text-[11px] font-bold transition-all " +
+                                    (scriptSource === "default"
+                                        ? "bg-be-orange text-black shadow"
+                                        : "text-be-light-gray hover:text-white")}
+                            >
+                                Default Script
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => onScriptSourceChange("custom")}
+                                className={"px-2.5 py-1 rounded-full text-[11px] font-bold transition-all " +
+                                    (scriptSource === "custom"
+                                        ? "bg-be-orange text-black shadow"
+                                        : "text-be-light-gray hover:text-white")}
+                            >
+                                Custom Script
+                            </button>
+                        </div>
+                        {scriptSource === "custom" && (
+                            <button
+                                type="button"
+                                onClick={onDeleteCustomScript}
+                                disabled={deletingCustomScript}
+                                title="Delete custom script"
+                                className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-50 shrink-0"
+                            >
+                                {deletingCustomScript ? "Deleting..." : "Delete"}
+                            </button>
+                        )}
+                    </div>
+                )}
+            </div>
             <div className="relative flex-1 min-h-0 flex flex-col">
-                <h1 className="tracking-wider text-3xl font-bold shrink-0">{floorNameDecoder(f || "")}</h1>
                 <div className="overflow-y-scroll flex-1 min-h-0 w-full my-2">
                     {lines ? visibleLines.map((line, i) => {
                         return <ScriptLine currentTime={currentTime} key={i} line={line}/>
-                    }) : <div className="h-full animate-pulse bg-gray-500/50 rounded-lg"/>}
+                    }) : <div className="h-full animate-pulse bg-be-navy rounded-lg"/>}
                 </div>
                 {sectionLocked &&
-                    <div className="absolute inset-0 rounded-tr-2xl bg-gray-950/95 backdrop-blur-sm flex items-center justify-center text-center p-5 z-40">
-                        <p className="text-xl font-semibold tracking-wide">Answer this section down below to reveal the next part of the script</p>
+                    <div className="absolute inset-0 rounded-xl bg-be-navy-darker/95 backdrop-blur-sm flex items-center justify-center text-center p-5 z-40">
+                        <p className="text-xl font-bold tracking-wide text-white">Answer this section down below to reveal the next part of the script</p>
                     </div>
                 }
             </div>
             <button onClick={handleNavClick} disabled={disabled} title={disabled ? "Complete this section's test below before moving on" : undefined}
-                className={"shrink-0 w-full mt-2 p-2.5 rounded-full text-sm font-semibold tracking-wide transition-colors flex items-center justify-center gap-2 " +
-                    (disabled ? "bg-gray-700 text-gray-400 cursor-not-allowed" : "bg-amber-900 hover:bg-amber-950")}>
+                className={"shrink-0 w-full mt-2 p-2.5 rounded-full text-sm font-bold tracking-wide transition-colors flex items-center justify-center gap-2 " +
+                    (disabled ? "bg-be-dark-gray text-be-light-gray cursor-not-allowed" : "bg-be-orange hover:bg-be-orange-dark text-black")}>
                 {disabled && <FaLock className="text-xs"/>}
                 {navLabel}
             </button>
@@ -902,7 +1297,7 @@ function ScriptLine({line, currentTime, key}: {line: Line, currentTime: number, 
 
     return (
         <h2 ref={ref} key={key}
-        className={"text-xl hover:text-gray-100/100 transition-all px-3 py-3 cursor-pointer" + (active ? " text-white" : " text-gray-100/50")}
+        className={"text-xl hover:text-white transition-all px-3 py-3 cursor-pointer " + (active ? "text-be-yellow font-bold" : "text-be-light-gray font-normal")}
         onClick={handleClick}
         >
         {line.text}

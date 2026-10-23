@@ -3,7 +3,10 @@ import type { AccountType, SuccessResponse } from "./types"
 
 //besa-api's base URL - defaults to local dev; set VITE_API_URL in the deployment environment to point
 //at wherever besa-api is actually hosted (e.g. a Firebase Functions URL) once deployed.
-const url = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/"
+const rawUrl = import.meta.env.DEV
+    ? (import.meta.env.VITE_LOCAL_API_URL || "http://127.0.0.1:8000/")
+    : (import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/")
+const url = rawUrl.endsWith("/") ? rawUrl : rawUrl + "/"
 
 export type RosterEntry = {
     name: string
@@ -859,11 +862,25 @@ export async function checkAutoClockout(fresh = false): Promise<{success: boolea
 }
 
 export async function getScript(scriptSrc: string): Promise<string | void> {
+    if (!scriptSrc) {
+        return ""
+    }
+    try {
+        // Firebase Storage download URLs already carry an access token (?alt=media&token=...).
+        // Fetching without a custom Authorization header avoids an unnecessary CORS preflight.
+        const directResponse = await fetch(scriptSrc, { method: "GET" })
+        if (directResponse.ok) {
+            return await directResponse.text()
+        }
+    } catch {
+        // Fall through to authenticated request if direct fetch fails
+    }
+
     try {
         const auth = getAuth()
         const user = auth.currentUser
         if (!user) {
-            return console.error("not logged in")
+            return ""
         }
 
         const idToken = await user.getIdToken()

@@ -15,7 +15,7 @@ import { CiLogout } from "react-icons/ci";
 import { MdEdit } from "react-icons/md";
 import { FaClipboardList, FaUserShield } from "react-icons/fa";
 
-const navClass = "h-fit text-sm"
+const navClass = "h-fit text-sm font-medium text-be-navy hover:text-be-orange transition-colors"
 
 export default function Header(): JSX.Element {
     //The User type is defined by firebase auth, it contains the user's email, display name
@@ -78,10 +78,10 @@ export default function Header(): JSX.Element {
         : "BESA Resources"
 
     return (
-        <header className={"flex h-16 w-screen items-center justify-between sm:justify-around px-3 sm:px-0 border-b-2 border-double border-gray-500 bg-white text-blue-900 top-0 z-50 fixed"}>
-        <div className="flex items-center justify-center gap-2 sm:gap-5 font-sans text-lg sm:text-2xl md:text-3xl font-semibold tracking-wide min-w-0">
-            <img src={Logo} className="w-7 sm:w-10 shrink-0" alt="" width={40} height={40} />
-            <span className="truncate">{brandName}</span>
+        <header className={"flex h-20 w-screen items-center justify-between sm:justify-around px-4 sm:px-0 border-b-4 border-solid border-be-orange bg-white text-be-navy top-0 z-50 fixed font-sans"}>
+        <div className="flex items-center justify-center gap-6 sm:gap-7 text-lg sm:text-2xl md:text-3xl font-bold tracking-wide min-w-0 py-2">
+            <img src={Logo} className="w-[50px] h-[50px] shrink-0 object-contain" alt="Baskin Engineering" width={50} height={50} />
+            <span className="truncate text-be-navy">{brandName}</span>
         </div>
         <nav className="flex h-fit justify-center items-center gap-x-4 sm:gap-x-10 text-sm shrink-0">
             <NavLink className={navClass} to="/">
@@ -91,38 +91,40 @@ export default function Header(): JSX.Element {
             {user ? (
                 <div className="relative w-64" ref={ref}>
                     <img 
-                    className="rounded-full w-8 h-8 border-gray-300 border-solid border-2 hover:brightness-75 mx-auto" 
+                    className="rounded-full w-9 h-9 border-be-navy border-solid border-2 hover:brightness-90 mx-auto cursor-pointer" 
                     src={user.photoURL || DefaultProfile}
+                    alt="Profile"
                     onClick={() => setPopup((e:boolean) => !e)}
                     />
-                    <div className={"absolute w-64 top-10 rounded-3xl border-2 border-solid border-gray-400 bg-white shadow-lg box-border p-3 " + (popup ? "" : "hidden")}>
+                    <div className={"absolute w-64 top-12 rounded-2xl border-2 border-solid border-be-light-gray bg-white text-be-navy shadow-lg box-border p-3 " + (popup ? "" : "hidden")}>
                         {/* Profile settings */}
                         <button
-                            className="flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-gray-400 hover:brightness-75 bg-white"
+                            className="flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-be-navy text-be-navy font-medium hover:bg-be-light-gray/40 bg-white transition-colors"
                             onClick={() => onSignOut()}
                             >
-                            <CiLogout className="border-solid rounded-full border-2 border-gray-300 w-5 h-5 fill-blue-900 p-2 box-content"/>
+                            <CiLogout className="border-solid rounded-full border-2 border-be-light-gray w-5 h-5 fill-be-navy p-2 box-content"/>
                             <span className="block">Log Out</span>
                         </button>
-                        <NavLink to={"/profile"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-gray-400 hover:brightness-75 bg-white"}>
+                        <NavLink to={"/profile"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-be-navy text-be-navy font-medium hover:bg-be-light-gray/40 bg-white transition-colors"}>
                             <img 
-                                className="border-solid rounded-full border-2 border-gray-300 w-5 h-5 p-2 box-content" 
-                                src={user.photoURL || DefaultProfile}/>
+                                className="border-solid rounded-full border-2 border-be-light-gray w-5 h-5 p-2 box-content" 
+                                src={user.photoURL || DefaultProfile}
+                                alt=""/>
                             <span>Profile</span>
                         </NavLink>
                         {userData?.admin && (
-                        <NavLink to={"/section-editor/getting-started"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-gray-400 hover:brightness-75 bg-white"}>
-                            <MdEdit className="border-solid rounded-full border-2 border-gray-300 w-5 h-5 fill-blue-900 p-2 box-content"/>
+                        <NavLink to={"/section-editor/getting-started"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-be-navy text-be-navy font-medium hover:bg-be-light-gray/40 bg-white transition-colors"}>
+                            <MdEdit className="border-solid rounded-full border-2 border-be-light-gray w-5 h-5 fill-be-navy p-2 box-content"/>
                             <span>Edit Sections</span>
                         </NavLink>)}
                         {userData?.accountType === "besaLead" && (
-                        <NavLink to={"/manage-admins"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-gray-400 hover:brightness-75 bg-white"}>
-                            <FaUserShield className="border-solid rounded-full border-2 border-gray-300 w-5 h-5 fill-blue-900 p-2 box-content"/>
+                        <NavLink to={"/manage-admins"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-be-navy text-be-navy font-medium hover:bg-be-light-gray/40 bg-white transition-colors"}>
+                            <FaUserShield className="border-solid rounded-full border-2 border-be-light-gray w-5 h-5 fill-be-navy p-2 box-content"/>
                             <span>Manage Admins</span>
                         </NavLink>)}
                         {userData?.accountType === "besaLead" && (
-                        <NavLink to={"/assign-tasks"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-gray-400 hover:brightness-75 bg-white"}>
-                            <FaClipboardList className="border-solid rounded-full border-2 border-gray-300 w-5 h-5 fill-blue-900 p-2 box-content"/>
+                        <NavLink to={"/assign-tasks"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-be-navy text-be-navy font-medium hover:bg-be-light-gray/40 bg-white transition-colors"}>
+                            <FaClipboardList className="border-solid rounded-full border-2 border-be-light-gray w-5 h-5 fill-be-navy p-2 box-content"/>
                             <span>Assign Tasks</span>
                         </NavLink>)}
                     </div>
@@ -139,7 +141,7 @@ export default function Header(): JSX.Element {
                 <NavLink className={navClass} to="/signin">
                 SIGN IN
                 </NavLink>
-                <NavLink className={navClass} to="/signup">
+                <NavLink className="h-fit text-sm font-bold px-4 py-2 rounded-full bg-be-orange text-black hover:bg-be-orange-dark transition-colors" to="/signup">
                 SIGN UP
                 </NavLink>
             </>

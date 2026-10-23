@@ -30,13 +30,14 @@ function formatSeconds(total: number): string {
 
 //speak-the-script practice type: records the user's mic through this section, sends the recording to
 //besa-api for transcription once they hit finish, then hands off to the same review UI text practice uses.
-export default function MicrophoneTest({floorId, section, sections, scriptText, cosScript, onScriptUpdated, progress, setProgress, userInfo, setUserInfo, onContinue, canExit, onExit}: {
+export default function MicrophoneTest({floorId, section, sections, scriptText, customBaseScriptText, cosScript, onScriptUpdated, progress, setProgress, userInfo, setUserInfo, onContinue, canExit, onExit}: {
     floorId: string,
     section: Marker,
     sections: Marker[],
     scriptText: string,
+    customBaseScriptText?: string,
     cosScript: CosScript | null,
-    onScriptUpdated: (newScriptText: string) => void,
+    onScriptUpdated: (newScriptText: string) => Promise<void> | void,
     progress: Progress | null,
     setProgress: (p: Progress) => void,
     userInfo: User | null,
@@ -155,17 +156,19 @@ export default function MicrophoneTest({floorId, section, sections, scriptText, 
         onContinue()
     }
 
+    useEffect(() => {
+        if (correctText.trim().length === 0) {
+            onContinue()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [section.markTime, correctText])
+
     if (correctText.trim().length === 0) {
-        return (
-            <div className="p-5 bg-gray-900 rounded-2xl text-center">
-                <p className="text-gray-400 mb-3">No script text for this section.</p>
-                <button onClick={onContinue} className="p-2 px-6 rounded-full bg-blue-800 hover:bg-blue-900">Continue</button>
-            </div>
-        )
+        return null
     }
 
     return (
-        <div className="p-5 bg-gray-900 rounded-2xl">
+        <div className="p-5 bg-be-navy-darker rounded-2xl border border-be-orange/40">
             {stage === "reviewing" ?
                 <AnswerReview
                     answer={answer}
@@ -173,6 +176,7 @@ export default function MicrophoneTest({floorId, section, sections, scriptText, 
                     section={section}
                     sections={sections}
                     scriptText={scriptText}
+                    customBaseScriptText={customBaseScriptText}
                     cosScript={cosScript}
                     onScriptUpdated={onScriptUpdated}
                     onTryAgain={handleTryAgain}
@@ -182,25 +186,25 @@ export default function MicrophoneTest({floorId, section, sections, scriptText, 
                 />
                 :
                 <div className="flex flex-col items-center gap-4 py-8">
-                    <h3 className="text-xl mb-1 text-center">Speak The Script</h3>
-                    <p className="text-sm text-gray-400 text-center max-w-md">
+                    <h3 className="text-xl font-bold mb-1 text-center text-be-yellow">Speak The Script</h3>
+                    <p className="text-sm text-be-light-gray text-center max-w-md">
                         Say this section of the tour script out loud, from memory. When you're done, hit finish and we'll transcribe what you said.
                     </p>
                     <button
                         onClick={stage === "recording" ? handleFinishRecording : handleStartRecording}
                         disabled={stage === "transcribing"}
                         className={"w-20 h-20 rounded-full flex items-center justify-center text-3xl transition-colors shrink-0 my-2 " +
-                            (stage === "recording" ? "bg-red-700 hover:bg-red-800 animate-pulse" : "bg-blue-800 hover:bg-blue-900")}
+                            (stage === "recording" ? "bg-red-700 hover:bg-red-800 text-white animate-pulse" : "bg-be-orange hover:bg-be-orange-dark text-black")}
                     >
                         {stage === "transcribing" ? <MoonLoader color="white" size={24}/> : stage === "recording" ? <FaStop/> : <FaMicrophone/>}
                     </button>
-                    <span className="text-gray-400 text-sm">
+                    <span className="text-be-light-gray text-sm">
                         {stage === "idle" && "Tap the microphone to start recording"}
                         {stage === "recording" && `Recording... ${formatSeconds(seconds)} - tap to finish`}
                     </span>
                     {error && <p className="text-red-400 text-sm text-center max-w-md">{error}</p>}
                     {canExit && stage === "idle" &&
-                        <button onClick={onExit} className="p-2.5 px-6 rounded-full border border-gray-400 hover:bg-gray-800 mt-2">Exit</button>
+                        <button onClick={onExit} className="p-2.5 px-6 rounded-full border-2 border-be-light-gray hover:bg-be-navy font-bold mt-2 transition-colors">Exit</button>
                     }
                 </div>
             }

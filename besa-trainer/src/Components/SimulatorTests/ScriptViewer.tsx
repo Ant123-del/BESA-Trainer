@@ -1,66 +1,87 @@
-import { useEffect, useState } from "react"
-import { doc, getDoc } from "firebase/firestore"
-import { db } from "../../Tools/firestore"
-import { getScript } from "../../Tools/Fetch"
 import { groupScriptBySections } from "../../Tools/ScriptDecoder"
-import type { Floor, Script } from "../../Tools/types"
+import type { Floor } from "../../Tools/types"
 import { Loading } from "../SectionEditor/Edit"
 import { MoonLoader } from "react-spinners"
 
-type Source = "mine" | "default"
+export type ScriptSource = "default" | "custom"
 
 //lets a trainee just read through a floor's script - no testing, no timeline - either their own
 //personalized (possibly edited) copy or the floor's untouched default, grouped under each section's title.
-export default function ScriptViewer({floor, myScript, onClose}: {floor: Floor, myScript: string, onClose: () => void}) {
-    const [source, setSource] = useState<Source>("mine")
-    const [defaultScript, setDefaultScript] = useState<string | null>(null)
-    const [loadingDefault, setLoadingDefault] = useState(false)
-
-    //the default script is only fetched the first time it's actually asked for, not on open.
-    useEffect(() => {
-        if (source !== "default" || defaultScript !== null) {
-            return
-        }
-        setLoadingDefault(true)
-        getDoc(doc(db, "training_data", "data_root", "scripts", floor.defScriptId)).then(async (data) => {
-            if (data.exists()) {
-                const s = data.data() as Script
-                setDefaultScript(await getScript(s.src) || "")
-            } else {
-                setDefaultScript("")
-            }
-        }).finally(() => setLoadingDefault(false))
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [source])
-
-    const text = source === "mine" ? myScript : (defaultScript ?? "")
+export default function ScriptViewer({
+    floor,
+    defaultScript,
+    customScript,
+    hasCustomScript,
+    scriptSource,
+    onScriptSourceChange,
+    onDeleteCustomScript,
+    deletingCustomScript,
+    onClose
+}: {
+    floor: Floor,
+    defaultScript: string | null,
+    customScript: string | null,
+    hasCustomScript: boolean,
+    scriptSource: ScriptSource,
+    onScriptSourceChange: (source: ScriptSource) => void,
+    onDeleteCustomScript: () => void,
+    deletingCustomScript: boolean,
+    onClose: () => void
+}) {
+    const activeSource: ScriptSource = hasCustomScript ? scriptSource : "default"
+    const text = activeSource === "custom" ? (customScript ?? defaultScript ?? "") : (defaultScript ?? "")
     const groups = groupScriptBySections(text, floor.markers)
+    const isLoading = defaultScript === null
 
     return (
         <Loading onClose={onClose}>
-            <div className="bg-gray-900 w-2/3 max-h-[80vh] p-5 rounded-2xl relative flex flex-col" onClick={(e) => e.stopPropagation()}>
-                <button onClick={onClose} className="absolute top-3 right-3 text-gray-400 hover:text-white text-xl leading-none">&times;</button>
-                <h3 className="text-2xl mb-1 text-center shrink-0">Script Viewer</h3>
-                <div className="flex justify-center gap-3 my-3 shrink-0">
-                    <button onClick={() => setSource("mine")}
-                        className={"px-4 py-1.5 rounded-full border-2 " + (source === "mine" ? "bg-blue-800 border-blue-800" : "border-gray-600 hover:bg-gray-800")}>
-                        My Script
-                    </button>
-                    <button onClick={() => setSource("default")}
-                        className={"px-4 py-1.5 rounded-full border-2 " + (source === "default" ? "bg-blue-800 border-blue-800" : "border-gray-600 hover:bg-gray-800")}>
-                        Default Script
-                    </button>
+            <div className="bg-be-navy border-2 border-be-orange w-11/12 sm:w-2/3 max-h-[80vh] p-5 rounded-2xl relative flex flex-col font-sans shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <button onClick={onClose} className="absolute top-3 right-3 text-be-light-gray hover:text-white text-xl leading-none">&times;</button>
+                <div className="flex flex-wrap items-center justify-between gap-3 pr-6 mb-3 shrink-0">
+                    <h3 className="text-2xl font-bold text-white">Script Viewer</h3>
+                    {hasCustomScript && (
+                        <div className="flex items-center gap-2 ml-auto">
+                            <div className="inline-flex items-center bg-be-navy-darker p-1 rounded-full border border-be-orange/60">
+                                <button
+                                    type="button"
+                                    onClick={() => onScriptSourceChange("default")}
+                                    className={"px-3 py-1 rounded-full text-xs font-bold transition-all " +
+                                        (activeSource === "default" ? "bg-be-orange text-black shadow" : "text-be-light-gray hover:text-white")}
+                                >
+                                    Default Script
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => onScriptSourceChange("custom")}
+                                    className={"px-3 py-1 rounded-full text-xs font-bold transition-all " +
+                                        (activeSource === "custom" ? "bg-be-orange text-black shadow" : "text-be-light-gray hover:text-white")}
+                                >
+                                    Custom Script
+                                </button>
+                            </div>
+                            {activeSource === "custom" && (
+                                <button
+                                    type="button"
+                                    onClick={onDeleteCustomScript}
+                                    disabled={deletingCustomScript}
+                                    className="px-3 py-1 rounded-full text-xs font-bold bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-50"
+                                >
+                                    {deletingCustomScript ? "Deleting..." : "Delete"}
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
                 <div className="overflow-y-auto flex-1 min-h-0 px-2">
-                    {loadingDefault ?
+                    {isLoading ?
                         <div className="flex justify-center py-10"><MoonLoader color="white" size={30}/></div>
                         : groups.length === 0 ?
-                        <p className="text-gray-500 italic text-center py-10">No script available yet.</p>
+                        <p className="text-be-light-gray italic text-center py-10">No script available yet.</p>
                         : groups.map((group, i) => (
                             <div key={i} className="mb-6">
-                                <h4 className="text-amber-500 text-lg font-semibold tracking-wide mb-2 sticky top-0 bg-gray-900 py-1">{group.title}</h4>
+                                <h4 className="text-be-yellow text-lg font-bold tracking-wide mb-2 sticky top-0 bg-be-navy py-1">{group.title}</h4>
                                 {group.lines.map((line, j) => (
-                                    <p key={j} className="text-gray-200 mb-2 leading-relaxed">{line.text}</p>
+                                    <p key={j} className="text-white mb-2 leading-relaxed">{line.text}</p>
                                 ))}
                             </div>
                         ))

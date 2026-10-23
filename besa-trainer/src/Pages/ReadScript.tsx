@@ -9,13 +9,13 @@ import { FaArrowRight } from "react-icons/fa"
 import Header from "../Components/Header"
 import { floorNameDecoder } from "../Components/SectionEditor/Edit"
 import { getFirebaseAuth } from "../Tools/firebase"
-import { db, ensurePersonalScript, removeCustomScript } from "../Tools/firestore"
+import { db, removeCustomScript } from "../Tools/firestore"
 import { getScript } from "../Tools/Fetch"
 import { groupScriptBySections } from "../Tools/ScriptDecoder"
 import { FLOOR_SEQUENCE, getNextFloorCode } from "./Simulator"
 import type { CosScript, Floor, FloorCode, Script, User } from "../Tools/types"
 
-type Source = "mine" | "default"
+type Source = "default" | "custom"
 
 //a dedicated, read-only walkthrough of a floor's script - no video, no testing, just the words in
 //order under each section's title. Lives next to "Begin Practice" on the BESA dashboard, and doubles
@@ -36,7 +36,6 @@ export default function ReadScript() {
     const [personalScript, setPersonalScript] = useState<string | null>(null)
     const [scriptLoading, setScriptLoading] = useState(false)
 
-    const [creatingPersonal, setCreatingPersonal] = useState(false)
     const [updatingPersonal, setUpdatingPersonal] = useState(false)
     const [revertingPersonal, setRevertingPersonal] = useState(false)
     const [actionError, setActionError] = useState("")
@@ -76,27 +75,26 @@ export default function ReadScript() {
         setActionError("")
     }, [f])
 
-    //personal copy is loaded (not auto-created) whenever it already exists - only actually creating
-    //one is left as an explicit action, so "revert to default" doesn't just get silently reversed by
-    //this same effect re-running.
+    //personal copy is loaded (not auto-created) whenever it already exists
     useEffect(() => {
         if (!floor || !userData) {
             return
         }
-        const existing = userData.scriptPaths.find(s => s.floorCode === floor.floorCode)
+        const existing = userData.scriptPaths?.find(s => s.floorCode === floor.floorCode)
         if (existing?.src) {
-            setScriptLoading(true)
             getScript(existing.src).then((text) => {
                 setCosScript(existing)
                 setPersonalScript(text || "")
-            }).finally(() => setScriptLoading(false))
+            })
+        } else {
+            setCosScript(null)
+            setPersonalScript(null)
         }
     }, [floor, userData])
 
-    //default script is only fetched once it's actually needed (either the user picked that tab, or
-    //there's no personal copy to fall back on).
+    //always fetch default script when floor loads
     useEffect(() => {
-        if (!floor || defaultScript !== null || (source !== "default" && cosScript)) {
+        if (!floor || defaultScript !== null) {
             return
         }
         setScriptLoading(true)
@@ -109,26 +107,7 @@ export default function ReadScript() {
             }
         }).finally(() => setScriptLoading(false))
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [floor, source, cosScript])
-
-    async function handleCreatePersonal() {
-        if (!floor || !userData) {
-            return
-        }
-        setCreatingPersonal(true)
-        setActionError("")
-        try {
-            const {cosScript: newCosScript, scriptText, scriptPaths} = await ensurePersonalScript(userData.uid, userData.scriptPaths, floor)
-            setCosScript(newCosScript)
-            setPersonalScript(scriptText)
-            setUserData({...userData, scriptPaths})
-        } catch (e) {
-            console.error(e)
-            setActionError("Couldn't create a personal copy right now. Please try again.")
-        } finally {
-            setCreatingPersonal(false)
-        }
-    }
+    }, [floor])
 
     async function handleUpdateToLatest() {
         if (!floor || !userData || !cosScript) {
@@ -157,7 +136,7 @@ export default function ReadScript() {
         }
     }
 
-    async function handleUseDefault() {
+    async function handleDeleteCustom() {
         if (!userData || !cosScript) {
             return
         }
@@ -171,14 +150,15 @@ export default function ReadScript() {
             setSource("default")
         } catch (e) {
             console.error(e)
-            setActionError("Couldn't revert that script right now. Please try again.")
+            setActionError("Couldn't delete that script right now. Please try again.")
         } finally {
             setRevertingPersonal(false)
         }
     }
 
     const nextFloorCode = getNextFloorCode(f)
-    const text = source === "mine" ? (personalScript ?? "") : (defaultScript ?? "")
+    const activeSource: Source = cosScript ? source : "default"
+    const text = activeSource === "custom" ? (personalScript ?? defaultScript ?? "") : (defaultScript ?? "")
     const groups = floor ? groupScriptBySections(text, floor.markers) : []
     const outOfDate = !!floor && !!cosScript && cosScript.scriptDeviationId !== floor.defScriptId
 
@@ -191,13 +171,13 @@ export default function ReadScript() {
     }
 
     return (
-        <div className="bg-gray-900 w-full min-h-screen text-white">
+        <div className="bg-be-navy-darker w-full min-h-screen text-white font-sans">
             <Header/>
-            <div className="h-16 relative top-0 left-0 w-full"></div>
+            <div className="h-20 relative top-0 left-0 w-full"></div>
 
-            <header className="p-3 flex flex-wrap justify-between items-center gap-3 border-b-2 border-b-solid border-b-gray-500">
-                <h1 className="text-2xl sm:text-3xl md:text-4xl tracking-wider">{floorNameDecoder(f)} Script</h1>
-                <Link to="/" className="flex justify-center gap-2 items-center hover:text-gray-400 p-2">
+            <header className="p-3 px-5 flex flex-wrap justify-between items-center gap-3 border-b-4 border-b-solid border-b-be-orange bg-be-navy">
+                <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-wider">{floorNameDecoder(f)} Script</h1>
+                <Link to="/" className="flex justify-center gap-2 items-center hover:text-be-yellow font-medium p-2 transition-colors">
                     <IoMdArrowRoundBack/>
                     <span>Back</span>
                 </Link>
@@ -208,7 +188,7 @@ export default function ReadScript() {
                 <div className="flex flex-wrap gap-2 mb-6">
                     {FLOOR_SEQUENCE.map((code) => (
                         <button key={code} onClick={() => setSearchParams({f: code})}
-                            className={"px-4 py-2 rounded-full border-2 text-sm " + (f === code ? "bg-blue-800 border-blue-800" : "border-gray-600 hover:bg-gray-800")}>
+                            className={"px-4 py-2 rounded-full border-2 text-sm font-bold transition-colors " + (f === code ? "bg-be-orange text-black border-be-orange" : "border-be-light-gray text-white hover:bg-be-navy")}>
                             {floorNameDecoder(code)}
                         </button>
                     ))}
@@ -217,74 +197,70 @@ export default function ReadScript() {
                 {!floorChecked ?
                     <div className="flex justify-center py-20"><MoonLoader color="white" size={30}/></div>
                     : !floor ?
-                    <p className="text-gray-500 italic text-center py-20">No video set up yet for this floor.</p>
+                    <p className="text-be-light-gray italic text-center py-20">No video set up yet for this floor.</p>
                     :
                     <>
-                        {/* My Script / Default toggle */}
-                        <div className="flex justify-center gap-3 mb-5">
-                            <button onClick={() => setSource("mine")}
-                                className={"px-4 py-1.5 rounded-full border-2 " + (source === "mine" ? "bg-blue-800 border-blue-800" : "border-gray-600 hover:bg-gray-800")}>
-                                My Script
-                            </button>
-                            <button onClick={() => setSource("default")}
-                                className={"px-4 py-1.5 rounded-full border-2 " + (source === "default" ? "bg-blue-800 border-blue-800" : "border-gray-600 hover:bg-gray-800")}>
-                                Default Script
-                            </button>
-                        </div>
-
                         {actionError && <p className="text-red-400 text-sm text-center mb-3">{actionError}</p>}
 
-                        {/* Manage personal script */}
-                        {source === "mine" &&
-                            <div className="bg-gray-800 rounded-2xl p-4 mb-5 flex items-center justify-between gap-3 flex-wrap">
-                                {cosScript ?
-                                    <>
-                                        <div>
-                                            <span className="text-sm text-gray-300">This is your personal copy of the script.</span>
-                                            {outOfDate &&
-                                                <span className="block text-xs text-amber-400 mt-1">Out of date - doesn't match the current draft for this floor</span>
-                                            }
-                                        </div>
-                                        <div className="flex items-center gap-2 shrink-0">
-                                            {outOfDate &&
-                                                <button onClick={handleUpdateToLatest} disabled={updatingPersonal}
-                                                    className="p-2 px-4 rounded-full bg-amber-800 hover:bg-amber-900 text-xs disabled:opacity-50">
-                                                    {updatingPersonal ? "Updating..." : "Update to Latest"}
-                                                </button>
-                                            }
-                                            <button onClick={handleUseDefault} disabled={revertingPersonal}
-                                                className="p-2 px-4 rounded-full border border-gray-400 hover:bg-gray-700 text-xs disabled:opacity-50">
-                                                {revertingPersonal ? "Reverting..." : "Use Default Script"}
+                        {/* Script text panel with top-right Default/Custom toggle slider */}
+                        <div className="bg-be-navy rounded-2xl p-5 min-h-[20rem] border-2 border-be-orange/50 shadow-lg">
+                            <div className="flex items-center justify-between gap-3 flex-wrap mb-4 pb-3 border-b border-be-navy-dark">
+                                <h2 className="text-xl font-bold text-be-yellow tracking-wide">{floorNameDecoder(f)}</h2>
+                                {cosScript && (
+                                    <div className="flex items-center gap-2 ml-auto flex-wrap">
+                                        <div className="inline-flex items-center bg-be-navy-darker p-1 rounded-full border border-be-orange/60">
+                                            <button
+                                                type="button"
+                                                onClick={() => setSource("default")}
+                                                className={"px-3 py-1 rounded-full text-xs font-bold transition-all " +
+                                                    (activeSource === "default" ? "bg-be-orange text-black shadow" : "text-be-light-gray hover:text-white")}
+                                            >
+                                                Default Script
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setSource("custom")}
+                                                className={"px-3 py-1 rounded-full text-xs font-bold transition-all " +
+                                                    (activeSource === "custom" ? "bg-be-orange text-black shadow" : "text-be-light-gray hover:text-white")}
+                                            >
+                                                Custom Script
                                             </button>
                                         </div>
-                                    </>
-                                    :
-                                    <>
-                                        <span className="text-sm text-gray-300">
-                                            {scriptLoading ? "Checking for a personal copy..." : "You don't have a personal copy of this floor's script yet."}
-                                        </span>
-                                        <button onClick={handleCreatePersonal} disabled={creatingPersonal || scriptLoading}
-                                            className="p-2 px-4 rounded-full bg-blue-800 hover:bg-blue-900 text-xs disabled:opacity-50 shrink-0">
-                                            {creatingPersonal ? "Creating..." : "Create From Default"}
-                                        </button>
-                                    </>
-                                }
+                                        {activeSource === "custom" && (
+                                            <>
+                                                {outOfDate && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleUpdateToLatest}
+                                                        disabled={updatingPersonal}
+                                                        className="px-3 py-1 rounded-full bg-be-yellow hover:bg-amber-400 text-black font-bold text-xs transition-colors disabled:opacity-50"
+                                                    >
+                                                        {updatingPersonal ? "Updating..." : "Update to Latest"}
+                                                    </button>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    onClick={handleDeleteCustom}
+                                                    disabled={revertingPersonal}
+                                                    className="px-3 py-1 rounded-full bg-red-600 hover:bg-red-700 text-white font-bold text-xs transition-colors disabled:opacity-50"
+                                                >
+                                                    {revertingPersonal ? "Deleting..." : "Delete"}
+                                                </button>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
                             </div>
-                        }
 
-                        {/* Script text */}
-                        <div className="bg-gray-800 rounded-2xl p-5 min-h-[20rem]">
                             {scriptLoading ?
                                 <div className="flex justify-center py-10"><MoonLoader color="white" size={30}/></div>
                                 : groups.length === 0 ?
-                                <p className="text-gray-500 italic text-center py-10">
-                                    {source === "mine" && !cosScript ? "Create a personal copy above to read it here." : "No script available yet."}
-                                </p>
+                                <p className="text-be-light-gray italic text-center py-10">No script available yet.</p>
                                 : groups.map((group, i) => (
                                     <div key={i} className="mb-6">
-                                        <h4 className="text-amber-500 text-lg font-semibold tracking-wide mb-2">{group.title}</h4>
+                                        <h4 className="text-be-yellow text-lg font-bold tracking-wide mb-2">{group.title}</h4>
                                         {group.lines.map((line, j) => (
-                                            <p key={j} className="text-gray-200 mb-2 leading-relaxed">{line.text}</p>
+                                            <p key={j} className="text-white mb-2 leading-relaxed">{line.text}</p>
                                         ))}
                                     </div>
                                 ))
@@ -292,7 +268,7 @@ export default function ReadScript() {
                         </div>
 
                         <button onClick={handleNext}
-                            className="w-full mt-5 p-3 rounded-full bg-amber-900 hover:bg-amber-950 text-sm font-semibold tracking-wide flex items-center justify-center gap-2">
+                            className="w-full mt-5 p-3 rounded-full bg-be-orange hover:bg-be-orange-dark text-black text-sm font-bold tracking-wide flex items-center justify-center gap-2 transition-colors">
                             {nextFloorCode ? `Next: ${floorNameDecoder(nextFloorCode)} Script` : "Back to Home"}
                             <FaArrowRight/>
                         </button>

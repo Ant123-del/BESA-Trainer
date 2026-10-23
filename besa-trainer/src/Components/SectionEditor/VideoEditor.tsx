@@ -1,7 +1,7 @@
 import { type Marker, type Floor, type Script } from "../../Tools/types";
-import { createPlayer, selectTime, selectVolume } from "@videojs/react"
+import { createPlayer, selectPlaybackRate, selectTime, selectVolume } from "@videojs/react"
 import { videoFeatures, Video } from "@videojs/react/video";
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import ContentLoader from "react-content-loader";
 import { FaPlay } from "react-icons/fa";
 import { FaPause } from "react-icons/fa";
@@ -9,6 +9,7 @@ import { AiFillMuted } from "react-icons/ai";
 import { HiMiniSpeakerWave } from "react-icons/hi2";
 import { FaPlus } from "react-icons/fa";
 import { FaDeleteLeft } from "react-icons/fa6";
+import { IoMdSettings } from "react-icons/io";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "../../Tools/firestore";
 import { reconcileProgress } from "../../Tools/Fetch";
@@ -18,6 +19,7 @@ import { FaStepForward } from "react-icons/fa";
 import { FaStepBackward } from "react-icons/fa";
 
 const Player = createPlayer({features: videoFeatures})
+const VIDEO_SPEED_OPTIONS = [0.5, 0.75, 1, 1.5, 1.75, 2] as const
 
 
 
@@ -62,19 +64,69 @@ function CustomControls({floor, setFloor}: {floor: Floor, setFloor: Dispatch<Set
     const currentTime = Player.usePlayer((state) => state.currentTime) || 0;
     const playBack = Player.usePlayer(selectTime)
     const vol = Player.usePlayer(selectVolume)
+    const rateControl = Player.usePlayer(selectPlaybackRate)
+    const currentRate = rateControl?.playbackRate ?? 1
 
     const [searchParam] = useSearchParams()
     const f = searchParam.get("f")
 
     const [sound, setSound] = useState(false)
+    const [speedMenuOpen, setSpeedMenuOpen] = useState(false)
+    const speedMenuRef = useRef<HTMLDivElement>(null)
     const [onMarker, setOnMarker] = useState<null | Marker>(null)
     const [nameSection, setNameSection] = useState(f + "-" + (floor.markers.length + 1))
     
-    // useEffect(() => {
-    //     setMuted(isMuted)
-    // }, [isMuted])
-
     const playerActions = Player.usePlayer();
+
+    useEffect(() => {
+        if (!speedMenuOpen) return
+        function handleClickOutside(e: MouseEvent) {
+            if (speedMenuRef.current && !speedMenuRef.current.contains(e.target as Node)) {
+                setSpeedMenuOpen(false)
+            }
+        }
+        document.addEventListener("mousedown", handleClickOutside)
+        return () => document.removeEventListener("mousedown", handleClickOutside)
+    }, [speedMenuOpen])
+
+    useEffect(() => {
+        function handleKeyDown(e: KeyboardEvent) {
+            const target = e.target as HTMLElement | null
+            if (
+                target &&
+                (target.tagName === "TEXTAREA" ||
+                 target.isContentEditable ||
+                 (target.tagName === "INPUT" && (target as HTMLInputElement).type !== "range"))
+            ) {
+                return
+            }
+
+            if (e.key === " " || e.code === "Space") {
+                e.preventDefault()
+                if (isPaused) {
+                    playerActions.play()
+                } else {
+                    playerActions.pause()
+                }
+                return
+            }
+
+            if (e.key === "ArrowLeft") {
+                e.preventDefault()
+                playBack?.seek(Math.max(0, currentTime - 5))
+                return
+            }
+
+            if (e.key === "ArrowRight") {
+                e.preventDefault()
+                playBack?.seek(Math.min(duration, currentTime + 5))
+            }
+        }
+
+        window.addEventListener("keydown", handleKeyDown)
+        return () => window.removeEventListener("keydown", handleKeyDown)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentTime, duration, isPaused])
 
     useEffect(() => {
         const markerWidth = duration * 0.03
@@ -239,6 +291,42 @@ function CustomControls({floor, setFloor}: {floor: Floor, setFloor: Dispatch<Set
                             <div className="p-2 bg-gray-700 rounded-full hover:bg-gray-800 cursor-pointer" onClick={() => playBack?.seek(Math.min(currentTime + 0.1, duration))}>
                                 <FaStepForward className="w-4 h-4 fill-white"/>
                             </div>
+                        </div>
+                        {/* Speed Settings Bar */}
+                        <div className="relative" ref={speedMenuRef}>
+                            <button
+                                type="button"
+                                onClick={() => setSpeedMenuOpen(open => !open)}
+                                title="Playback Speed"
+                                className="flex items-center gap-1.5 bg-gray-700 hover:bg-gray-800 text-white text-xs font-bold px-3 py-2 rounded-full"
+                            >
+                                <IoMdSettings className="w-4 h-4 text-be-orange"/>
+                                <span>{currentRate}x</span>
+                            </button>
+                            {speedMenuOpen && (
+                                <div className="absolute bottom-full left-0 mb-2 bg-be-navy-darker border-2 border-be-orange rounded-xl p-1.5 shadow-xl flex flex-col gap-1 min-w-[9.5rem] z-50 text-left">
+                                    <span className="text-[11px] font-bold uppercase tracking-wider text-be-yellow px-2.5 py-1 border-b border-be-navy">
+                                        Playback Speed
+                                    </span>
+                                    {VIDEO_SPEED_OPTIONS.map((rate) => {
+                                        const isCurrent = Math.abs(currentRate - rate) < 0.01
+                                        return (
+                                            <button
+                                                key={rate}
+                                                type="button"
+                                                onClick={() => {
+                                                    rateControl?.setPlaybackRate(rate)
+                                                    setSpeedMenuOpen(false)
+                                                }}
+                                                className={"text-left text-xs px-3 py-1.5 rounded-lg font-bold transition-colors " +
+                                                    (isCurrent ? "bg-be-orange text-black" : "text-white hover:bg-be-navy")}
+                                            >
+                                                {rate}x{isCurrent ? " (current)" : ""}
+                                            </button>
+                                        )
+                                    })}
+                                </div>
+                            )}
                         </div>
                     </div>
                     {/* Adding markers */}

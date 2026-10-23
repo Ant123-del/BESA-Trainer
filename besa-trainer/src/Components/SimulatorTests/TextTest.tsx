@@ -3,13 +3,14 @@ import { AnswerReview, getPrecedingSectionBounds, getVtt, isLineInSection } from
 import { type Marker, type Progress, type User, type CosScript} from "../../Tools/types"
 import { useEffect, useState } from "react";
 
-export function TextTest({floorId, section, sections, scriptText, cosScript, onScriptUpdated, progress, setProgress, userInfo, setUserInfo, onContinue, canExit, onExit}: {
+export function TextTest({floorId, section, sections, scriptText, customBaseScriptText, cosScript, onScriptUpdated, progress, setProgress, userInfo, setUserInfo, onContinue, canExit, onExit}: {
     floorId: string,
     section: Marker,
     sections: Marker[],
     scriptText: string,
+    customBaseScriptText?: string,
     cosScript: CosScript | null,
-    onScriptUpdated: (newScriptText: string) => void,
+    onScriptUpdated: (newScriptText: string) => Promise<void> | void,
     progress: Progress | null,
     setProgress: (p: Progress) => void,
     userInfo: User | null,
@@ -30,6 +31,13 @@ export function TextTest({floorId, section, sections, scriptText, cosScript, onS
         setSubmitted(false)
     }, [section.markTime])
 
+    useEffect(() => {
+        if (correctText.trim().length === 0) {
+            onContinue()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [section.markTime, correctText])
+
     function handleTryAgain() {
         setAnswer("")
         setSubmitted(false)
@@ -45,29 +53,24 @@ export function TextTest({floorId, section, sections, scriptText, cosScript, onS
     }
 
     if (correctText.trim().length === 0) {
-        return (
-            <div className="p-5 bg-gray-900 rounded-2xl text-center">
-                <p className="text-gray-400 mb-3">No script text for this section.</p>
-                <button onClick={onContinue} className="p-2 px-6 rounded-full bg-blue-800 hover:bg-blue-900">Continue</button>
-            </div>
-        )
+        return null
     }
 
     return (
-        <div className="p-5 bg-gray-900 rounded-2xl">
+        <div className="p-5 bg-be-navy-darker rounded-2xl border border-be-orange/40">
             {!submitted ?
                 <div className="flex flex-col gap-4">
-                    <h3 className="text-xl mb-1 text-center">Retype The Script</h3>
+                    <h3 className="text-xl font-bold mb-1 text-center text-be-yellow">Retype The Script</h3>
                     <textarea
-                        className="w-full h-48 p-4 rounded-lg bg-gray-700 text-white resize-none"
+                        className="w-full h-48 p-4 rounded-lg bg-be-navy-dark text-white border border-be-light-gray/30 resize-none"
                         value={answer}
                         onChange={(e) => setAnswer(e.target.value)}
                         placeholder="Type out this section of the tour script from memory. Don't worry about matching it word-for-word - just get the key points down, then hit Submit to see how close you were."
                     />
                     <div className="flex justify-center gap-3">
-                        <button onClick={() => setSubmitted(true)} className="p-2.5 px-6 rounded-full bg-blue-800 hover:bg-blue-900">Submit</button>
+                        <button onClick={() => setSubmitted(true)} className="p-2.5 px-6 rounded-full bg-be-orange hover:bg-be-orange-dark text-black font-bold transition-colors">Submit</button>
                         {canExit &&
-                            <button onClick={onExit} className="p-2.5 px-6 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
+                            <button onClick={onExit} className="p-2.5 px-6 rounded-full border-2 border-be-light-gray hover:bg-be-navy font-bold transition-colors">Exit</button>
                         }
                     </div>
                 </div>
@@ -78,6 +81,7 @@ export function TextTest({floorId, section, sections, scriptText, cosScript, onS
                     section={section}
                     sections={sections}
                     scriptText={scriptText}
+                    customBaseScriptText={customBaseScriptText}
                     cosScript={cosScript}
                     onScriptUpdated={onScriptUpdated}
                     onTryAgain={handleTryAgain}

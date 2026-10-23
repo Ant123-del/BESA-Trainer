@@ -57,8 +57,8 @@ export default function Home() {
         return (
             <>
                 <Header/>
-                <div className="h-16 relative top-0 left-0 w-full"></div>
-                <div className="w-full min-h-screen bg-gray-900"></div>
+                <div className="h-20 relative top-0 left-0 w-full"></div>
+                <div className="w-full min-h-screen bg-be-navy-darker"></div>
             </>
         )
     }
@@ -80,22 +80,25 @@ function Landing() {
     return (
         <>
             <Header/>
-            <div className="h-16 relative top-0 left-0 w-full"></div>
-            <div className="w-full min-h-screen bg-gray-900 text-white">
-                <div className="relative w-full h-[28rem] overflow-hidden">
-                    <img src={Background} className="w-full h-full object-cover brightness-50" alt=""/>
-                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-5">
-                        <h1 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-wide mb-4">BESA Resources</h1>
-                        <p className="text-base sm:text-lg text-gray-200 max-w-2xl mb-8">
+            <div className="h-20 relative top-0 left-0 w-full"></div>
+            <div className="w-full min-h-screen bg-white text-black font-sans">
+                <div className="relative w-full h-[28rem] overflow-hidden bg-be-navy">
+                    <img src={Background} className="w-full h-full object-cover brightness-50" alt="Baskin Engineering campus"/>
+                    <div className="absolute inset-0 bg-be-navy/60 flex flex-col items-center justify-center text-center px-5">
+                        <span className="text-xs sm:text-sm uppercase tracking-widest font-bold text-be-yellow mb-2">
+                            Jack Baskin School of Engineering
+                        </span>
+                        <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold tracking-wide text-white mb-4">BESA Resources</h1>
+                        <p className="text-base sm:text-lg text-white max-w-2xl mb-8 font-normal">
                             Curious about Baskin Engineering? Take a video walk through each floor, get answers
                             to the questions students and parents ask most, and get a feel for the school
                             without having to schedule a visit.
                         </p>
                         <div className="flex gap-4">
-                            <Link to="/signup" className="px-8 py-3 rounded-full bg-amber-500 hover:bg-amber-600 text-black font-semibold">
+                            <Link to="/signup" className="px-8 py-3 rounded-full bg-be-orange hover:bg-be-orange-dark text-black font-bold transition-colors">
                                 Get Started
                             </Link>
-                            <Link to="/signin" className="px-8 py-3 rounded-full border-2 border-white hover:bg-white/10 font-semibold">
+                            <Link to="/signin" className="px-8 py-3 rounded-full border-2 border-white text-white hover:bg-white hover:text-be-navy font-bold transition-colors">
                                 Sign In
                             </Link>
                         </div>
@@ -103,8 +106,8 @@ function Landing() {
                 </div>
 
                 <div className="w-11/12 md:w-4/6 mx-auto py-16">
-                    <h2 className="text-2xl sm:text-3xl tracking-wide text-center mb-10">What You Can Do Here</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <h2 className="text-2xl sm:text-3xl font-bold tracking-wide text-center text-be-navy mb-10">What You Can Do Here</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                         <FeatureCard icon={<FaMapMarkedAlt className="w-8 h-8"/>} title="Take A Virtual Tour">
                             Watch real video walk-throughs of each floor - First Floor, Second Floor, Third
                             Floor, and Slugworks - at your own pace.
@@ -116,15 +119,15 @@ function Landing() {
                     </div>
                 </div>
 
-                <div className="w-full bg-gray-800 py-14">
+                <div className="w-full bg-be-navy text-white py-16 border-t-4 border-be-orange">
                     <div className="w-11/12 md:w-4/6 mx-auto text-center">
-                        <h2 className="text-2xl tracking-wide mb-3">Ready to take a look around?</h2>
-                        <p className="text-gray-400 mb-6">Create a free account to start exploring.</p>
-                        <Link to="/signup" className="px-8 py-3 rounded-full bg-amber-500 hover:bg-amber-600 text-black font-semibold">
+                        <h2 className="text-2xl sm:text-3xl font-bold tracking-wide mb-3">Ready to take a look around?</h2>
+                        <p className="text-be-light-gray mb-6">Create a free account to start exploring Baskin Engineering.</p>
+                        <Link to="/signup" className="inline-block px-8 py-3 rounded-full bg-be-orange hover:bg-be-orange-dark text-black font-bold transition-colors">
                             Sign Up
                         </Link>
-                        <p className="text-xs text-gray-500 mt-6">
-                            Are you a BESA? <Link to="/signup-besa" className="text-amber-500 hover:underline">Sign up as BESA</Link> instead
+                        <p className="text-xs text-be-light-gray mt-6">
+                            Are you a BESA? <Link to="/signup-besa" className="text-be-yellow font-bold hover:underline">Sign up as BESA</Link> instead
                             to link your account to your BESA info.
                         </p>
                     </div>
@@ -136,12 +139,12 @@ function Landing() {
 
 function FeatureCard({icon, title, children}: {icon: JSX.Element, title: string, children: string}) {
     return (
-        <div className="bg-gray-800 rounded-2xl p-6 text-center">
-            <div className="mx-auto mb-4 w-14 h-14 rounded-full bg-amber-500/20 text-amber-500 flex items-center justify-center">
+        <div className="bg-be-navy text-white rounded-2xl p-8 text-center border-b-4 border-be-orange shadow-md">
+            <div className="mx-auto mb-4 w-14 h-14 rounded-full bg-be-orange text-black flex items-center justify-center">
                 {icon}
             </div>
-            <h3 className="text-xl font-semibold mb-2">{title}</h3>
-            <p className="text-sm text-gray-400">{children}</p>
+            <h3 className="text-xl font-bold mb-2 text-white">{title}</h3>
+            <p className="text-sm text-be-light-gray leading-relaxed">{children}</p>
         </div>
     )
 }
@@ -159,46 +162,46 @@ function UserDashboard({brandName}: {brandName: string}) {
     return (
         <>
             <Header/>
-            <div className="h-16 relative top-0 left-0 w-full"></div>
-            <div className="w-full min-h-screen bg-gray-900 flex flex-col md:flex-row justify-center items-stretch md:items-start relative text-white gap-4">
-                <div className="static md:sticky top-0 right-0 w-full md:w-1/6 mt-6 md:mt-16 border-b-2 md:border-b-0 border-r-solid md:border-r-gray-600 md:border-r-2 border-gray-600 py-5 md:py-10 px-3">
-                    <h3 className="text-2xl tracking-wider">Explore</h3>
-                    <hr className="w-2/4 mx-auto my-5"></hr>
+            <div className="h-20 relative top-0 left-0 w-full"></div>
+            <div className="w-full min-h-screen bg-be-navy-darker flex flex-col md:flex-row justify-center items-stretch md:items-start relative text-white gap-6 font-sans pb-16">
+                <div className="static md:sticky top-20 right-0 w-full md:w-1/6 mt-6 md:mt-16 border-b-2 md:border-b-0 border-r-solid md:border-r-be-navy md:border-r-2 border-be-navy py-5 md:py-10 px-4">
+                    <h3 className="text-2xl font-bold tracking-wider text-be-yellow">Explore</h3>
+                    <hr className="w-2/4 my-4 border-be-orange"></hr>
 
                     <div className="flex md:block gap-2 flex-wrap">
                         <SideBarElement to="#general-tour">
-                            <h4>Take A Tour</h4>
+                            <h4 className="font-medium">Take A Tour</h4>
                         </SideBarElement>
                         <SideBarElement to="#questions">
-                            <h4>Common Questions</h4>
+                            <h4 className="font-medium">Common Questions</h4>
                         </SideBarElement>
                     </div>
                 </div>
                 <div className="w-11/12 md:w-4/6 mx-auto md:mx-0 mt-6 md:mt-16">
-                    <div id="general-tour" className="scroll-mt-20">
-                        <h1 className="text-xl sm:text-2xl tracking-wider">
+                    <div id="general-tour" className="scroll-mt-24 mb-4">
+                        <h1 className="text-2xl sm:text-3xl font-bold tracking-wider text-white">
                             Welcome to {brandName}
                         </h1>
-                        <p className="text-xs text-gray-500 mb-2">
+                        <p className="text-sm text-be-light-gray mt-1 mb-3">
                             Take a look around Baskin Engineering - pick a floor below to start watching.
                         </p>
                     </div>
-                    <Carousel className="rounded-xl"
+                    <Carousel className="rounded-2xl shadow-lg"
                         prevArrow={({handlePrev}) => {
                             return (
                                 <IconButton
-                                className={"!absolute bottom-0 left-4 -translate-y-2/4 bg-black/30 hover:bg-black/50 rounded-full"}
+                                className={"!absolute bottom-0 left-4 -translate-y-2/4 bg-be-navy/80 hover:bg-be-navy text-white rounded-full"}
                                 onClick={handlePrev}>
-                                    <FaChevronLeft className="fill-black"/>
+                                    <FaChevronLeft className="fill-white"/>
                                 </IconButton>
                             )
                         }}
                         nextArrow={({handleNext}) => {
                             return (
                                 <IconButton
-                                className={"!absolute bottom-0 right-4 -translate-y-2/4 bg-black/30 hover:bg-black/50 rounded-full"}
+                                className={"!absolute bottom-0 right-4 -translate-y-2/4 bg-be-navy/80 hover:bg-be-navy text-white rounded-full"}
                                 onClick={handleNext}>
-                                    <FaChevronRight className="fill-black"/>
+                                    <FaChevronRight className="fill-white"/>
                                 </IconButton>
                             )
                         }}
@@ -207,8 +210,8 @@ function UserDashboard({brandName}: {brandName: string}) {
                             {new Array(length).fill("").map((_, i) => (
                             <span
                                 key={i}
-                                className={`block h-1 cursor-pointer rounded-2xl transition-all content-[''] ${
-                                activeIndex === i ? "w-4 bg-white" : "w-4 bg-white/50"
+                                className={`block h-1.5 cursor-pointer rounded-2xl transition-all content-[''] ${
+                                activeIndex === i ? "w-6 bg-be-orange" : "w-4 bg-be-light-gray/60"
                                 }`}
                                 onClick={() => setActiveIndex(i)}
                             />
@@ -221,23 +224,23 @@ function UserDashboard({brandName}: {brandName: string}) {
                         <Tour src={Background4} to="/simulator/general?f=b" name="Slugworks" cta="Watch Tour"/>
                     </Carousel>
 
-                    <hr className="w-3/4 mx-auto mt-16 border-gray-700"/>
-                    <div id="questions" className="scroll-mt-20">
-                        <div className="mt-10">
-                            <h1 className="text-xl sm:text-2xl tracking-wider">
+                    <hr className="w-3/4 mx-auto mt-16 border-be-navy"/>
+                    <div id="questions" className="scroll-mt-24">
+                        <div className="mt-10 mb-4">
+                            <h1 className="text-2xl sm:text-3xl font-bold tracking-wider text-white">
                                 Common Questions
                             </h1>
-                            <p className="text-xs text-gray-500 mb-2">
-                                Things parents and prospective students often ask about the school.
+                            <p className="text-sm text-be-light-gray mt-1 mb-3">
+                                Things parents and prospective students often ask about Baskin Engineering.
                             </p>
                         </div>
                         <div className="flex justify-center items-center gap-5 flex-wrap">
                             {questionSets.length === 0 ?
-                                <p className="text-gray-500 italic text-sm">No question sets yet.</p>
+                                <p className="text-be-light-gray italic text-sm">No question sets yet.</p>
                                 : questionSets.map(set => (
                                 <Card key={set.id} to={`/questions/${set.id}`} title={set.title}>
-                                    <IoSchool className="mx-auto my-5 box-border w-16 h-16"/>
-                                    <p>
+                                    <IoSchool className="mx-auto my-5 box-border w-16 h-16 text-be-orange"/>
+                                    <p className="text-be-light-gray font-medium">
                                         {set.questions.length} question{set.questions.length === 1 ? "" : "s"}
                                     </p>
                                 </Card>
@@ -261,53 +264,53 @@ function BesaDashboard({brandName}: {brandName: string}) {
     return (
         <>
             <Header/>
-            <div className="h-16 relative top-0 left-0 w-full"></div>
-            <div className="w-full min-h-screen bg-gray-900 flex flex-col md:flex-row justify-center items-stretch md:items-start relative text-white gap-4">
-                <div className="static md:sticky top-0 right-0 w-full md:w-1/6 mt-6 md:mt-16 border-b-2 md:border-b-0 border-r-solid md:border-r-gray-600 md:border-r-2 border-gray-600 py-5 md:py-10 px-3">
+            <div className="h-20 relative top-0 left-0 w-full"></div>
+            <div className="w-full min-h-screen bg-be-navy-darker flex flex-col md:flex-row justify-center items-stretch md:items-start relative text-white gap-6 font-sans pb-16">
+                <div className="static md:sticky top-20 right-0 w-full md:w-1/6 mt-6 md:mt-16 border-b-2 md:border-b-0 border-r-solid md:border-r-be-navy md:border-r-2 border-be-navy py-5 md:py-10 px-4">
                     {/* This is the nav bar */}
-                    <h3 className="text-2xl tracking-wider">Practice</h3>
-                    <hr className="w-2/4 mx-auto my-5"></hr>
+                    <h3 className="text-2xl font-bold tracking-wider text-be-yellow">Practice</h3>
+                    <hr className="w-2/4 my-4 border-be-orange"></hr>
 
                     <div className="flex md:block gap-2 flex-wrap">
                         <SideBarElement to="#general-tour">
-                            <h4>Practice Tours</h4>
+                            <h4 className="font-medium">Practice Tours</h4>
                         </SideBarElement>
                         <SideBarElement to="#questions">
-                            <h4>Practice Questions</h4>
+                            <h4 className="font-medium">Practice Questions</h4>
                         </SideBarElement>
                     </div>
                 </div>
                 <div className="w-11/12 md:w-4/6 mx-auto md:mx-0 mt-6 md:mt-16">
-                    <div id="general-tour" className="flex flex-col sm:flex-row justify-between items-start gap-3 scroll-mt-20">
+                    <div id="general-tour" className="flex flex-col sm:flex-row justify-between items-start gap-3 scroll-mt-24 mb-4">
                         <div>
-                            <h1 className="text-xl sm:text-2xl tracking-wider">
+                            <h1 className="text-2xl sm:text-3xl font-bold tracking-wider text-white">
                                 Welcome to {brandName}
                             </h1>
-                            <p className="text-xs text-gray-500 mb-2">
+                            <p className="text-sm text-be-light-gray mt-1 mb-2">
                                 This is the general Baskin Engineering tour most commonly given
                             </p>
                         </div>
                         <Link to="/progress/general"
-                            className="p-2 px-6 rounded-full bg-amber-500 hover:bg-amber-600 text-black text-sm font-semibold shrink-0">
+                            className="p-2.5 px-6 rounded-full bg-be-orange hover:bg-be-orange-dark text-black text-sm font-bold shrink-0 transition-colors">
                             My Progress
                         </Link>
                     </div>
-                    <Carousel className="rounded-xl"
+                    <Carousel className="rounded-2xl shadow-lg"
                         prevArrow={({handlePrev}) => {
                             return (
                                 <IconButton
-                                className={"!absolute bottom-0 left-4 -translate-y-2/4 bg-black/30 hover:bg-black/50 rounded-full"}
+                                className={"!absolute bottom-0 left-4 -translate-y-2/4 bg-be-navy/80 hover:bg-be-navy text-white rounded-full"}
                                 onClick={handlePrev}>
-                                    <FaChevronLeft className="fill-black"/>
+                                    <FaChevronLeft className="fill-white"/>
                                 </IconButton>
                             )
                         }}
                         nextArrow={({handleNext}) => {
                             return (
                                 <IconButton
-                                className={"!absolute bottom-0 right-4 -translate-y-2/4 bg-black/30 hover:bg-black/50 rounded-full"}
+                                className={"!absolute bottom-0 right-4 -translate-y-2/4 bg-be-navy/80 hover:bg-be-navy text-white rounded-full"}
                                 onClick={handleNext}>
-                                    <FaChevronRight className="fill-black"/>
+                                    <FaChevronRight className="fill-white"/>
                                 </IconButton>
                             )
                         }}
@@ -316,8 +319,8 @@ function BesaDashboard({brandName}: {brandName: string}) {
                             {new Array(length).fill("").map((_, i) => (
                             <span
                                 key={i}
-                                className={`block h-1 cursor-pointer rounded-2xl transition-all content-[''] ${
-                                activeIndex === i ? "w-4 bg-white" : "w-4 bg-white/50"
+                                className={`block h-1.5 cursor-pointer rounded-2xl transition-all content-[''] ${
+                                activeIndex === i ? "w-6 bg-be-orange" : "w-4 bg-be-light-gray/60"
                                 }`}
                                 onClick={() => setActiveIndex(i)}
                             />
@@ -336,35 +339,35 @@ function BesaDashboard({brandName}: {brandName: string}) {
                     </Carousel>
 
                 {/* Divider for the other section of practicing questions parents may ask: */}
-                    <hr className="w-3/4 mx-auto mt-16 border-gray-700"/>
-                    <div id="questions" className="scroll-mt-20">
-                        <div className="mt-10 flex flex-col sm:flex-row justify-between items-start gap-3">
+                    <hr className="w-3/4 mx-auto mt-16 border-be-navy"/>
+                    <div id="questions" className="scroll-mt-24">
+                        <div className="mt-10 mb-4 flex flex-col sm:flex-row justify-between items-start gap-3">
                             <div>
-                                <h1 className="text-xl sm:text-2xl tracking-wider">
+                                <h1 className="text-2xl sm:text-3xl font-bold tracking-wider text-white">
                                     Practicing General Questions
                                 </h1>
-                                <p className="text-xs text-gray-500 mb-2">
-                                    Parents or students may ask general questions.
+                                <p className="text-sm text-be-light-gray mt-1 mb-2">
+                                    Parents or students may ask general questions about Baskin Engineering.
                                 </p>
                             </div>
                             <div className="flex gap-2 shrink-0 flex-wrap">
                                 <Link to="/questions-editor"
-                                    className="p-2 px-6 rounded-full bg-amber-500 hover:bg-amber-600 text-black text-sm font-semibold">
+                                    className="p-2.5 px-6 rounded-full bg-be-orange hover:bg-be-orange-dark text-black text-sm font-bold transition-colors">
                                     Question Editor
                                 </Link>
                                 <Link to="/questions-progress"
-                                    className="p-2 px-6 rounded-full border border-gray-400 hover:bg-gray-800 text-sm font-semibold">
+                                    className="p-2.5 px-6 rounded-full border-2 border-be-light-gray text-white hover:bg-be-navy text-sm font-bold transition-colors">
                                     My Progress
                                 </Link>
                             </div>
                         </div>
                         <div className="flex justify-center items-center gap-5 flex-wrap">
                             {questionSets.length === 0 ?
-                                <p className="text-gray-500 italic text-sm">No question sets yet - use Question Editor to create one.</p>
+                                <p className="text-be-light-gray italic text-sm">No question sets yet - use Question Editor to create one.</p>
                                 : questionSets.map(set => (
                                 <Card key={set.id} to={`/questions/${set.id}`} title={set.title}>
-                                    <IoSchool className="mx-auto my-5 box-border w-16 h-16"/>
-                                    <p>
+                                    <IoSchool className="mx-auto my-5 box-border w-16 h-16 text-be-orange"/>
+                                    <p className="text-be-light-gray font-medium">
                                         {set.questions.length} question{set.questions.length === 1 ? "" : "s"}
                                     </p>
                                 </Card>
@@ -379,20 +382,20 @@ function BesaDashboard({brandName}: {brandName: string}) {
 
 function Tour({src, to, name, cta, secondaryTo, secondaryCta}: {src: string, to: string, name: string, cta: string, secondaryTo?: string, secondaryCta?: string}) {
     return (
-        <div className="w-full bg-white mx-auto rounded-2xl">
+        <div className="w-full bg-white mx-auto rounded-2xl overflow-hidden">
             <div className="relative w-full h-64">
-                <img src={src} className="brightness-75 rounded-t-2xl object-cover h-64 w-full absolute top-0 right-0 z-0"/>
-                <h2 className="bg-blue-800 p-3 z-10 relative rounded-xl w-3/4 sm:w-2/4 top-16 left-5 text-xl sm:text-2xl md:text-3xl">{name}</h2>
+                <img src={src} alt={name} className="brightness-75 rounded-t-2xl object-cover h-64 w-full absolute top-0 right-0 z-0"/>
+                <h2 className="bg-be-navy text-white font-bold p-3 px-5 z-10 relative rounded-xl w-3/4 sm:w-2/4 top-16 left-5 text-xl sm:text-2xl md:text-3xl border-l-4 border-be-orange shadow-md">{name}</h2>
             </div>
-            <div className="bg-white text-black rounded-b-2xl p-3 flex flex-col gap-2">
-                <Link className="mx-auto bg-amber-500 p-3 bold flex justify-center items-center w-3/4 rounded-full shadow-light
-                    hover:bg-amber-600 gap-4" to={to}>
+            <div className="bg-white text-black rounded-b-2xl p-4 flex flex-col gap-2.5">
+                <Link className="mx-auto bg-be-orange text-black p-3 font-bold flex justify-center items-center w-3/4 rounded-full shadow-sm
+                    hover:bg-be-orange-dark transition-colors gap-3" to={to}>
                     <FaPlay/>
                     <span>{cta}</span>
                 </Link>
                 {secondaryTo && secondaryCta &&
-                    <Link className="mx-auto bg-gray-800 text-white p-3 bold flex justify-center items-center w-3/4 rounded-full shadow-light
-                        hover:bg-gray-900 gap-4" to={secondaryTo}>
+                    <Link className="mx-auto bg-be-navy text-white p-3 font-bold flex justify-center items-center w-3/4 rounded-full shadow-sm
+                        hover:bg-be-navy-dark transition-colors gap-3" to={secondaryTo}>
                         <FaBook/>
                         <span>{secondaryCta}</span>
                     </Link>
@@ -405,7 +408,7 @@ function Tour({src, to, name, cta, secondaryTo, secondaryCta}: {src: string, to:
 function SideBarElement({children, to}: {children: JSX.Element, to: string}) {
     const {hash} = useLocation()
     return (
-        <Link to={to} className={"flex justify-start items-center p-2 my-5" + (hash == to ? " bg-blue-900 border-l-solid border-l-2 border-l-amber-600" : "")}>
+        <Link to={to} className={"flex justify-start items-center p-2.5 my-3 rounded-r-lg transition-colors" + (hash == to ? " bg-be-navy border-l-solid border-l-4 border-l-be-orange text-white font-bold" : " text-be-light-gray hover:bg-be-navy/60 hover:text-white")}>
             {children}
         </Link>
     )
@@ -415,8 +418,8 @@ function SideBarElement({children, to}: {children: JSX.Element, to: string}) {
 function Card({children, title, to}: {children:JSX.Element[], title: string, to: string}) {
 
     return (
-        <Link to={to} className="w-full sm:w-5/12 md:w-4/12 rounded-2xl bg-amber-700 text-white p-3 text-center hover:bg-amber-800">
-            <h3 className="text-2xl">{title}</h3>
+        <Link to={to} className="w-full sm:w-5/12 md:w-4/12 rounded-2xl bg-be-navy border-b-4 border-be-orange text-white p-5 text-center hover:bg-be-navy-dark transition-colors shadow-md">
+            <h3 className="text-2xl font-bold">{title}</h3>
             {children}
         </Link>
     )

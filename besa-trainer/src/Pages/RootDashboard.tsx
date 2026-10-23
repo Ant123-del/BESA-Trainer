@@ -43,9 +43,9 @@ export default function RootDashboard() {
     }
 
     return (
-        <div className="bg-gray-900 w-full min-h-screen text-white">
+        <div className="bg-be-navy-darker w-full min-h-screen text-white font-sans">
             <Header/>
-            <div className="h-16 relative top-0 left-0 w-full"></div>
+            <div className="h-20 relative top-0 left-0 w-full"></div>
             <div className="w-5/6 max-w-3xl mx-auto py-10 flex flex-col gap-8">
                 <ClockInPanel onClockedIn={() => refreshSessions()}/>
                 <ClockOutPanel sessions={sessions} activityTypes={activityTypes} onChanged={() => refreshSessions()}/>
@@ -60,8 +60,8 @@ function ActivityChip({label, selected, onClick}: {label: string, selected: bool
         <button
             type="button"
             onClick={onClick}
-            className={"px-4 py-2 rounded-full text-sm font-semibold " +
-                (selected ? "bg-amber-500 text-black" : "bg-gray-700 text-gray-200 hover:bg-gray-600")}
+            className={"px-4 py-2 rounded-full text-sm font-bold transition-colors " +
+                (selected ? "bg-be-orange text-black" : "bg-be-navy text-white hover:bg-be-navy-dark")}
         >
             {label}
         </button>
@@ -74,11 +74,11 @@ function RecommendedChip({label, selected, onClick}: {label: string, selected: b
         <button
             type="button"
             onClick={onClick}
-            className={"px-4 py-1.5 rounded-2xl text-sm font-semibold flex flex-col items-center leading-tight ring-2 ring-amber-400 " +
-                (selected ? "bg-amber-500 text-black" : "bg-amber-950/60 text-amber-100 hover:bg-amber-900/60")}
+            className={"px-4 py-1.5 rounded-2xl text-sm font-bold flex flex-col items-center leading-tight ring-2 ring-be-yellow transition-colors " +
+                (selected ? "bg-be-orange text-black" : "bg-be-navy text-white hover:bg-be-navy-dark")}
         >
             {label}
-            <span className={"text-[10px] font-normal uppercase tracking-wide " + (selected ? "text-black/70" : "text-amber-300")}>Lead recommended</span>
+            <span className={"text-[10px] font-medium uppercase tracking-wide " + (selected ? "text-black/80" : "text-be-yellow")}>Lead recommended</span>
         </button>
     )
 }
@@ -152,16 +152,16 @@ function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
     }
 
     return (
-        <section className="bg-gray-800 rounded-2xl p-6">
-            <h2 className="text-2xl tracking-wide mb-4 text-center">Clock In</h2>
+        <section className="bg-be-navy rounded-2xl p-6 border-t-4 border-be-orange shadow-md">
+            <h2 className="text-2xl font-bold tracking-wide mb-4 text-center">Clock In</h2>
             <OfficeTimeDisclaimer className="mb-4 text-center"/>
-            <label className="block text-sm text-gray-400 mb-1">Enter School Id</label>
+            <label className="block text-sm text-be-light-gray mb-1 font-medium">Enter School Id</label>
             <input
                 value={studentId}
                 onChange={(e) => changeStudentId(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") void handleSubmit() }}
                 placeholder="Ex: 1234567"
-                className="w-full p-3 rounded-xl bg-gray-700 text-white mb-4"
+                className="w-full p-3 rounded-xl bg-be-navy-darker text-white border border-be-light-gray/30 mb-4"
             />
             {lookup?.status === "loading" &&
                 <div className="flex justify-center mb-4"><MoonLoader color="white" size={20}/></div>
@@ -170,11 +170,11 @@ function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
                 <p className="text-sm text-center text-red-400 mb-4">{lookup.detail}</p>
             }
             {lookup?.status === "found" && <>
-                <label className="block text-sm text-gray-400 mb-2 text-center">
-                    <span className="text-white font-semibold">{lookup.besaName}</span> - what are you working on? <span className="text-red-400">*</span>
+                <label className="block text-sm text-be-light-gray mb-2 text-center">
+                    <span className="text-white font-bold">{lookup.besaName}</span> - what are you working on? <span className="text-red-400">*</span>
                 </label>
                 {lookup.alreadyClockedIn ?
-                    <p className="text-sm text-center text-amber-300 mb-4">{lookup.besaName} is already clocked in.</p>
+                    <p className="text-sm text-center text-be-yellow mb-4">{lookup.besaName} is already clocked in.</p>
                     : <>
                         <div className="flex flex-wrap gap-2 justify-center items-center mb-4">
                             {lookup.recommended.map(name => (
@@ -185,7 +185,7 @@ function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
                             ))}
                         </div>
                         {selected.length === 0 &&
-                            <p className="text-xs text-gray-400 text-center mb-3">Pick at least one task you intend to work on to clock in.</p>
+                            <p className="text-xs text-be-light-gray text-center mb-3">Pick at least one task you intend to work on to clock in.</p>
                         }
                         {/* the leads' guidance on the tasks they picked - it's checked off from Current Sessions */}
                         {lookup.taskNotes.some(note => selected.includes(note.task)) &&
@@ -200,9 +200,9 @@ function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
             <button
                 onClick={() => void handleSubmit()}
                 disabled={busy || !canSubmit}
-                className="w-full py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                className="w-full py-3 rounded-full bg-be-orange hover:bg-be-orange-dark text-black font-bold disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors"
             >
-                {busy && <MoonLoader color="white" size={16}/>}
+                {busy && <MoonLoader color="black" size={16}/>}
                 Submit
             </button>
         </section>
@@ -299,22 +299,22 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
     }
 
     return (
-        <section ref={panelRef} className="bg-gray-800 rounded-2xl p-6 scroll-mt-20">
-            <h2 className="text-2xl tracking-wide mb-4 text-center">{leaveEarlyFor ? "Leave Early" : "Clock Out"}</h2>
+        <section ref={panelRef} className="bg-be-navy rounded-2xl p-6 scroll-mt-24 border-t-4 border-be-orange shadow-md">
+            <h2 className="text-2xl font-bold tracking-wide mb-4 text-center">{leaveEarlyFor ? "Leave Early" : "Clock Out"}</h2>
             {leaveEarlyFor &&
                 <div className="rounded-xl bg-emerald-900/50 border border-emerald-700 p-3 mb-4 text-sm flex items-start gap-3">
                     <p className="flex-1 text-emerald-100">
-                        <span className="font-semibold">{leaveEarlyFor.besaName || "This BESA"}</span> is leaving early with their unused break
+                        <span className="font-bold">{leaveEarlyFor.besaName || "This BESA"}</span> is leaving early with their unused break
                         time (about {formatDuration(leaveEarlyFor.break.remainingSeconds)}). They're credited as if they'd stayed that much
                         longer, and today's break time is used up.
                     </p>
                     <button onClick={() => { setLeaveEarlyFor(null); reset(); setMessage(null) }} disabled={busy}
-                        className="text-xs px-3 py-1.5 rounded-full bg-gray-600 hover:bg-gray-500 disabled:opacity-40">
+                        className="text-xs px-3 py-1.5 rounded-full bg-be-navy-darker hover:bg-be-navy-dark disabled:opacity-40">
                         Cancel
                     </button>
                 </div>
             }
-            <label className="block text-sm text-gray-400 mb-1">Enter School Id</label>
+            <label className="block text-sm text-be-light-gray mb-1 font-medium">Enter School Id</label>
             <input
                 ref={idInputRef}
                 value={studentId}
@@ -322,15 +322,15 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                 onKeyDown={(e) => { if (e.key === "Enter" && !preview) void handleNext() }}
                 disabled={!!preview}
                 placeholder="Ex: 1234567"
-                className="w-full p-3 rounded-xl bg-gray-700 text-white mb-4"
+                className="w-full p-3 rounded-xl bg-be-navy-darker text-white border border-be-light-gray/30 mb-4"
             />
             {message && !preview && <p className={"text-sm text-center mb-3 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
             <button
                 onClick={() => void handleNext()}
                 disabled={busy || !studentId.trim() || !!preview}
-                className="w-full py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 mb-6"
+                className="w-full py-3 rounded-full bg-be-orange hover:bg-be-orange-dark text-black font-bold disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 mb-6 transition-colors"
             >
-                {busy && !preview && <MoonLoader color="white" size={16}/>}
+                {busy && !preview && <MoonLoader color="black" size={16}/>}
                 Next
             </button>
 
@@ -440,8 +440,8 @@ function ActivityTypesPanel({activityTypes, setActivityTypes}: {
     }
 
     return (
-        <section className="bg-gray-800 rounded-2xl p-6">
-            <h2 className="text-2xl tracking-wide mb-4 text-center">Add / Remove Activities</h2>
+        <section className="bg-be-navy rounded-2xl p-6 border-t-4 border-be-orange shadow-md">
+            <h2 className="text-2xl font-bold tracking-wide mb-4 text-center">Add / Remove Activities</h2>
             <div className="flex flex-wrap gap-2 justify-center mb-4">
                 {activityTypes === null ?
                     <MoonLoader color="white" size={20}/>
@@ -456,19 +456,19 @@ function ActivityTypesPanel({activityTypes, setActivityTypes}: {
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder="Enter Activity Name"
-                    className="flex-1 p-3 rounded-xl bg-gray-700 text-white"
+                    className="flex-1 p-3 rounded-xl bg-be-navy-darker text-white border border-be-light-gray/30"
                 />
                 <button
                     onClick={() => void handleAdd()}
                     disabled={busy || !newName.trim()}
-                    className="px-5 py-2 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="px-5 py-2 rounded-full bg-be-orange hover:bg-be-orange-dark text-black font-bold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                     Add
                 </button>
                 <button
                     onClick={() => void handleDelete()}
                     disabled={busy || !selected}
-                    className="px-5 py-2 rounded-full bg-red-800 hover:bg-red-900 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="px-5 py-2 rounded-full bg-red-800 hover:bg-red-900 font-bold disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                     Delete
                 </button>

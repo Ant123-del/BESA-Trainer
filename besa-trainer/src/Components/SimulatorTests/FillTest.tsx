@@ -7,9 +7,10 @@ import { useEffect, useState } from "react";
 
 type Filling = Fill["fillings"][number]
 
-export function FillTest({floorId, section, progress, setProgress, userInfo, setUserInfo, onContinue, canExit, onExit}: {
+export function FillTest({floorId, section, initialFill, progress, setProgress, userInfo, setUserInfo, onContinue, canExit, onExit}: {
     floorId: string,
     section: Marker,
+    initialFill?: Fill | null,
     progress: Progress | null,
     setProgress: (p: Progress) => void,
     userInfo: User | null,
@@ -18,23 +19,36 @@ export function FillTest({floorId, section, progress, setProgress, userInfo, set
     canExit: boolean,
     onExit: () => void
 }) {
-    const [fill, setFill] = useState<Fill | null>(null)
-    const [loading, setLoading] = useState(true)
+    const [fill, setFill] = useState<Fill | null>(initialFill ?? null)
+    const [loading, setLoading] = useState(initialFill === undefined)
     //one array of per-blank answers for every filling, since a single sentence can hold multiple blanks
     const [answers, setAnswers] = useState<string[][]>([])
     const [skipped, setSkipped] = useState<boolean[]>([])
     const [submitted, setSubmitted] = useState(false)
 
     useEffect(() => {
+        if (initialFill !== undefined) {
+            setFill(initialFill)
+            setLoading(false)
+            return
+        }
         setLoading(true)
         const fillRef = doc(db, "training_data", "data_root", "fills", floorId)
         getDoc(fillRef).then((data) => {
             setFill(data.exists() ? data.data() as Fill : null)
             setLoading(false)
         })
-    }, [floorId])
+    }, [floorId, initialFill])
 
     const sectionFillings = (fill?.fillings || []).filter(f => f.section.markTime === section.markTime)
+
+    //if a section has no highlighted question, automatically skip over it
+    useEffect(() => {
+        if (!loading && sectionFillings.length === 0) {
+            onContinue()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [loading, section.markTime, sectionFillings.length])
 
     //fresh form whenever a new section comes up (or the fills finish loading)
     useEffect(() => {
@@ -81,7 +95,7 @@ export function FillTest({floorId, section, progress, setProgress, userInfo, set
             if (pIdx < parts.length - 1) {
                 nodes.push(
                     <input key={"i" + pIdx}
-                        className={"w-32 px-2 py-1 rounded border-b-2 " + (isSkipped ? "bg-gray-800 text-gray-500 border-gray-700 cursor-not-allowed" : "bg-gray-700 text-white border-amber-500")}
+                        className={"w-32 px-2 py-1 rounded border-b-2 " + (isSkipped ? "bg-be-navy-darker text-be-dark-gray border-be-dark-gray cursor-not-allowed" : "bg-be-navy text-white border-be-orange")}
                         value={rowAnswers[pIdx] || ""}
                         disabled={isSkipped}
                         onChange={(e) => handleAnswerChange(i, pIdx, e.target.value)}
@@ -96,7 +110,7 @@ export function FillTest({floorId, section, progress, setProgress, userInfo, set
     //shows what the user typed for every blank in a sentence, each colored by whether it matches that blank's answer.
     function renderUserAnswer(f: Filling, i: number) {
         if (skipped[i]) {
-            return <span className="text-gray-500 italic">Skipped</span>
+            return <span className="text-be-light-gray italic">Skipped</span>
         }
 
         const {parts, answers: correctAnswers} = getFillingBlanks(f)
@@ -112,7 +126,7 @@ export function FillTest({floorId, section, progress, setProgress, userInfo, set
                 const correct = isCloseMatch(userAnswer, correctAnswers[pIdx] || "")
                 nodes.push(
                     <mark key={"m" + pIdx} className={"rounded px-1 " + (correct ? "bg-green-700/70 text-white" : "bg-red-700/70 text-white")}>
-                        {userAnswer || <span className="italic text-gray-300">no answer</span>}
+                        {userAnswer || <span className="italic text-be-light-gray">no answer</span>}
                     </mark>
                 )
             }
@@ -121,56 +135,51 @@ export function FillTest({floorId, section, progress, setProgress, userInfo, set
     }
 
     if (loading) {
-        return <div className="p-5 bg-gray-900 rounded-2xl text-center text-gray-400 animate-pulse">Loading section...</div>
+        return <div className="p-5 bg-be-navy-darker rounded-2xl text-center text-be-light-gray animate-pulse">Loading section...</div>
     }
 
     if (sectionFillings.length === 0) {
-        return (
-            <div className="p-5 bg-gray-900 rounded-2xl text-center">
-                <p className="text-gray-400 mb-3">No fills for this section.</p>
-                <button onClick={onContinue} className="p-2 px-6 rounded-full bg-blue-800 hover:bg-blue-900">Continue</button>
-            </div>
-        )
+        return null
     }
 
     return (
-        <div className="p-5 bg-gray-900 rounded-2xl">
-            <h3 className="text-xl mb-4 text-center">Fill In The Blank</h3>
+        <div className="p-5 bg-be-navy-darker rounded-2xl border border-be-orange/40">
+            <h3 className="text-xl font-bold mb-4 text-center text-be-yellow">Fill In The Blank</h3>
             {!submitted ?
                 <div className="flex flex-col gap-4">
                     {sectionFillings.map((f, i) => (
                         <div key={i} className="flex flex-col gap-1.5">
-                            <div className="flex flex-wrap items-center gap-2 p-3 rounded-lg bg-gray-800 text-gray-200 leading-loose">
+                            <div className="flex flex-wrap items-center gap-2 p-3 rounded-lg bg-be-navy-dark text-white leading-loose">
                                 {renderFillingInputs(f, i)}
                             </div>
                             <div className="flex justify-end">
                                 <button type="button" onClick={() => handleSkipToggle(i)}
-                                    className={"px-4 py-1 rounded-lg text-sm shrink-0 " + (skipped[i] ? "bg-amber-700 hover:bg-amber-800" : "bg-gray-700 hover:bg-gray-600")}>
+                                    className={"px-4 py-1 rounded-lg text-sm font-bold shrink-0 transition-colors " + (skipped[i] ? "bg-be-orange text-black hover:bg-be-orange-dark" : "bg-be-navy text-white hover:bg-be-navy-dark")}>
                                     {skipped[i] ? "Skipped" : "Skip"}
                                 </button>
                             </div>
                         </div>
                     ))}
-                    <button onClick={() => setSubmitted(true)} className="p-2.5 rounded-full bg-blue-800 hover:bg-blue-900 mt-2">Submit</button>
+                    <button onClick={() => setSubmitted(true)} className="p-2.5 rounded-full bg-be-orange hover:bg-be-orange-dark text-black font-bold mt-2 transition-colors">Submit</button>
                     {canExit &&
-                        <button onClick={onExit} className="p-2.5 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
+                        <button onClick={onExit} className="p-2.5 rounded-full border-2 border-be-light-gray hover:bg-be-navy font-bold transition-colors">Exit</button>
                     }
                 </div>
                 :
                 <div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
-                            <h4 className="text-sm text-gray-400 mb-2 text-center">Your Answer</h4>
+                            <h4 className="text-sm font-bold text-be-light-gray mb-2 text-center">Your Answer</h4>
                             {sectionFillings.map((f, i) => (
-                                <p key={i} className={"p-3 rounded-lg mb-2 leading-loose " + (skipped[i] ? "bg-gray-800" : "bg-gray-700")}>
+                                <p key={i} className={"p-3 rounded-lg mb-2 leading-loose " + (skipped[i] ? "bg-be-navy-dark" : "bg-be-navy")}>
                                     {renderUserAnswer(f, i)}
                                 </p>
                             ))}
                         </div>
                         <div>
-                            <h4 className="text-sm text-gray-400 mb-2 text-center">Correct Answer</h4>
+                            <h4 className="text-sm font-bold text-be-light-gray mb-2 text-center">Correct Answer</h4>
                             {sectionFillings.map((f, i) => (
-                                <p key={i} className="p-3 rounded-lg mb-2 bg-gray-700">{renderCorrectAnswer(f)}</p>
+                                <p key={i} className="p-3 rounded-lg mb-2 bg-be-navy">{renderCorrectAnswer(f)}</p>
                             ))}
                         </div>
                     </div>

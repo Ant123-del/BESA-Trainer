@@ -93,19 +93,19 @@ export default function MyProgress() {
     }, [])
 
     return (
-        <div className="bg-gray-900 w-full min-h-screen text-white">
+        <div className="bg-be-navy-darker w-full min-h-screen text-white font-sans">
             <Header/>
-            <div className="h-16 relative top-0 left-0 w-full"></div>
+            <div className="h-20 relative top-0 left-0 w-full"></div>
             <div className="w-11/12 md:w-5/6 mx-auto py-10">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-2">
-                    <h1 className="text-2xl sm:text-3xl md:text-4xl tracking-wider">My Progress</h1>
-                    <Link to="/" className="p-2 px-6 rounded-full border border-gray-400 hover:bg-gray-800 shrink-0">Back to Home</Link>
+                    <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold tracking-wider">My Progress</h1>
+                    <Link to="/" className="p-2 px-6 rounded-full border-2 border-be-light-gray hover:bg-be-navy font-bold shrink-0 transition-colors">Back to Home</Link>
                 </div>
-                <div className="flex flex-wrap items-center gap-4 text-xs text-gray-400 mb-8">
+                <div className="flex flex-wrap items-center gap-4 text-xs text-be-light-gray mb-8">
                     <LegendDot color="bg-green-600" label="Easy"/>
-                    <LegendDot color="bg-yellow-500" label="Good"/>
+                    <LegendDot color="bg-be-yellow" label="Good"/>
                     <LegendDot color="bg-red-600" label="Hard"/>
-                    <LegendDot color="bg-amber-600" label="Not attempted"/>
+                    <LegendDot color="bg-be-orange" label="Not attempted"/>
                 </div>
                 {loading ?
                     <div className="flex justify-center py-20"><MoonLoader color="white" size={30}/></div>
@@ -134,16 +134,16 @@ function FloorSummaryCard({summary, tour}: {summary: FloorSummary, tour: string}
     const {floorCode, floor, progressList} = summary
 
     return (
-        <div className="bg-gray-800 rounded-2xl p-5">
+        <div className="bg-be-navy rounded-2xl p-5 border-l-4 border-be-orange shadow-md">
             <div className="flex justify-between items-center mb-4 gap-3">
-                <h2 className="text-2xl">{floorNameDecoder(floorCode)}</h2>
+                <h2 className="text-2xl font-bold">{floorNameDecoder(floorCode)}</h2>
                 <Link to={`/simulator/${tour}?f=${floorCode}`}
-                    className="p-2 px-6 rounded-full bg-amber-800 hover:bg-amber-900 text-sm shrink-0">
+                    className="p-2 px-6 rounded-full bg-be-orange hover:bg-be-orange-dark text-black font-bold text-sm shrink-0 transition-colors">
                     Start Over
                 </Link>
             </div>
             {!floor || floor.markers.length === 0 ?
-                <p className="text-gray-500 italic text-sm">No data yet - this floor hasn't been set up.</p>
+                <p className="text-be-light-gray italic text-sm">No data yet - this floor hasn't been set up.</p>
                 :
                 <div className="flex flex-col gap-4">
                     {PRACTICE_TYPES.map(type => (
@@ -160,15 +160,15 @@ function PracticeTypeRow({type, floor, progress}: {type: PracticeTypes, floor: F
     const hasBeenStarted = !!progress && progress.progress.length > 0
 
     return (
-        <div className="bg-gray-900/60 rounded-xl p-3">
+        <div className="bg-be-navy-darker/80 rounded-xl p-3">
             <div className="flex justify-between items-center mb-2 gap-3">
-                <h3 className="text-sm font-semibold text-gray-200">{practiceTypeLabel(type)}</h3>
+                <h3 className="text-sm font-bold text-white">{practiceTypeLabel(type)}</h3>
                 {progress &&
-                    <p className="text-xs text-gray-400 shrink-0">Last practiced {progress.lastUpdated.toLocaleDateString()}</p>
+                    <p className="text-xs text-be-light-gray shrink-0">Last practiced {progress.lastUpdated.toLocaleDateString()}</p>
                 }
             </div>
             {!hasBeenStarted ?
-                <p className="text-gray-500 italic text-sm">No data yet - you haven't practiced this floor this way.</p>
+                <p className="text-be-light-gray italic text-sm">No data yet - you haven't practiced this floor this way.</p>
                 :
                 <div className="flex flex-wrap gap-4">
                     {[...floor.markers].sort((a, b) => a.markTime - b.markTime).map((marker, i) => {
@@ -176,7 +176,7 @@ function PracticeTypeRow({type, floor, progress}: {type: PracticeTypes, floor: F
                         return (
                             <div key={i} className="flex flex-col items-center gap-1 w-16" title={marker.markerName}>
                                 <span className={"w-5 h-5 rounded-full shrink-0 " + confidenceColor(entry?.confidence)}/>
-                                <span className="text-[10px] text-gray-400 text-center truncate w-full">{marker.markerName}</span>
+                                <span className="text-[10px] text-be-light-gray text-center truncate w-full">{marker.markerName}</span>
                             </div>
                         )
                     })}

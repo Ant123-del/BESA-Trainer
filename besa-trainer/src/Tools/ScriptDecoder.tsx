@@ -2,7 +2,6 @@
 import { WebVTTParser } from "webvtt-parser"
 import { type CosScript, type Marker } from "./types"
 import { Loading } from "../Components/SectionEditor/Edit"
-import { getStorage, ref, uploadBytes } from "firebase/storage"
 import { useState } from "react"
 
 export type Line = {
@@ -291,18 +290,18 @@ export function GradingControls({onTryAgain, onConfidence, canExit, onExit}: {
 }) {
     return (
         <div>
-            <p className="text-gray-500 text-center">How did you feel about answering these questions? Choose one to move on!</p>
+            <p className="text-be-light-gray text-center font-medium">How did you feel about answering these questions? Choose one to move on!</p>
             <div className="flex justify-center gap-4 mt-4 w-full">
-                <button onClick={() => onConfidence(0)} className="p-2.5 px-6 w-3/12 rounded-full bg-red-700 hover:bg-red-800">Hard</button>
-                <button onClick={() => onConfidence(1)} className="p-2.5 px-6 w-3/12 rounded-full bg-yellow-600 hover:bg-yellow-700">Good</button>
-                <button onClick={() => onConfidence(2)} className="p-2.5 px-6 w-3/12 rounded-full bg-green-700 hover:bg-green-800">Easy</button>
+                <button onClick={() => onConfidence(0)} className="p-2.5 px-6 w-3/12 rounded-full bg-red-700 hover:bg-red-800 text-white font-bold transition-colors">Hard</button>
+                <button onClick={() => onConfidence(1)} className="p-2.5 px-6 w-3/12 rounded-full bg-be-yellow hover:bg-amber-400 text-black font-bold transition-colors">Good</button>
+                <button onClick={() => onConfidence(2)} className="p-2.5 px-6 w-3/12 rounded-full bg-green-700 hover:bg-green-800 text-white font-bold transition-colors">Easy</button>
             </div>
             <div className="flex justify-center mt-4">
-                <button onClick={onTryAgain} className="p-2.5 px-6 rounded-full border border-gray-400 hover:bg-gray-800">Try Again</button>
+                <button onClick={onTryAgain} className="p-2.5 px-6 rounded-full border-2 border-be-light-gray hover:bg-be-navy font-bold transition-colors">Try Again</button>
             </div>
             {canExit &&
                 <div className="flex justify-center mt-4">
-                    <button onClick={onExit} className="p-2.5 px-6 rounded-full border border-gray-400 hover:bg-gray-800">Exit</button>
+                    <button onClick={onExit} className="p-2.5 px-6 rounded-full border-2 border-be-light-gray hover:bg-be-navy font-bold transition-colors">Exit</button>
                 </div>
             }
         </div>
@@ -310,15 +309,16 @@ export function GradingControls({onTryAgain, onConfidence, canExit, onExit}: {
 }
 
 //shared results view once an answer (typed or transcribed) has been submitted - the score, the
-//side-by-side comparison, "Set as Script", and the grading footer. Used by both Text and Microphone practice.
-export function AnswerReview({answer, correctText, section, sections, scriptText, cosScript, onScriptUpdated, onTryAgain, onConfidence, canExit, onExit}: {
+//side-by-side comparison, "Prefer This Answer" ("Set as Script"), and the grading footer. Used by both Text and Microphone practice.
+export function AnswerReview({answer, correctText, section, sections, scriptText, customBaseScriptText, cosScript: _cosScript, onScriptUpdated, onTryAgain, onConfidence, canExit, onExit}: {
     answer: string,
     correctText: string,
     section: Marker,
     sections: Marker[],
     scriptText: string,
+    customBaseScriptText?: string,
     cosScript: CosScript | null,
-    onScriptUpdated: (newScriptText: string) => void,
+    onScriptUpdated: (newScriptText: string) => Promise<void> | void,
     onTryAgain: () => void,
     onConfidence: (confidence: number) => void,
     canExit: boolean,
@@ -330,18 +330,11 @@ export function AnswerReview({answer, correctText, section, sections, scriptText
     const score = computeMatchScore(answer, correctText)
 
     async function handleSetAsScript() {
-        if (!cosScript) {
-            return
-        }
-
         setSettingScript(true)
         try { 
-            const newScriptText = buildUpdatedScript(scriptText, sections, section, answer)
-            const storage = getStorage()
-            const scriptRef = ref(storage, cosScript.path)
-            const blob = new Blob([newScriptText], {type: "text/vtt"})
-            await uploadBytes(scriptRef, blob)
-            onScriptUpdated(newScriptText)
+            const baseText = customBaseScriptText || scriptText
+            const newScriptText = buildUpdatedScript(baseText, sections, section, answer)
+            await onScriptUpdated(newScriptText)
             setScriptSet(true)
         } catch (e) {
             console.error(e)
@@ -360,34 +353,34 @@ export function AnswerReview({answer, correctText, section, sections, scriptText
             <div className="flex justify-between items-start mb-5 gap-3">
                 <div className="relative group inline-block">
                     <button onClick={handleSetAsScript} disabled={settingScript || scriptSet}
-                        className={"text-sm px-4 py-2 rounded-full border shrink-0 " + (scriptSet ? "border-green-600 text-green-500 cursor-default" : "border-amber-500 text-amber-400 hover:bg-amber-500/10")}>
-                        {scriptSet ? "Script Updated" : "Set as Script"}
+                        className={"text-sm px-4 py-2 rounded-full border-2 font-bold shrink-0 transition-colors " + (scriptSet ? "border-green-500 text-green-400 cursor-default" : "border-be-orange text-be-orange hover:bg-be-orange hover:text-black")}>
+                        {scriptSet ? "Saved to Custom Script" : "Prefer This Answer"}
                     </button>
-                    <div className="absolute left-0 top-full mt-2 w-72 p-4 rounded-lg bg-black text-xs text-gray-200 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
-                        Replaces this section of the tour script with what you just said/typed, so it's what shows for next time.
-                        <span className="block mt-1 text-amber-400 font-semibold">Warning: this action cannot be undone.</span>
-                        To go back to the default script, that has to be done from Settings.
+                    <div className="absolute left-0 top-full mt-2 w-72 p-4 rounded-lg bg-be-navy-darker border border-be-orange text-xs text-white opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50 shadow-xl">
+                        Saves what you just answered into your Custom Script for this section.
+                        <span className="block mt-1 text-be-yellow font-semibold">Tip:</span>
+                        Use the Default / Custom Script slider at the top right of the script panel to switch between scripts or delete your custom script.
                     </div>
                 </div>
                 <div className="text-right shrink-0">
-                    <span className="text-2xl font-bold">{score}%</span>
-                    <span className="block text-xs text-gray-400">Match Score</span>
+                    <span className="text-2xl font-bold text-be-yellow">{score}%</span>
+                    <span className="block text-xs text-be-light-gray">Match Score</span>
                 </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                    <h4 className="text-sm text-gray-400 mb-2 text-center">Your Answer</h4>
-                    <p className="p-3 rounded-lg bg-gray-700 whitespace-pre-wrap">{answer || <span className="text-gray-500 italic">No answer</span>}</p>
+                    <h4 className="text-sm font-bold text-be-light-gray mb-2 text-center">Your Answer</h4>
+                    <p className="p-3 rounded-lg bg-be-navy-dark border border-be-light-gray/20 whitespace-pre-wrap">{answer || <span className="text-be-light-gray italic">No answer</span>}</p>
                 </div>
                 <div>
-                    <h4 className="text-sm text-gray-400 mb-2 text-center">Script</h4>
-                    <p className="p-3 rounded-lg bg-gray-700 whitespace-pre-wrap">{correctText}</p>
+                    <h4 className="text-sm font-bold text-be-light-gray mb-2 text-center">Script</h4>
+                    <p className="p-3 rounded-lg bg-be-navy-dark border border-be-light-gray/20 whitespace-pre-wrap">{correctText}</p>
                 </div>
             </div>
             <div className="mt-5">
                 <GradingControls onTryAgain={handleTryAgain} onConfidence={onConfidence} canExit={canExit} onExit={onExit}/>
             </div>
-            {settingScript && <Loading text="Updating script..."/>}
+            {settingScript && <Loading text="Updating custom script..."/>}
         </div>
     )
 }

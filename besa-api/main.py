@@ -235,6 +235,12 @@ def _active_roster(roster_docs: list) -> list:
     return roster
 
 
+#does nothing - break_end_alerts calls it every minute to keep an api instance warm (see the bottom of this file)
+@app.get("/ping")
+def ping():
+    return {"success": True}
+
+
 @app.get("/besa-roster")
 def besaRoster():
     roster_docs = _get_roster()
@@ -2747,13 +2753,13 @@ def _get_wsgi_app():
         _wsgi_app = ASGIMiddleware(app)
     return _wsgi_app
 
-#min_instances=1 keeps one instance always running - a cold start here takes from 30 seconds to over 2 minutes,
-#which the kiosk felt as a page that took a minute to load. concurrency lets the kiosk's requests that arrive
-#together share that warm instance instead of each one starting a new (cold) instance.
+#a cold start here takes from 30 seconds to over 2 minutes, which the kiosk felt as a page that took a minute to
+#load. break_end_alerts pings it every minute so an instance stays warm (min_instances would too, but bills for
+#the instance around the clock). concurrency lets the kiosk's requests that arrive together share that warm
+#instance instead of each one starting a new (cold) instance.
 @https_fn.on_request(
     memory=options.MemoryOption.GB_1,
     cpu=1,
-    min_instances=1,
     concurrency=20,
     timeout_sec=900,
     secrets=["GEMINI_API_KEY", "ALLOWED_ORIGINS", "BREAK_ALERT_GMAIL_ADDRESS", "BREAK_ALERT_GMAIL_APP_PASSWORD"],
@@ -2763,12 +2769,22 @@ def api(req: https_fn.Request) -> https_fn.Response:
     return https_fn.Response.from_app(_get_wsgi_app(), req.environ)
 
 
+API_PING_URL = os.getenv("API_PING_URL", "https://us-central1-besa-trainer-api.cloudfunctions.net/api/ping")
+
+
 #announces breaks whose timer ran out on their own (see _send_due_break_alerts) - nothing else ever runs at
-#the moment a break expires, so this checks once a minute
+#the moment a break expires, so this checks once a minute. It also pings the api function so it stays warm
+#(Cloud Run doesn't bill an idle instance between requests, so this costs next to nothing).
 @scheduler_fn.on_schedule(
     schedule="every 1 minutes",
     timezone="America/Los_Angeles",
     secrets=["BREAK_ALERT_GMAIL_ADDRESS", "BREAK_ALERT_GMAIL_APP_PASSWORD"],
 )
 def break_end_alerts(event: scheduler_fn.ScheduledEvent) -> None:
-    _send_due_break_alerts()
+    try:
+        _send_due_break_alerts()
+    finally:
+        try:
+            requests.get(API_PING_URL, timeout=10)
+        except Exception as e:
+            print(f"api warm-up ping failed: {e}")

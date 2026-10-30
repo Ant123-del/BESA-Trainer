@@ -7,7 +7,6 @@ import time
 import math
 from datetime import datetime, timedelta, date as date_cls
 from zoneinfo import ZoneInfo
-from google import genai
 import os
 import base64
 import bcrypt
@@ -21,9 +20,6 @@ from email.message import EmailMessage
 import firebase_admin
 from firebase_admin import credentials, storage, auth, firestore
 
-from google.cloud.speech_v2 import SpeechClient
-from google.cloud.speech_v2.types import cloud_speech
-from google.api_core.client_options import ClientOptions
 from google.api_core.exceptions import Conflict
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.oauth2 import service_account as gcp_service_account
@@ -44,6 +40,7 @@ _genai_client = None
 def _get_genai_client():
     global _genai_client
     if _genai_client is None:
+        from google import genai
         _genai_client = genai.Client()
     return _genai_client
 
@@ -71,6 +68,8 @@ _speech_client = None
 def _get_speech_client():
     global _speech_client
     if _speech_client is None:
+        from google.cloud.speech_v2 import SpeechClient
+        from google.api_core.client_options import ClientOptions
         _speech_client = SpeechClient(
             credentials=speech_credentials,
             client_options=ClientOptions(api_endpoint=f"{SPEECH_LOCATION}-speech.googleapis.com"),
@@ -2471,10 +2470,10 @@ class ScriptRequest(BaseModel):
     videoExtension: str = "mp4"
     aiModel: Literal["chirp", "gemini"] = "chirp"
 
-from moviepy.video.io.VideoFileClip import VideoFileClip
-from google.genai import types
-
+#moviepy, google.genai and the Speech-to-Text client are imported inside the functions that use them, not at the
+#top of the file - only script making needs them, and loading them on every cold start slows down the kiosk
 def _generate_vtt_with_chirp(bucket, temp_local_audio: str, floor_id: str) -> str:
+    from google.cloud.speech_v2.types import cloud_speech
     #Chirp 3 (Speech-to-Text v2) only accepts audio via a Cloud Storage URI,
     #so stage the extracted mp3 there temporarily.
     audio_gcs_path = f"temp-audio/{floor_id}.mp3"
@@ -2520,6 +2519,7 @@ def _generate_vtt_with_chirp(bucket, temp_local_audio: str, floor_id: str) -> st
         audio_blob.delete()
 
 def _generate_vtt_with_gemini(temp_local_audio: str) -> str:
+    from google.genai import types
     print("Uploading audio to Gemini Files API...")
     gemini_file = _get_genai_client().files.upload(
         file=temp_local_audio,
@@ -2555,6 +2555,7 @@ def _generate_vtt_with_gemini(temp_local_audio: str) -> str:
 
 @app.post("/make-script")
 def makeScript(request_data: ScriptRequest, admin_user: dict = Depends(require_admin)):
+    from moviepy.video.io.VideoFileClip import VideoFileClip
     temp_local_video = f"temp_{request_data.floorId}.{request_data.videoExtension}"
     temp_local_audio = f"temp_{request_data.floorId}.mp3"
 
@@ -2617,6 +2618,7 @@ class TranscribeRequest(BaseModel):
 
 @app.post("/transcribe-audio")
 def transcribeAudio(request_data: TranscribeRequest, user: dict = Depends(get_current_user)):
+    from google.genai import types
     extension = request_data.mimeType.split("/")[-1].split(";")[0] or "webm"
     temp_local_audio = f"temp_recording_{user.get('uid')}_{int(time.time())}.{extension}"
 
@@ -2745,8 +2747,14 @@ def _get_wsgi_app():
         _wsgi_app = ASGIMiddleware(app)
     return _wsgi_app
 
+#min_instances=1 keeps one instance always running - a cold start here takes from 30 seconds to over 2 minutes,
+#which the kiosk felt as a page that took a minute to load. concurrency lets the kiosk's requests that arrive
+#together share that warm instance instead of each one starting a new (cold) instance.
 @https_fn.on_request(
     memory=options.MemoryOption.GB_1,
+    cpu=1,
+    min_instances=1,
+    concurrency=20,
     timeout_sec=900,
     secrets=["GEMINI_API_KEY", "ALLOWED_ORIGINS", "BREAK_ALERT_GMAIL_ADDRESS", "BREAK_ALERT_GMAIL_APP_PASSWORD"],
     invoker="public",

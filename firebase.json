@@ -1,7 +1,24 @@
 {
   "functions": {
     "source": "besa-api",
-    "runtime": "python311"
+    "runtime": "python311",
+    "ignore": [
+      "venv",
+      ".venv",
+      "__pycache__",
+      "*.pyc",
+      ".env",
+      ".env.*",
+      "*firebase-adminsdk*.json",
+      "serviceAccountKey.json",
+      ".DS_Store",
+      "README.md",
+      "sync_roster.py",
+      ".git",
+      "firebase-debug.log",
+      "firebase-debug.*.log",
+      "*.local"
+    ]
   },
   "firestore": {
     "rules": "firestore.rules"

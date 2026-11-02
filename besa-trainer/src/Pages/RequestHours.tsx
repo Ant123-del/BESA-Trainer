@@ -44,7 +44,7 @@ export default function RequestHours() {
             <div className="h-20 relative top-0 left-0 w-full"></div>
             <div className="w-11/12 max-w-5xl mx-auto py-10 flex flex-col gap-6">
                 <section className="bg-be-navy rounded-2xl p-6 border-t-4 border-be-orange shadow-md">
-                    <h2 className="text-2xl font-bold tracking-wide mb-4 text-center">Request Hours</h2>
+                    <h2 className="text-2xl font-bold tracking-wide mb-4 text-center">Request Missing Hours</h2>
                     <label className="block text-sm text-be-light-gray mb-1 font-medium">Enter School Id</label>
                     <div className="flex gap-2">
                         <input

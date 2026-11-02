@@ -89,7 +89,7 @@ export default function Header(): JSX.Element {
             </NavLink>
             {userData?.accountType === "root" &&
                 <NavLink className={navClass} to="/request-hours">
-                REQUEST HOURS
+                REQUEST MISSING HOURS
                 </NavLink>
             }
             {/* <div className="w-1 h-6 bg-blue-900"></div> */}

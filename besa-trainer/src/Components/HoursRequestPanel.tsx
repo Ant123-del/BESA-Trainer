@@ -197,7 +197,7 @@ export default function HoursRequestPanel({studentId, onSent}: {studentId?: stri
 function Section({children}: {children: ReactNode}) {
     return (
         <section className="bg-gray-800 rounded-2xl p-3 sm:p-6">
-            <h2 className="text-2xl tracking-wide mb-2">Request Hours</h2>
+            <h2 className="text-2xl tracking-wide mb-2">Request Missing Hours</h2>
             {children}
         </section>
     )

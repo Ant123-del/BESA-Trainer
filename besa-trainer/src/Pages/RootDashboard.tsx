@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { useLocation, useNavigate } from "react-router-dom"
 import { MoonLoader } from "react-spinners"
 import Header from "../Components/Header"
 import OfficeTimeDisclaimer from "../Components/OfficeTimeDisclaimer"
@@ -26,6 +27,19 @@ const CANCELED_TOUR_WHEN_SHOWN = "This button only shows up when your intended a
 export default function RootDashboard() {
     const [activityTypes, setActivityTypes] = useState<string[] | null>(null)
     const [sessions, setSessions] = useState<KioskSession[] | null>(null)
+    //the Request Hours tab sends people back here with what they sent
+    const location = useLocation()
+    const navigate = useNavigate()
+    const [notice, setNotice] = useState<string | null>((location.state as {notice?: string} | null)?.notice || null)
+
+    useEffect(() => {
+        if (!notice) return
+        //drop it from history so a refresh doesn't show it again
+        navigate(location.pathname, {replace: true, state: null})
+        const timer = setTimeout(() => setNotice(null), 10_000)
+        return () => clearTimeout(timer)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [notice])
 
     useEffect(() => {
         getActivityTypes().then(result => setActivityTypes(result || []))
@@ -47,6 +61,9 @@ export default function RootDashboard() {
             <Header/>
             <div className="h-20 relative top-0 left-0 w-full"></div>
             <div className="w-5/6 max-w-3xl mx-auto py-10 flex flex-col gap-8">
+                {notice &&
+                    <p className="rounded-xl bg-green-900/60 border border-green-700 p-3 text-sm text-center text-green-100">{notice}</p>
+                }
                 <ClockInPanel onClockedIn={() => refreshSessions()}/>
                 <ClockOutPanel sessions={sessions} activityTypes={activityTypes} onChanged={() => refreshSessions()}/>
                 <ActivityTypesPanel activityTypes={activityTypes} setActivityTypes={setActivityTypes}/>

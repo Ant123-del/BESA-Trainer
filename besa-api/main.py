@@ -2009,7 +2009,11 @@ class SubmitHoursRequestsRequest(BaseModel):
 @app.post("/my-hours/requests")
 def submitHoursRequests(request_data: SubmitHoursRequestsRequest, user: dict = Depends(get_current_user)):
     target_ref, data = _own_besa_doc(user)
-    db = firestore.client()
+    return _submit_hours_requests(firestore.client(), target_ref, data, request_data)
+
+
+#shared by Profile's /my-hours/requests and the kiosk's /kiosk/hours-requests/submit
+def _submit_hours_requests(db, target_ref, data: dict, request_data: SubmitHoursRequestsRequest) -> dict:
     now = datetime.now(PACIFIC)
     try:
         day = date_cls.fromisoformat(request_data.date)
@@ -2089,8 +2093,11 @@ class CancelHoursRequestRequest(BaseModel):
 @app.post("/my-hours/requests/cancel")
 def cancelHoursRequest(request_data: CancelHoursRequestRequest, user: dict = Depends(get_current_user)):
     target_ref, data = _own_besa_doc(user)
-    db = firestore.client()
-    req_ref = db.collection(HOURS_REQUESTS_COLLECTION).document(request_data.requestId)
+    return _cancel_hours_request(firestore.client(), target_ref, data, request_data.requestId)
+
+
+def _cancel_hours_request(db, target_ref, data: dict, request_id: str) -> dict:
+    req_ref = db.collection(HOURS_REQUESTS_COLLECTION).document(request_id)
     snap = req_ref.get()
     req = (snap.to_dict() or {}) if snap.exists else {}
     if req.get("uid") != target_ref.id:
@@ -2099,6 +2106,50 @@ def cancelHoursRequest(request_data: CancelHoursRequestRequest, user: dict = Dep
         raise HTTPException(status_code=409, detail="That request has already been decided.")
     req_ref.delete()
     return _my_requests_view(db, target_ref, data, datetime.now(PACIFIC))
+
+
+# ---- Kiosk Request Hours tab: the same three calls, for the member whose School Id was typed at the kiosk ----
+
+#the besa/besaLead with this School Id, rolled over like _own_besa_doc
+def _kiosk_besa_doc(db, student_id: str):
+    target_ref, data = _find_besa_by_student_id(db, (student_id or "").strip())
+    if target_ref is None:
+        raise HTTPException(status_code=404, detail="No BESA account found with that School Id.")
+    return target_ref, _roll_over_periods(target_ref, data)
+
+
+class KioskHoursRequestsRequest(BaseModel):
+    studentId: str
+
+
+#root only - also returns besaName so the kiosk can show whose requests these are
+@app.post("/kiosk/hours-requests")
+def kioskHoursRequests(request_data: KioskHoursRequestsRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _kiosk_besa_doc(db, request_data.studentId)
+    return {**_my_requests_view(db, target_ref, data, datetime.now(PACIFIC)), "besaName": data.get("besaName")}
+
+
+class KioskSubmitHoursRequestsRequest(SubmitHoursRequestsRequest):
+    studentId: str
+
+
+@app.post("/kiosk/hours-requests/submit")
+def kioskSubmitHoursRequests(request_data: KioskSubmitHoursRequestsRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _kiosk_besa_doc(db, request_data.studentId)
+    return {**_submit_hours_requests(db, target_ref, data, request_data), "besaName": data.get("besaName")}
+
+
+class KioskCancelHoursRequestRequest(CancelHoursRequestRequest):
+    studentId: str
+
+
+@app.post("/kiosk/hours-requests/cancel")
+def kioskCancelHoursRequest(request_data: KioskCancelHoursRequestRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _kiosk_besa_doc(db, request_data.studentId)
+    return {**_cancel_hours_request(db, target_ref, data, request_data.requestId), "besaName": data.get("besaName")}
 
 
 #root admin's list: every pending request (oldest day first) plus the recently decided ones (newest first)

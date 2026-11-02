@@ -87,6 +87,11 @@ export default function Header(): JSX.Element {
             <NavLink className={navClass} to="/">
             HOME
             </NavLink>
+            {userData?.accountType === "root" &&
+                <NavLink className={navClass} to="/request-hours">
+                REQUEST HOURS
+                </NavLink>
+            }
             {/* <div className="w-1 h-6 bg-blue-900"></div> */}
             {user ? (
                 <div className="relative w-64" ref={ref}>

@@ -787,6 +787,21 @@ export function cancelHoursRequest(requestId: string) {
     return myHoursRequestsCall("my-hours/requests/cancel", {requestId})
 }
 
+//root only (kiosk Request Hours tab) - the same three calls for whoever owns this School Id
+export type KioskHoursRequestsResult = MyHoursRequestsResult & {besaName?: string}
+
+export function getKioskHoursRequests(studentId: string) {
+    return kioskPost("kiosk/hours-requests", {studentId}) as Promise<KioskHoursRequestsResult>
+}
+
+export function submitKioskHoursRequests(studentId: string, date: string, ranges: HoursRequestRange[]) {
+    return kioskPost("kiosk/hours-requests/submit", {studentId, date, ranges}) as Promise<KioskHoursRequestsResult>
+}
+
+export function cancelKioskHoursRequest(studentId: string, requestId: string) {
+    return kioskPost("kiosk/hours-requests/cancel", {studentId, requestId}) as Promise<KioskHoursRequestsResult>
+}
+
 //root admin only - every pending request plus the recently decided ones
 export function getHoursRequests() {
     return rootAdminRequest<{pending: HoursRequest[], decided: HoursRequest[]}>("root-admin/hours-requests")

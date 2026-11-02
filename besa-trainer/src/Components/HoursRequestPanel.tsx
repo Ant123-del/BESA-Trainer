@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, type JSX, type ReactNode } from "react"
 import { MoonLoader } from "react-spinners"
 import { FaPlus } from "react-icons/fa"
-import { cancelHoursRequest, getActivityTypes, getMyHoursRequests, submitHoursRequests, type HoursRequest, type MyHoursRequests } from "../Tools/Fetch"
+import {
+    cancelHoursRequest, cancelKioskHoursRequest, getActivityTypes, getKioskHoursRequests, getMyHoursRequests, submitHoursRequests, submitKioskHoursRequests,
+    type HoursRequest, type MyHoursRequests
+} from "../Tools/Fetch"
 import {
     DAY_MINUTES, SNAP, dayLabel, firstFreeRange, formatLength, formatMinutes, isoBlock, overlaps, pacificMinutes, toHHMM,
     type Block, type Draft, type FixedBlock
@@ -17,8 +20,11 @@ const STATUS_STYLE: Record<HoursRequest["status"], string> = {
 //besa/besaLead only (Profile) - ask for hours they weren't clocked in for. Pick a day on the calendar, draw one
 //or more time ranges on that day's timeline (drag, or tap on a phone), say what was worked on and why it wasn't
 //clocked, and send them to the root admin. Approved ones are added to that day like a kiosk visit.
-export default function HoursRequestPanel(): JSX.Element {
+//With studentId (the kiosk's Request Hours tab) it's that member's requests instead, and onSent hands the
+//kiosk back once they've sent theirs.
+export default function HoursRequestPanel({studentId, onSent}: {studentId?: string, onSent?: (message: string) => void}): JSX.Element {
     const [view, setView] = useState<MyHoursRequests | null | undefined>(undefined) // undefined = loading, null = failed
+    const [loadError, setLoadError] = useState("")
     const [activityTypes, setActivityTypes] = useState<string[]>([])
     const [selectedDay, setSelectedDay] = useState<string | null>(null)
     const [draftsByDay, setDraftsByDay] = useState<Record<string, Draft[]>>({})
@@ -27,22 +33,24 @@ export default function HoursRequestPanel(): JSX.Element {
     const nextDraftId = useRef(1)
 
     useEffect(() => {
-        getMyHoursRequests().then(result => {
+        const load = studentId ? getKioskHoursRequests(studentId) : getMyHoursRequests()
+        load.then(result => {
             if (result.success) {
                 setView(result)
                 setSelectedDay(result.lastDay)
             } else {
                 setView(null)
+                setLoadError(result.detail)
             }
         })
         getActivityTypes().then(result => setActivityTypes(result || []))
-    }, [])
+    }, [studentId])
 
     if (view === undefined) {
         return <Section><div className="flex justify-center py-10"><MoonLoader color="white" size={24}/></div></Section>
     }
     if (view === null || !selectedDay) {
-        return <Section><p className="text-red-400 text-sm">Couldn't load hours requests - try again later.</p></Section>
+        return <Section><p className="text-red-400 text-sm">{studentId && loadError ? loadError : "Couldn't load hours requests - try again later."}</p></Section>
     }
 
     const drafts = draftsByDay[selectedDay] || []
@@ -91,14 +99,17 @@ export default function HoursRequestPanel(): JSX.Element {
         if (!selectedDay || drafts.length === 0 || problems.some(p => p)) return
         setBusy(true)
         setMessage(null)
-        const result = await submitHoursRequests(selectedDay, drafts.map(d => ({
+        const ranges = drafts.map(d => ({
             start: toHHMM(d.start), end: toHHMM(d.end), activities: d.activities, reason: d.reason, details: d.details.trim(),
-        })))
+        }))
+        const result = await (studentId ? submitKioskHoursRequests(studentId, selectedDay, ranges) : submitHoursRequests(selectedDay, ranges))
         setBusy(false)
         if (result.success) {
+            const sent = `Sent ${drafts.length === 1 ? "your request" : `${drafts.length} requests`} for ${dayLabel(selectedDay)} - they'll show up in My Hours once approved.`
+            if (onSent) return onSent(sent)
             setView(result)
             setDrafts([])
-            setMessage({text: `Sent ${drafts.length === 1 ? "your request" : `${drafts.length} requests`} for ${dayLabel(selectedDay)} - they'll show up in My Hours once approved.`, error: false})
+            setMessage({text: sent, error: false})
         } else {
             setMessage({text: result.detail, error: true})
         }
@@ -107,7 +118,7 @@ export default function HoursRequestPanel(): JSX.Element {
     async function cancel(request: HoursRequest) {
         setBusy(true)
         setMessage(null)
-        const result = await cancelHoursRequest(request.id)
+        const result = await (studentId ? cancelKioskHoursRequest(studentId, request.id) : cancelHoursRequest(request.id))
         setBusy(false)
         if (result.success) {
             setView(result)

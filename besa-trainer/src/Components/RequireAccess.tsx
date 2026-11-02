@@ -8,14 +8,14 @@ import type { User as CustomUser } from "../Tools/types"
 import NoPermission from "../Pages/NoPermission"
 import { getRootAdminToken } from "../Tools/Fetch"
 
-type Level = "auth" | "admin" | "besa" | "besaLead" | "leadOrRootAdmin"
+type Level = "auth" | "admin" | "besa" | "besaLead" | "leadOrRootAdmin" | "root"
 
 //wraps a route element and gates it behind an auth level - "auth" just needs to be signed in,
 //"admin" additionally needs the admin flag, "besa" needs accountType to be "besa" or "besaLead",
 //"besaLead" needs accountType === "besaLead" specifically (a besa account promoted to admin still
 //isn't a lead). Anything short of that gets NoPermission instead of the real page, rather than a
 //silent redirect. "leadOrRootAdmin" (Assign Tasks) also lets in the root account once its admin passcode is
-//unlocked on Profile - a root that hasn't unlocked it is pointed back there.
+//unlocked on Profile - a root that hasn't unlocked it is pointed back there. "root" is the kiosk account itself.
 export default function RequireAccess({level, children}: {level: Level, children: JSX.Element}): JSX.Element {
     const [checking, setChecking] = useState(true)
     const [allowed, setAllowed] = useState(false)
@@ -44,6 +44,8 @@ export default function RequireAccess({level, children}: {level: Level, children
                 const unlockedRoot = data?.accountType === "root" && !!getRootAdminToken()
                 setAllowed(data?.accountType === "besaLead" || unlockedRoot)
                 setRootLocked(data?.accountType === "root" && !unlockedRoot)
+            } else if (level === "root") {
+                setAllowed(data?.accountType === "root")
             } else if (level === "besa") {
                 setAllowed(data?.accountType === "besa" || data?.accountType === "besaLead")
             } else {

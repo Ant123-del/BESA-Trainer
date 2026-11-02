@@ -17,6 +17,7 @@ import BesaSignUp from './Pages/BesaSignUp'
 import ManageAdmins from './Pages/ManageAdmins'
 import AssignTasks from './Pages/AssignTasks'
 import RequireAccess from './Components/RequireAccess'
+import RequestHours from './Pages/RequestHours'
 
 //Router for naviation
 const Player = createPlayer({features: videoFeatures})
@@ -27,6 +28,7 @@ const router = createBrowserRouter(createRoutesFromChildren(
     <Route path='/signin' element={<Login login={false}/>}/>,
     <Route path='/profile' element={<Profile/>}/>,
     <Route path='/manage-admins' element={<RequireAccess level="besaLead"><ManageAdmins/></RequireAccess>}/>,
+    <Route path='/request-hours' element={<RequireAccess level="root"><RequestHours/></RequireAccess>}/>,
     <Route path='/assign-tasks' element={<RequireAccess level="leadOrRootAdmin"><AssignTasks/></RequireAccess>}/>,
     <Route path='/section-editor' element={<RequireAccess level="admin"><SectionEditor/></RequireAccess>}>
       <Route path='getting-started' element={<GettingStarted/>}/>

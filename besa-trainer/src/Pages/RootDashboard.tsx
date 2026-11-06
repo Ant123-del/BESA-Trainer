@@ -408,7 +408,7 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                                                     : "This is what we found for the time you were clocked in. Untick anything that wasn't you and fill in the rest."}
                                             </p>
                                             <WorkReportForm projects={report.projects} untracked={report.untracked} entries={entries} setEntries={setEntries}
-                                                rechecking={busy} onRecheck={() => void handleCollect()}/>
+                                                rechecking={busy} onRecheck={() => void handleCollect()} studentId={studentId.trim()}/>
                                         </>
                                         :
                                         <>

@@ -2,6 +2,7 @@ import { useState, type JSX } from "react"
 import { FaCheck } from "react-icons/fa"
 import { MoonLoader } from "react-spinners"
 import { Screenshot } from "./GradeBadge"
+import CourseChecklist from "./CourseChecklist"
 import type { WorkItem, WorkMeasure, WorkMode, WorkProject, WorkReportInput } from "../Tools/Fetch"
 
 const DESCRIPTION_MAX_LENGTH = 1000 //same cap as the backend's WORK_DESCRIPTION_MAX_LENGTH
@@ -82,8 +83,8 @@ function statusColor(status: WorkMeasure["status"]): string {
 
 //one measure's row on the confirm screen: something to fill in, or what was found, with a tick-box per row for
 //the sources several people share
-function MeasureRow({project, measure, entries, setEntries}: {
-    project: WorkProject, measure: WorkMeasure, entries: WorkEntries, setEntries: (e: WorkEntries) => void
+function MeasureRow({project, measure, entries, setEntries, studentId}: {
+    project: WorkProject, measure: WorkMeasure, entries: WorkEntries, setEntries: (e: WorkEntries) => void, studentId: string
 }): JSX.Element {
     const k = key(project, measure)
     const confirmed = entries.confirmed[k] || []
@@ -107,6 +108,15 @@ function MeasureRow({project, measure, entries, setEntries}: {
                     onChange={(e) => setEntries({...entries, checked: {...entries.checked, [k]: e.target.checked}})}/>
                 <span className="text-sm">{measure.label}</span>
             </label>
+        )
+    }
+
+    if (measure.type === "course") {
+        return (
+            <div className="py-1.5">
+                <p className="text-sm font-semibold mb-1">{measure.label}</p>
+                <CourseChecklist studentId={studentId} startClosed/>
+            </div>
         )
     }
 
@@ -138,9 +148,9 @@ function MeasureRow({project, measure, entries, setEntries}: {
 }
 
 //clock-out's second screen: what was found for each project they picked, for them to confirm and fill in
-export default function WorkReportForm({projects, untracked, entries, setEntries, rechecking, onRecheck}: {
+export default function WorkReportForm({projects, untracked, entries, setEntries, rechecking, onRecheck, studentId}: {
     projects: WorkProject[], untracked: string[], entries: WorkEntries, setEntries: (e: WorkEntries) => void,
-    rechecking: boolean, onRecheck: () => void
+    rechecking: boolean, onRecheck: () => void, studentId: string
 }): JSX.Element {
     const [recheckedAt, setRecheckedAt] = useState<number | null>(null)
 
@@ -162,7 +172,7 @@ export default function WorkReportForm({projects, untracked, entries, setEntries
                         <h4 className="font-bold text-amber-400">{project.name}</h4>
                         <div className="divide-y divide-gray-700/70">
                             {project.measures.map(measure => (
-                                <MeasureRow key={measure.measureId} project={project} measure={measure} entries={entries} setEntries={setEntries}/>
+                                <MeasureRow key={measure.measureId} project={project} measure={measure} entries={entries} setEntries={setEntries} studentId={studentId}/>
                             ))}
                         </div>
                     </section>

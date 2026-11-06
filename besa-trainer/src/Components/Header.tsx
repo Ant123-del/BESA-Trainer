@@ -92,6 +92,11 @@ export default function Header(): JSX.Element {
                 REQUEST MISSING HOURS
                 </NavLink>
             }
+            {userData?.accountType === "root" &&
+                <NavLink className={navClass} to="/kiosk-slugworks">
+                SLUGWORKS COURSE
+                </NavLink>
+            }
             {/* <div className="w-1 h-6 bg-blue-900"></div> */}
             {user ? (
                 <div className="relative w-64" ref={ref}>

@@ -1143,6 +1143,15 @@ export function checkCourseItems(itemIds: string[], done: boolean) {
     return trackingPost<{done: Record<string, string>}>("tracking/course/check", {itemIds, done})
 }
 
+//the kiosk versions, for the member whose School Id was typed
+export function getKioskCourse(studentId: string) {
+    return trackingPost<{besaName: string, course: Course, done: Record<string, string>}>("tracking/kiosk/course", {studentId})
+}
+
+export function checkKioskCourseItems(studentId: string, itemIds: string[], done: boolean) {
+    return trackingPost<{done: Record<string, string>}>("tracking/kiosk/course/check", {studentId, itemIds, done})
+}
+
 export function getWorkIdentity() {
     return trackingGet<{emails: string[], githubUsername: string}>("tracking/identity")
 }

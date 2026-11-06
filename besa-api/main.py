@@ -2893,6 +2893,11 @@ def _record_work_visit(db, uid: str, data: dict, checked_in_at: datetime, ended_
         if report.workMode == "out" or not drafted_for or _to_pacific(drafted_for) != checked_in_at:
             draft = {}
         projects = _apply_report(draft, report)
+        #the course can be ticked on the kiosk's confirm screen itself, after the draft was fetched
+        for project in projects:
+            for measure in project["measures"]:
+                if measure["type"] == "course":
+                    measure.update(_course_measure(db, uid, checked_in_at, ended_at))
         date = checked_in_at.date().isoformat()
         day_id = f"{uid}_{date}"
         day_ref = db.collection(WORK_DAYS_COLLECTION).document(day_id)
@@ -3204,15 +3209,12 @@ class CourseCheckRequest(BaseModel):
     done: bool
 
 
-#itemIds is several at once when they click a whole module
-@app.post("/tracking/course/check")
-def checkCourseItems(request_data: CourseCheckRequest, user: dict = Depends(get_current_user)):
+def _check_course_items(db, uid: str, request_data: CourseCheckRequest) -> dict:
     catalog = course_items()
     unknown = [i for i in request_data.itemIds if i not in catalog or not catalog[i].get("required")]
     if unknown:
         raise HTTPException(status_code=400, detail="That item isn't in the course anymore - reload the page.")
-    _own_besa_doc(user)
-    ref = firestore.client().collection(COURSE_PROGRESS_COLLECTION).document(user.get("uid"))
+    ref = db.collection(COURSE_PROGRESS_COLLECTION).document(uid)
     done = (ref.get().to_dict() or {}).get("done") or {}
     now = datetime.now(PACIFIC).isoformat()
     for item_id in request_data.itemIds:
@@ -3221,7 +3223,38 @@ def checkCourseItems(request_data: CourseCheckRequest, user: dict = Depends(get_
         else:
             done.pop(item_id, None)
     ref.set({"done": done}, merge=False)
-    return {"success": True, "done": done}
+    return done
+
+
+#itemIds is several at once when they click a whole module
+@app.post("/tracking/course/check")
+def checkCourseItems(request_data: CourseCheckRequest, user: dict = Depends(get_current_user)):
+    _own_besa_doc(user)
+    return {"success": True, "done": _check_course_items(firestore.client(), user.get("uid"), request_data)}
+
+
+# the same two calls for the member whose School Id was typed at the kiosk
+class KioskCourseRequest(BaseModel):
+    studentId: str
+
+
+@app.post("/tracking/kiosk/course")
+def kioskCourse(request_data: KioskCourseRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _kiosk_besa_doc(db, request_data.studentId)
+    doc = db.collection(COURSE_PROGRESS_COLLECTION).document(target_ref.id).get()
+    return {"success": True, "besaName": data.get("besaName"), "course": SLUGWORKS_COURSE, "done": (doc.to_dict() or {}).get("done") or {}}
+
+
+class KioskCourseCheckRequest(CourseCheckRequest):
+    studentId: str
+
+
+@app.post("/tracking/kiosk/course/check")
+def kioskCheckCourseItems(request_data: KioskCourseCheckRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, _ = _kiosk_besa_doc(db, request_data.studentId)
+    return {"success": True, "done": _check_course_items(db, target_ref.id, request_data)}
 
 
 def _certified_modules(done: dict) -> list:

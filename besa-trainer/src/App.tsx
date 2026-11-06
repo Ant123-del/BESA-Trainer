@@ -19,6 +19,7 @@ import AssignTasks from './Pages/AssignTasks'
 import RequireAccess from './Components/RequireAccess'
 import RequestHours from './Pages/RequestHours'
 import SlugworksCourse from './Pages/SlugworksCourse'
+import KioskSlugworks from './Pages/KioskSlugworks'
 import WorkReview from './Pages/WorkReview'
 import ManageProjects from './Pages/ManageProjects'
 
@@ -36,6 +37,7 @@ const router = createBrowserRouter(createRoutesFromChildren(
     <Route path='/work-review' element={<RequireAccess level="leadOrRootAdmin"><WorkReview/></RequireAccess>}/>,
     <Route path='/manage-projects' element={<RequireAccess level="leadOrRootAdmin"><ManageProjects/></RequireAccess>}/>,
     <Route path='/slugworks' element={<RequireAccess level="besa"><SlugworksCourse/></RequireAccess>}/>,
+    <Route path='/kiosk-slugworks' element={<RequireAccess level="root"><KioskSlugworks/></RequireAccess>}/>,
     <Route path='/section-editor' element={<RequireAccess level="admin"><SectionEditor/></RequireAccess>}>
       <Route path='getting-started' element={<GettingStarted/>}/>
       <Route path='edit' element={<Edit/>}/>

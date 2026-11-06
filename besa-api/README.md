@@ -64,7 +64,7 @@ Share every tracked sheet, deck and calendar with ucscbesa@ucsc.edu. List the ca
 - **Slides animations** aren't in the Slides API, so Outreach Slides asks for them as a number.
 - **Gmail** counts everything sent from the shared account while someone was clocked in, so two people clocked in at once both see the same emails and untick what wasn't theirs.
 - **The booking database** can't say who made a change, and guests make changes too. Everything changed during the visit is listed unticked for the member to claim. Guests' contact details are never stored or shown, only that they changed.
-- **GitHub** only sees pushed commits, so push before clocking out.
+- **GitHub** only sees pushed commits, so push before clocking out. Commits match by email, GitHub username, then name, and those often differ from what we have on file, so anything unmatched from that time is listed unticked for the member to claim. Adding an email or GitHub username under Work Accounts on Profile ticks them automatically.
 - **The Slugworks course** is self-reported and can be updated on a member's own device, on the kiosk's Slugworks Course tab with their School Id, or on the clock-out screen.
 - **What the AI sees** is counts, commit messages, course items, screenshots and the member's own description. It doesn't get their name, email subjects, or anything about guests.
 

@@ -101,6 +101,15 @@ def _commit_match(commit: dict, emails: set, names: set, username: str) -> str |
     return None
 
 
+def github_metrics(commits: list) -> dict:
+    return {"commits": len(commits), "additions": sum(c.get("additions") or 0 for c in commits),
+            "deletions": sum(c.get("deletions") or 0 for c in commits), "files": sum(c.get("files") or 0 for c in commits)}
+
+
+def github_summary(metrics: dict) -> str:
+    return f"{_plural(metrics['commits'], 'commit')}, +{metrics['additions']} / -{metrics['deletions']} lines"
+
+
 #every branch, not only the default one - work usually sits on a feature branch until its PR is merged
 def github_changes(repos: list, emails: list, names: list, username: str, since: datetime, until: datetime) -> dict:
     if not repos:
@@ -110,7 +119,7 @@ def github_changes(repos: list, emails: list, names: list, username: str, since:
     username = (username or "").strip().lower()
     window = {"since": since.isoformat(), "until": until.isoformat(), "per_page": 100}
 
-    items, additions, deletions, files = [], 0, 0, 0
+    items = []
     failed = []
     for repo in repos:
         #one repository that can't be read shouldn't lose what the others found
@@ -126,19 +135,21 @@ def github_changes(repos: list, emails: list, names: list, username: str, since:
                     #a merge commit restates work that's already counted on its branch
                     if len(commit.get("parents") or []) > 1:
                         continue
-                    matched_by = _commit_match(commit, emails, names, username)
-                    if not matched_by or len(items) >= GITHUB_MAX_COMMITS:
+                    if len(items) >= GITHUB_MAX_COMMITS:
                         continue
+                    matched_by = _commit_match(commit, emails, names, username)
                     detail = _github_get(f"repos/{repo}/commits/{sha}")
                     stats = detail.get("stats") or {}
-                    additions += stats.get("additions") or 0
-                    deletions += stats.get("deletions") or 0
-                    files += len(detail.get("files") or [])
                     message = ((commit.get("commit") or {}).get("message") or "").split("\n")[0][:120]
+                    author = ((commit.get("commit") or {}).get("author") or {}).get("name") or "someone"
+                    #git names and emails often aren't the ones we know someone by, so anything that doesn't match is
+                    #still listed, unticked, for them to claim
                     items.append({
-                        "id": f"{repo}@{sha[:10]}", "label": message or sha[:10], "mine": True,
+                        "id": f"{repo}@{sha[:10]}", "label": message or sha[:10], "mine": bool(matched_by),
+                        "additions": stats.get("additions") or 0, "deletions": stats.get("deletions") or 0,
+                        "files": len(detail.get("files") or []),
                         "detail": f"{repo.split('/')[-1]} · +{stats.get('additions') or 0} / -{stats.get('deletions') or 0}"
-                                  + (" · matched by name" if matched_by == "name" else ""),
+                                  + ("" if matched_by == "email" or matched_by == "username" else " · matched by name" if matched_by else f" · by {author}"),
                     })
         except (SourceUnavailable, requests.RequestException) as e:
             print(f"GitHub lookup failed for {repo}: {e}")
@@ -146,10 +157,14 @@ def github_changes(repos: list, emails: list, names: list, username: str, since:
     if len(failed) == len(repos) and not items:
         raise SourceUnavailable("Couldn't reach GitHub to check this.")
     missed = f" (couldn't check {', '.join(r.split('/')[-1] for r in failed)})" if failed else ""
-    metrics = {"commits": len(items), "additions": additions, "deletions": deletions, "files": files}
+    mine = [i for i in items if i["mine"]]
+    metrics = github_metrics(mine)
     if not items:
-        return measure_result(f"No commits found while you were clocked in. Pushed yet?{missed}", metrics)
-    return measure_result(f"{_plural(len(items), 'commit')}, +{additions} / -{deletions} lines{missed}", metrics, items)
+        return measure_result(f"No commits in these repositories while you were clocked in. Pushed yet?{missed}", metrics)
+    if not mine:
+        return measure_result(f"None of these commits matched you - tick any that are yours{missed}", metrics, items)
+    others = f", plus {_plural(len(items) - len(mine), 'commit')} by others - tick any that are yours" if len(items) > len(mine) else ""
+    return measure_result(f"{github_summary(metrics)}{others}{missed}", metrics, items)
 
 
 # ---- Google (everything goes through the one connected account, ucscbesa@ucsc.edu - see README) ----

@@ -32,7 +32,7 @@ from google.oauth2 import service_account as gcp_service_account
 from tracking_catalog import DEFAULT_PROJECTS, MEASURE_TYPES, SLUGWORKS_COURSE, course_items
 from tracking_sources import (
     BOOKING_COLLECTIONS, SourceUnavailable, booking_changes, calendar_changes, clean_google_file_id, clean_repo, custom_api_call, describe_changes,
-    diff_sheet, diff_slides, github_changes, github_token_status, gmail_sent, google_connected, google_file_result, grade_day, measure_result, sheet_snapshot,
+    diff_sheet, diff_slides, github_changes, github_metrics, github_summary, github_token_status, gmail_sent, google_connected, google_file_result, grade_day, measure_result, sheet_snapshot,
     slides_snapshot, strip_private_booking_fields,
 )
 
@@ -2570,7 +2570,7 @@ GRADE_MAX_ATTEMPTS = 5
 GRADE_MAX_SCREENSHOT_PAIRS = 4
 BAD_GRADES = ("B", "C")
 #the sources a shared account or database feeds, where only the member knows what was really theirs
-CONFIRMED_MEASURE_TYPES = {"gmail", "google_calendar", "booking_db", "google_sheets", "google_slides"}
+CONFIRMED_MEASURE_TYPES = {"gmail", "google_calendar", "booking_db", "google_sheets", "google_slides", "github"}
 #what the trainer pages report (see logWorkEvent) - tour/question checkpoints are practice, the rest is data input
 PRACTICE_EVENT_KINDS = {"tour_checkpoint", "question_checkpoint"}
 DATA_EVENT_KINDS = {"question_set_created", "question_set_saved", "question_set_deleted", "tour_draft_uploaded"}
@@ -2877,6 +2877,10 @@ def _apply_report(draft: dict, report: WorkReport) -> list:
                 confirmed = set((mine.confirmedItems if mine else None) or [])
                 result["items"] = [{**item, "confirmed": item["id"] in confirmed} for item in measure.get("items") or []]
                 result["confirmedCount"] = len(confirmed & {item["id"] for item in measure.get("items") or []})
+                #what counts is what they claimed, not just what matched them
+                if measure["type"] == "github" and measure.get("status") == "ok":
+                    result["metrics"] = github_metrics([i for i in result["items"] if i["confirmed"]])
+                    result["summary"] = github_summary(result["metrics"])
             measures.append(result)
         projects.append({**project, "measures": measures})
     return projects
@@ -2951,8 +2955,10 @@ def _grade_measure_view(measure: dict) -> dict:
         view["reported"] = bool(measure.get("checked"))
     if measure.get("confirmable"):
         view["theyConfirmed"] = f"{measure.get('confirmedCount', 0)} of the {len(measure.get('items') or [])} found were their own work"
-    if measure.get("type") in ("github", "course"):
+    if measure.get("type") == "course":
         view["items"] = [i.get("label") for i in measure.get("items") or []]
+    if measure.get("type") == "github":
+        view["items"] = [i.get("label") for i in measure.get("items") or [] if i.get("confirmed")]
     if measure.get("type") == "screenshot":
         view["lookFor"] = measure.get("lookFor") or ""
         view["theirNote"] = measure.get("screenshotNote") or ""

@@ -13,9 +13,10 @@ export type WorkEntries = {
     quantities: Record<string, string>
     checked: Record<string, boolean>
     confirmed: Record<string, string[]>
+    claimedAccount: string | null // one for the whole clock-out, even across projects with commits
 }
 
-export const emptyEntries = (): WorkEntries => ({description: "", quantities: {}, checked: {}, confirmed: {}})
+export const emptyEntries = (): WorkEntries => ({description: "", quantities: {}, checked: {}, confirmed: {}, claimedAccount: null})
 
 const key = (project: WorkProject, measure: WorkMeasure) => `${project.projectId}/${measure.measureId}`
 
@@ -37,6 +38,7 @@ export function toWorkReport(entries: WorkEntries, projects: WorkProject[], work
         description: entries.description.trim(),
         workMode,
         ...(workMode === "hybrid" ? {officePercent} : {}),
+        ...(entries.claimedAccount ? {claimedAccount: entries.claimedAccount} : {}),
         projects: projects.map(project => ({
             projectId: project.projectId,
             measures: project.measures.map(measure => {
@@ -73,6 +75,36 @@ function ItemRow({item, confirmable, confirmed, onToggle}: {item: WorkItem, conf
             <input type="checkbox" checked={confirmed} onChange={onToggle} className="mt-1 w-4 h-4 accent-amber-500 shrink-0"/>
             {body}
         </label>
+    )
+}
+
+//commits that didn't match them, one card per account. Only one can be theirs, and picking it again unpicks it.
+function AccountChooser({commits, claimed, onClaim}: {commits: WorkItem[], claimed: string | null, onClaim: (account: string | null) => void}): JSX.Element {
+    const accounts = [...new Set(commits.map(c => c.account || ""))]
+    return (
+        <div className="mt-2" role="group" aria-label="Which account is yours?">
+            <p className="text-xs text-gray-300 mb-2">Which of these is you? Pick one and we'll remember it, so you won't be asked again. Skip it if none are yours.</p>
+            <div className="flex flex-col gap-2">
+                {accounts.map(account => {
+                    const own = commits.filter(c => c.account === account)
+                    const chosen = claimed === account
+                    return (
+                        <button key={account} type="button" aria-pressed={chosen} onClick={() => onClaim(chosen ? null : account)}
+                            className={"rounded-lg border-2 p-2.5 text-left transition-colors " + (chosen ? "border-amber-500 bg-gray-800" : "border-gray-700 hover:border-gray-500")}>
+                            <span className="flex items-center gap-2 text-sm font-semibold">
+                                <span className={"w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 " + (chosen ? "border-amber-500" : "border-gray-400")}>
+                                    {chosen && <span className="w-2 h-2 rounded-full bg-amber-500"></span>}
+                                </span>
+                                <span className="min-w-0 break-words">Commits by {own[0].accountName} ({own.length})</span>
+                            </span>
+                            <span className="block text-xs text-gray-400 ml-6 break-words">{account}</span>
+                            {own.slice(0, 3).map(c => <span key={c.id} className="block text-xs text-gray-300 ml-6 truncate">{c.label}</span>)}
+                            {own.length > 3 && <span className="block text-xs text-gray-400 ml-6">and {own.length - 3} more</span>}
+                        </button>
+                    )
+                })}
+            </div>
+        </div>
     )
 }
 
@@ -120,7 +152,9 @@ function MeasureRow({project, measure, entries, setEntries, studentId}: {
         )
     }
 
-    const categories = [...new Set(measure.items.map(i => i.category || ""))]
+    const unclaimed = measure.type === "github" ? measure.items.filter(i => !i.mine) : []
+    const listed = measure.items.filter(i => !unclaimed.includes(i))
+    const categories = [...new Set(listed.map(i => i.category || ""))]
     return (
         <div className="py-1.5">
             <p className="text-sm font-semibold">{measure.label}</p>
@@ -134,7 +168,7 @@ function MeasureRow({project, measure, entries, setEntries, studentId}: {
             {categories.map(category => (
                 <div key={category}>
                     {category && <p className="text-xs uppercase tracking-wide text-amber-400 mt-2">{category}</p>}
-                    {measure.items.filter(i => (i.category || "") === category).map(item => (
+                    {listed.filter(i => (i.category || "") === category).map(item => (
                         <ItemRow key={item.id} item={item} confirmable={measure.confirmable} confirmed={confirmed.includes(item.id)}
                             onToggle={() => setEntries({...entries, confirmed: {
                                 ...entries.confirmed,
@@ -143,6 +177,9 @@ function MeasureRow({project, measure, entries, setEntries, studentId}: {
                     ))}
                 </div>
             ))}
+            {unclaimed.length > 0 &&
+                <AccountChooser commits={unclaimed} claimed={entries.claimedAccount} onClaim={(account) => setEntries({...entries, claimedAccount: account})}/>
+            }
         </div>
     )
 }

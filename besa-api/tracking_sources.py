@@ -88,13 +88,12 @@ def _github_get(path: str, params: dict | None = None):
 
 
 #who a commit belongs to: their email first, and only if that doesn't match, their name. Returns how it matched, or None.
-def _commit_match(commit: dict, emails: set, names: set, username: str) -> str | None:
+def _commit_match(commit: dict, emails: set, names: set, logins: set) -> str | None:
     info = commit.get("commit") or {}
     author, committer = info.get("author") or {}, info.get("committer") or {}
     if {(author.get("email") or "").lower(), (committer.get("email") or "").lower()} & emails:
         return "email"
-    logins = {((commit.get("author") or {}).get("login") or "").lower(), ((commit.get("committer") or {}).get("login") or "").lower()}
-    if username and username in logins:
+    if {((commit.get("author") or {}).get("login") or "").lower(), ((commit.get("committer") or {}).get("login") or "").lower()} & logins:
         return "username"
     if (author.get("name") or "").strip().casefold() in names:
         return "name"
@@ -110,13 +109,23 @@ def github_summary(metrics: dict) -> str:
     return f"{_plural(metrics['commits'], 'commit')}, +{metrics['additions']} / -{metrics['deletions']} lines"
 
 
-#every branch, not only the default one - work usually sits on a feature branch until its PR is merged
-def github_changes(repos: list, emails: list, names: list, username: str, since: datetime, until: datetime) -> dict:
+#the GitHub account behind a commit: its login, or the commit's email when it isn't linked to one
+def _commit_account(commit: dict) -> str:
+    login = (commit.get("author") or {}).get("login")
+    return (login or ((commit.get("commit") or {}).get("author") or {}).get("email") or "unknown").lower()
+
+
+#accounts are the ones this member picked at an earlier clock-out, and taken the ones other members did, whose commits
+#aren't theirs to claim. Every branch, not only the default one - work usually sits on a feature branch until its PR is merged
+def github_changes(repos: list, emails: list, names: list, username: str, since: datetime, until: datetime,
+                   accounts: list | None = None, taken: set | None = None) -> dict:
     if not repos:
         raise SourceUnavailable("No repository is set for this yet.")
     emails = {e.lower() for e in emails if e}
     names = {n.strip().casefold() for n in names if n and n.strip()}
-    username = (username or "").strip().lower()
+    accounts = {a.lower() for a in accounts or []}
+    emails |= accounts
+    logins = (accounts | {(username or "").strip().lower()}) - {""}
     window = {"since": since.isoformat(), "until": until.isoformat(), "per_page": 100}
 
     items = []
@@ -137,15 +146,19 @@ def github_changes(repos: list, emails: list, names: list, username: str, since:
                         continue
                     if len(items) >= GITHUB_MAX_COMMITS:
                         continue
-                    matched_by = _commit_match(commit, emails, names, username)
+                    matched_by = _commit_match(commit, emails, names, logins)
+                    account = _commit_account(commit)
+                    if not matched_by and account in (taken or set()):
+                        continue
                     detail = _github_get(f"repos/{repo}/commits/{sha}")
                     stats = detail.get("stats") or {}
                     message = ((commit.get("commit") or {}).get("message") or "").split("\n")[0][:120]
                     author = ((commit.get("commit") or {}).get("author") or {}).get("name") or "someone"
                     #git names and emails often aren't the ones we know someone by, so anything that doesn't match is
-                    #still listed, unticked, for them to claim
+                    #still listed under its account, for them to pick the one that's theirs
                     items.append({
                         "id": f"{repo}@{sha[:10]}", "label": message or sha[:10], "mine": bool(matched_by),
+                        "account": account, "accountName": author,
                         "additions": stats.get("additions") or 0, "deletions": stats.get("deletions") or 0,
                         "files": len(detail.get("files") or []),
                         "detail": f"{repo.split('/')[-1]} · +{stats.get('additions') or 0} / -{stats.get('deletions') or 0}"
@@ -162,8 +175,8 @@ def github_changes(repos: list, emails: list, names: list, username: str, since:
     if not items:
         return measure_result(f"No commits in these repositories while you were clocked in. Pushed yet?{missed}", metrics)
     if not mine:
-        return measure_result(f"None of these commits matched you - tick any that are yours{missed}", metrics, items)
-    others = f", plus {_plural(len(items) - len(mine), 'commit')} by others - tick any that are yours" if len(items) > len(mine) else ""
+        return measure_result(f"None of these commits matched you - pick the account that's yours{missed}", metrics, items)
+    others = f", plus {_plural(len(items) - len(mine), 'commit')} from other accounts - pick yours if one is" if len(items) > len(mine) else ""
     return measure_result(f"{github_summary(metrics)}{others}{missed}", metrics, items)
 
 

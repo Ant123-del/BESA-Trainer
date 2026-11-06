@@ -987,6 +987,8 @@ export type WorkItem = {
     confirmed?: boolean
     category?: string
     change?: string
+    account?: string // the GitHub account behind a commit
+    accountName?: string
     fields?: {field: string, before: string | null, after: string | null, private: boolean}[]
 }
 
@@ -1016,6 +1018,7 @@ export type WorkReportInput = {
     description: string
     workMode: WorkMode
     officePercent?: number // hybrid only
+    claimedAccount?: string // the one unmatched GitHub account they picked as theirs
     projects: {projectId: string, measures: {measureId: string, quantity?: number, checked?: boolean, confirmedItems?: string[]}[]}[]
 }
 
@@ -1153,11 +1156,11 @@ export function checkKioskCourseItems(studentId: string, itemIds: string[], done
 }
 
 export function getWorkIdentity() {
-    return trackingGet<{emails: string[], githubUsername: string}>("tracking/identity")
+    return trackingGet<{emails: string[], githubUsername: string, accounts: string[]}>("tracking/identity")
 }
 
-export function setWorkIdentity(emails: string[], githubUsername: string) {
-    return trackingPost<{emails: string[], githubUsername: string}>("tracking/identity", {emails, githubUsername})
+export function setWorkIdentity(emails: string[], githubUsername: string, accounts: string[]) {
+    return trackingPost<{emails: string[], githubUsername: string, accounts: string[]}>("tracking/identity", {emails, githubUsername, accounts})
 }
 
 export function getWorkReview(days = 14) {

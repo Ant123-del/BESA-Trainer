@@ -1227,6 +1227,8 @@ class ReportProject(BaseModel):
 class WorkReport(BaseModel):
     description: str = Field(default="", max_length=WORK_DESCRIPTION_MAX_LENGTH)
     projects: list[ReportProject] = []
+    #the one unmatched GitHub account they said is theirs - its commits count, and it's remembered for next time
+    claimedAccount: str | None = None
     workMode: Literal["office", "hybrid", "out"] = "office"
     officePercent: int | None = Field(default=None, ge=1, le=99)  # hybrid only
 
@@ -2623,7 +2625,18 @@ def _work_identity(uid: str, data: dict) -> dict:
         print(f"No auth email for {uid}: {e}")
     roster_doc = _roster_doc_for(data.get("besaName"), _get_roster()) or {}
     emails.add((roster_doc.get("email") or "").lower())
-    return {"emails": sorted(e for e in emails if e), "names": [data.get("besaName") or ""], "username": data.get("githubUsername") or ""}
+    return {"emails": sorted(e for e in emails if e), "names": [data.get("besaName") or ""], "username": data.get("githubUsername") or "",
+            "accounts": data.get("githubAccounts") or [], "taken": _accounts_of_others(uid)}
+
+
+#GitHub accounts other members have said are theirs, so nobody else can claim those commits
+def _accounts_of_others(uid: str) -> set:
+    taken = set()
+    for u in _users_ref(firestore.client()).stream():
+        if u.id != uid:
+            data = u.to_dict() or {}
+            taken |= {a.lower() for a in [*(data.get("githubAccounts") or []), *(data.get("trackingEmails") or []), data.get("githubUsername") or ""] if a}
+    return taken
 
 
 # ---- clock-in copies of the things that don't keep their own history ----
@@ -2784,7 +2797,8 @@ def _screenshot_measure(db, uid: str, project: dict, measure: dict) -> dict:
 def _run_measure(db, uid: str, project: dict, measure: dict, identity: dict, since: datetime, until: datetime, settings: dict) -> dict:
     kind = measure["type"]
     if kind == "github":
-        return github_changes(measure.get("repos") or [], identity["emails"], identity["names"], identity["username"], since, until)
+        return github_changes(measure.get("repos") or [], identity["emails"], identity["names"], identity["username"], since, until,
+                              identity["accounts"], identity["taken"])
     if kind == "google_sheets":
         return _google_files_measure(uid, measure, identity, since, until, "sheet", sheet_snapshot, diff_sheet)
     if kind == "google_slides":
@@ -2875,6 +2889,11 @@ def _apply_report(draft: dict, report: WorkReport) -> list:
                 result["checked"] = bool(mine and mine.checked)
             if measure.get("confirmable"):
                 confirmed = set((mine.confirmedItems if mine else None) or [])
+                #of the commits that didn't match them, only the one account they picked can count
+                if measure["type"] == "github":
+                    items = measure.get("items") or []
+                    matched = {i["id"] for i in items if i.get("mine")}
+                    confirmed = (confirmed & matched) | {i["id"] for i in items if report.claimedAccount and i.get("account") == report.claimedAccount}
                 result["items"] = [{**item, "confirmed": item["id"] in confirmed} for item in measure.get("items") or []]
                 result["confirmedCount"] = len(confirmed & {item["id"] for item in measure.get("items") or []})
                 #what counts is what they claimed, not just what matched them
@@ -2884,6 +2903,13 @@ def _apply_report(draft: dict, report: WorkReport) -> list:
             measures.append(result)
         projects.append({**project, "measures": measures})
     return projects
+
+
+#only an account that really was offered on this visit, and that nobody else got to first
+def _remember_account(db, uid: str, projects: list, account: str | None):
+    offered = {i.get("account") for p in projects for m in p["measures"] if m["type"] == "github" for i in m.get("items") or []}
+    if account and account in offered and account not in _accounts_of_others(uid):
+        _users_ref(db).document(uid).update({"githubAccounts": firestore.ArrayUnion([account])})
 
 
 #Called at clock-out. Never raises: losing the report is much better than failing the clock-out it's attached to.
@@ -2897,6 +2923,7 @@ def _record_work_visit(db, uid: str, data: dict, checked_in_at: datetime, ended_
         if report.workMode == "out" or not drafted_for or _to_pacific(drafted_for) != checked_in_at:
             draft = {}
         projects = _apply_report(draft, report)
+        _remember_account(db, uid, projects, report.claimedAccount)
         #the course can be ticked on the kiosk's confirm screen itself, after the draft was fetched
         for project in projects:
             for measure in project["measures"]:
@@ -3276,17 +3303,19 @@ TRACKING_EMAILS_MAX = 5
 @app.get("/tracking/identity")
 def getWorkIdentity(user: dict = Depends(get_current_user)):
     _, data = _own_besa_doc(user)
-    return {"success": True, "emails": data.get("trackingEmails") or [], "githubUsername": data.get("githubUsername") or ""}
+    return {"success": True, "emails": data.get("trackingEmails") or [], "githubUsername": data.get("githubUsername") or "",
+            "accounts": data.get("githubAccounts") or []}
 
 
 class WorkIdentityRequest(BaseModel):
     emails: list[str]
     githubUsername: str = ""
+    accounts: list[str]  # the remembered accounts they kept - these can be removed here, but only added at clock-out
 
 
 @app.post("/tracking/identity")
 def setWorkIdentity(request_data: WorkIdentityRequest, user: dict = Depends(get_current_user)):
-    target_ref, _ = _own_besa_doc(user)
+    target_ref, data = _own_besa_doc(user)
     emails = [e for e in dict.fromkeys(e.strip().lower() for e in request_data.emails) if e]
     username = request_data.githubUsername.strip().lstrip("@")
     if any(not EMAIL_PATTERN.match(e) for e in emails):
@@ -3295,8 +3324,13 @@ def setWorkIdentity(request_data: WorkIdentityRequest, user: dict = Depends(get_
         raise HTTPException(status_code=400, detail=f"You can add at most {TRACKING_EMAILS_MAX} emails.")
     if username and not GITHUB_USERNAME_PATTERN.match(username):
         raise HTTPException(status_code=400, detail="That doesn't look like a GitHub username.")
-    target_ref.update({"trackingEmails": emails, "githubUsername": username})
-    return {"success": True, "emails": emails, "githubUsername": username}
+    taken = _accounts_of_others(user.get("uid"))
+    clash = next((a for a in [*emails, username.lower()] if a and a in taken), None)
+    if clash:
+        raise HTTPException(status_code=409, detail=f"{clash} is already linked to another member.")
+    accounts = [a for a in data.get("githubAccounts") or [] if a in request_data.accounts]
+    target_ref.update({"trackingEmails": emails, "githubUsername": username, "githubAccounts": accounts})
+    return {"success": True, "emails": emails, "githubUsername": username, "accounts": accounts}
 
 
 # ---- leads: reviewing grades, and setting up projects ----

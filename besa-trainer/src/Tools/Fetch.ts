@@ -1062,7 +1062,11 @@ export type CourseItem = {id: string, title: string, kind: "page" | "quiz" | "as
 export type CourseModule = {id: string, title: string, prerequisites: string[], items: CourseItem[]}
 export type Course = {id: string, title: string, modules: CourseModule[]}
 
-export type ScreenshotTarget = {projectId: string, projectName: string, measureId: string, label: string, waitingAt: string | null}
+export type ScreenshotRole = "old" | "new"
+export type ScreenshotTarget = {
+    projectId: string, projectName: string, measureId: string, label: string,
+    latestId: string | null, latestAt: string | null, sentThisVisit: boolean
+}
 
 type TrackingResult<T> = ({success: true} & T) | {success: false, detail: string}
 
@@ -1119,9 +1123,9 @@ export function getScreenshotTargets() {
     return trackingGet<{targets: ScreenshotTarget[]}>("tracking/screenshot-targets")
 }
 
-export async function uploadScreenshot(projectId: string, measureId: string, image: Blob, note: string) {
+export async function uploadScreenshot(projectId: string, measureId: string, image: Blob, note: string, role: ScreenshotRole) {
     return trackingPost<{id: string, uploadedAt: string}>("tracking/screenshots", {
-        projectId, measureId, note, imageBase64: await blobToBase64(image),
+        projectId, measureId, note, role, imageBase64: await blobToBase64(image),
     })
 }
 

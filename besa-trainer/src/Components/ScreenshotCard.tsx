@@ -2,10 +2,12 @@ import { useEffect, useRef, useState, type ClipboardEvent, type JSX } from "reac
 import { Link } from "react-router-dom"
 import { FaCamera } from "react-icons/fa"
 import { MoonLoader } from "react-spinners"
+import { Screenshot } from "./GradeBadge"
 import { getScreenshotTargets, uploadScreenshot, type ScreenshotTarget } from "../Tools/Fetch"
 
 const MAX_SIDE = 2000 //plenty to read a CAD timeline, and keeps a phone photo under the backend's size limit
 const NOTE_MAX_LENGTH = 200 //same cap as the backend's SCREENSHOT_NOTE_MAX_LENGTH
+const PICK_BUTTON = "w-full py-3 rounded-full font-bold disabled:opacity-40 items-center justify-center gap-2"
 
 async function shrinkImage(file: Blob): Promise<Blob> {
     const bitmap = await createImageBitmap(file)
@@ -24,8 +26,9 @@ function timeOf(iso: string): string {
     return new Date(iso).toLocaleString(undefined, {weekday: "short", hour: "numeric", minute: "2-digit"})
 }
 
-//top of the BESA home page: the screenshot behind old-vs-new grading gets sent from their own device, then they clock out
-//at the kiosk. Works from a phone (the picker offers the camera) or a computer (choose a file, or just paste).
+//top of the BESA home page: the picture behind old-vs-new grading gets sent from their own device, then they clock out
+//at the kiosk. Works from a phone (straight to the camera, or the photo library) or a computer (choose a file, or just paste).
+//A project shares one picture between everyone on it. One with none yet needs an old picture first, then a new one.
 export default function ScreenshotCard(): JSX.Element | null {
     const [targets, setTargets] = useState<ScreenshotTarget[] | null>(null)
     const [chosen, setChosen] = useState(0)
@@ -33,6 +36,7 @@ export default function ScreenshotCard(): JSX.Element | null {
     const [busy, setBusy] = useState(false)
     const [message, setMessage] = useState<{text: string, error: boolean} | null>(null)
     const fileRef = useRef<HTMLInputElement>(null)
+    const cameraRef = useRef<HTMLInputElement>(null)
 
     function refresh() {
         getScreenshotTargets().then(result => { if (result.success) setTargets(result.targets) })
@@ -42,14 +46,15 @@ export default function ScreenshotCard(): JSX.Element | null {
 
     if (!targets || targets.length === 0) return null
     const target = targets[Math.min(chosen, targets.length - 1)]
+    const role = target.latestId ? "new" : "old"
 
     async function send(file: Blob) {
         setBusy(true)
         setMessage(null)
         try {
-            const result = await uploadScreenshot(target.projectId, target.measureId, await shrinkImage(file), note)
+            const result = await uploadScreenshot(target.projectId, target.measureId, await shrinkImage(file), role === "new" ? note : "", role)
             if (result.success) {
-                setMessage({text: "Sent! You can clock out at the kiosk whenever you're done.", error: false})
+                setMessage({text: role === "new" ? "Sent! You can clock out at the kiosk whenever you're done." : "Got the old picture. Now send the new one.", error: false})
                 setNote("")
                 refresh()
             } else {
@@ -60,6 +65,7 @@ export default function ScreenshotCard(): JSX.Element | null {
         }
         setBusy(false)
         if (fileRef.current) fileRef.current.value = ""
+        if (cameraRef.current) cameraRef.current.value = ""
     }
 
     function handlePaste(e: ClipboardEvent) {
@@ -71,33 +77,51 @@ export default function ScreenshotCard(): JSX.Element | null {
         <section onPaste={handlePaste} aria-labelledby="screenshot-title" className="rounded-2xl bg-be-navy border-l-4 border-be-orange p-4 sm:p-5 mb-6 shadow-md">
             <div className="flex flex-col lg:flex-row lg:items-center gap-4">
                 <div className="flex-1 min-w-0">
-                    <h2 id="screenshot-title" className="text-xl font-bold tracking-wide">Send a Progress Screenshot</h2>
+                    <h2 id="screenshot-title" className="text-xl font-bold tracking-wide">Send a Progress Picture</h2>
                     <p className="text-sm text-be-light-gray">
-                        Finished for now? Screenshot your latest work (for Fusion 360, include the design history at the bottom), send it here, then clock out at the kiosk.
+                        {role === "old" ?
+                            `${target.projectName} has no pictures yet. First send one of how it looked before you started, then one of where it is now.` :
+                            "Finished for now? Take a photo or screenshot of your latest work (for Fusion 360, include the design history at the bottom), send it here, then clock out at the kiosk."
+                        }
                     </p>
                     <div className="flex flex-wrap gap-2 mt-3">
                         {targets.map((t, i) => (
                             <button key={t.projectId + t.measureId} type="button" onClick={() => setChosen(i)}
-                                className={"px-3 py-1.5 rounded-full text-sm font-bold transition-colors " +
+                                className={"px-3 py-2 rounded-full text-sm font-bold transition-colors " +
                                     (t === target ? "bg-be-orange text-black" : "bg-be-navy-darker text-white hover:bg-be-navy-dark")}>
                                 {t.projectName}
                             </button>
                         ))}
                     </div>
-                    <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={NOTE_MAX_LENGTH} aria-label="Note about this screenshot"
-                        placeholder="What are you working on? (optional)"
-                        className="w-full mt-3 p-2 px-3 rounded-lg bg-be-navy-darker text-white border border-be-light-gray/30 text-sm"/>
+                    {role === "new" &&
+                        //16px on phones, because iOS zooms the whole page in on anything smaller
+                        <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={NOTE_MAX_LENGTH} aria-label="Note about this picture"
+                            placeholder="What are you working on? (optional)"
+                            className="w-full mt-3 p-2 px-3 rounded-lg bg-be-navy-darker text-white border border-be-light-gray/30 text-base sm:text-sm"/>
+                    }
                 </div>
-                <div className="lg:w-56 shrink-0">
-                    <input ref={fileRef} type="file" accept="image/*" className="hidden" disabled={busy} aria-label="Choose a screenshot"
+                <div className="lg:w-56 shrink-0 flex flex-col gap-2">
+                    {target.latestId &&
+                        <div className="flex">
+                            <Screenshot key={target.latestId} id={target.latestId} label={target.sentThisVisit ? "Latest, counts for this visit" : "Old"}/>
+                        </div>
+                    }
+                    <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" disabled={busy} aria-label="Take a photo"
                         onChange={(e) => { const file = e.target.files?.[0]; if (file) void send(file) }}/>
-                    <button type="button" onClick={() => fileRef.current?.click()} disabled={busy}
-                        className="w-full py-3 rounded-full bg-be-orange hover:bg-be-orange-dark text-black font-bold disabled:opacity-40 flex items-center justify-center gap-2">
+                    <input ref={fileRef} type="file" accept="image/*" className="hidden" disabled={busy} aria-label="Choose a picture"
+                        onChange={(e) => { const file = e.target.files?.[0]; if (file) void send(file) }}/>
+                    <button type="button" onClick={() => cameraRef.current?.click()} disabled={busy}
+                        className={"hidden [@media(pointer:coarse)]:flex " + PICK_BUTTON + " bg-be-orange hover:bg-be-orange-dark text-black"}>
                         {busy ? <MoonLoader color="black" size={16}/> : <FaCamera/>}
-                        Choose Screenshot
+                        Take {role === "old" ? "Old" : "New"} Photo
                     </button>
-                    <p className="text-xs text-be-light-gray text-center mt-2">
-                        {target.waitingAt ? `Latest sent ${timeOf(target.waitingAt)}` : "On a computer you can also paste it here"}
+                    <button type="button" onClick={() => fileRef.current?.click()} disabled={busy}
+                        className={"flex " + PICK_BUTTON + " bg-be-orange hover:bg-be-orange-dark text-black [@media(pointer:coarse)]:bg-be-navy-darker [@media(pointer:coarse)]:hover:bg-be-navy-dark [@media(pointer:coarse)]:text-white"}>
+                        <span className="[@media(pointer:coarse)]:hidden">{busy ? <MoonLoader color="black" size={16}/> : <FaCamera/>}</span>
+                        Choose {role === "old" ? "Old" : "New"} Picture
+                    </button>
+                    <p className="text-xs text-be-light-gray text-center">
+                        {target.latestAt ? `Latest sent ${timeOf(target.latestAt)}` : <span className="[@media(pointer:coarse)]:hidden">You can also paste it here</span>}
                     </p>
                 </div>
             </div>

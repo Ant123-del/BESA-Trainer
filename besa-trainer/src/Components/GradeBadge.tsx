@@ -22,9 +22,11 @@ export default function GradeBadge({grade, large}: {grade: WorkGrade, large?: bo
     )
 }
 
-//a sent screenshot - they aren't public, so it's fetched with the viewer's token (see getScreenshotUrl)
+//a sent picture - they aren't public, so it's fetched with the viewer's token (see getScreenshotUrl). Each project
+//only keeps its latest, so ones on older days get replaced.
 export function Screenshot({id, label}: {id: string, label: string}): JSX.Element {
     const [src, setSrc] = useState<string | null>(null)
+    const [gone, setGone] = useState(false)
 
     useEffect(() => {
         let cancelled = false
@@ -36,6 +38,7 @@ export function Screenshot({id, label}: {id: string, label: string}): JSX.Elemen
             }
             created = result
             setSrc(result)
+            setGone(!result)
         })
         return () => {
             cancelled = true
@@ -50,7 +53,7 @@ export function Screenshot({id, label}: {id: string, label: string}): JSX.Elemen
                 <a href={src} target="_blank" rel="noreferrer">
                     <img src={src} alt={`${label} screenshot`} className="w-full max-h-48 object-contain rounded-lg bg-black"/>
                 </a>
-                : <div className="w-full h-24 rounded-lg bg-black/40"></div>
+                : <div className="w-full h-24 rounded-lg bg-black/40 flex items-center justify-center text-xs text-gray-400">{gone && "Replaced by a newer picture"}</div>
             }
         </figure>
     )

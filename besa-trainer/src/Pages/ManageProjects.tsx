@@ -10,7 +10,7 @@ import {
 const MEASURE_KINDS: {type: string, label: string, hint: string}[] = [
     {type: "quantity", label: "Self report: a number", hint: "They type how many at clock-out."},
     {type: "checkbox", label: "Self report: a checkbox", hint: "They tick whether it got done."},
-    {type: "screenshot", label: "Old vs new screenshots", hint: "They send a screenshot from the home page, and the AI compares it with the last one."},
+    {type: "screenshot", label: "Old vs new screenshots", hint: "They send a picture from the home page on a phone or computer, and the AI compares it with the last one. The whole project shares one picture."},
     {type: "github", label: "GitHub commits", hint: "Commits by them while clocked in, matched by email then name."},
     {type: "google_sheets", label: "Google Sheets", hint: "Rows and cells added since they clocked in."},
     {type: "google_slides", label: "Google Slides", hint: "Slides, rearranging and text since they clocked in. Animations can't be seen, so add a number for those."},

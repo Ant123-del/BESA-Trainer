@@ -2778,20 +2778,28 @@ def _google_files_measure(uid: str, measure: dict, identity: dict, since: dateti
     return measure_result(f"{len(items)} file(s) checked", metrics, items)
 
 
-def _screenshot_measure(db, uid: str, project: dict, measure: dict) -> dict:
-    shots = sorted(
-        (s.to_dict() for s in db.collection(WORK_SCREENSHOTS_COLLECTION).where(filter=FieldFilter("uid", "==", uid)).stream()),
-        key=lambda s: s["uploadedAt"])
-    shots = [s for s in shots if s["projectId"] == project["id"] and s["measureId"] == measure["id"]]
-    unused = [s for s in shots if not s.get("used")]
-    if not unused:
-        return {"status": "missing", "summary": "No new screenshot yet - send one from the BESA Trainer home page on your own device.",
+#a project's pictures belong to the whole group, oldest first. Only the newest is really kept (see _prune_screenshots).
+def _project_shots(db, project_id: str, measure_id: str) -> list:
+    shots = (s.to_dict() for s in db.collection(WORK_SCREENSHOTS_COLLECTION).where(filter=FieldFilter("projectId", "==", project_id)).stream())
+    return sorted((s for s in shots if s["measureId"] == measure_id), key=lambda s: s["uploadedAt"])
+
+
+#a "new" picture counts for everyone clocked in when it was sent, whoever sent it
+def _is_new_since(shot: dict, since: datetime) -> bool:
+    return shot.get("role") != "old" and shot["uploadedAt"] >= since
+
+
+#new is the latest picture sent since they clocked in, old is the latest from before that (or the one sent as the old)
+def _screenshot_measure(db, project: dict, measure: dict, since: datetime) -> dict:
+    shots = _project_shots(db, project["id"], measure["id"])
+    new = [s for s in shots if _is_new_since(s, since)]
+    old = [s for s in shots if not _is_new_since(s, since)]
+    if not new:
+        wanted = "new picture since you clocked in" if old else "pictures for this project yet, so it needs an old and a new one"
+        return {"status": "missing", "summary": f"No {wanted} - send from the BESA Trainer home page on your phone or computer.",
                 "metrics": {}, "items": []}
-    newest = unused[-1]
-    previous = shots[shots.index(newest) - 1] if shots.index(newest) > 0 else None
-    return {"status": "ok", "summary": "Old and new screenshots ready." if previous else "First screenshot for this, so there's nothing older to compare with.",
-            "metrics": {}, "items": [], "oldScreenshot": previous["id"] if previous else None, "newScreenshot": newest["id"],
-            "screenshotNote": newest.get("note") or ""}
+    return {"status": "ok", "summary": "Old and new pictures ready.", "metrics": {}, "items": [],
+            "oldScreenshot": old[-1]["id"] if old else None, "newScreenshot": new[-1]["id"], "screenshotNote": new[-1].get("note") or ""}
 
 
 def _run_measure(db, uid: str, project: dict, measure: dict, identity: dict, since: datetime, until: datetime, settings: dict) -> dict:
@@ -2816,7 +2824,7 @@ def _run_measure(db, uid: str, project: dict, measure: dict, identity: dict, sin
     if kind == "course":
         return _course_measure(db, uid, since, until)
     if kind == "screenshot":
-        return _screenshot_measure(db, uid, project, measure)
+        return _screenshot_measure(db, project, measure, since)
     if kind == "custom_api":
         return custom_api_call(measure.get("url") or "", measure.get("headerName") or "", measure.get("headerValue") or "",
                                (identity["emails"] or [""])[0], identity["names"][0], since, until)
@@ -2946,13 +2954,6 @@ def _record_work_visit(db, uid: str, data: dict, checked_in_at: datetime, ended_
                 "officePercent": {"office": 100, "out": 0}.get(report.workMode, report.officePercent),
             }]),
         }, merge=True)
-        #this visit's screenshots become the "old" for next time
-        compared = {(p["projectId"], m["measureId"]) for p in projects for m in p["measures"] if m.get("newScreenshot")}
-        if compared:
-            for shot in db.collection(WORK_SCREENSHOTS_COLLECTION).where(filter=FieldFilter("uid", "==", uid)).stream():
-                s = shot.to_dict()
-                if (s["projectId"], s["measureId"]) in compared and not s.get("used") and s["uploadedAt"] <= ended_at:
-                    shot.reference.update({"used": True})
         draft_ref.delete()
         return day_id
     except Exception as e:
@@ -3021,6 +3022,7 @@ def _grade_work_day(db, day_id: str) -> dict:
             if loaded:
                 images.append((f'{label} screenshot for {project["name"]} / {measure["label"]}:', loaded[0], loaded[1]))
 
+    earlier = [p for p in day.get("projectGrades") or [] if p.get("differences")]
     context = {
         "officeHoursToGrade": sum(_office_hours(v) for v in visits),
         "outOfOfficeHoursNotGraded": sum((v.get("creditedHours") or 0) - _office_hours(v) for v in visits),
@@ -3034,6 +3036,9 @@ def _grade_work_day(db, day_id: str) -> dict:
     }
     if day.get("explanation"):
         context["theirExplanationOfAnEarlierGrade"] = day["explanation"]
+    #a regrade after the pictures were replaced can't look at them again
+    if earlier:
+        context["whatAnEarlierGradeSawInThePictures"] = earlier
     try:
         answer = grade_day(_get_genai_client(), context, images, {p["name"] for p in projects} - gradable)
     except Exception as e:
@@ -3045,15 +3050,44 @@ def _grade_work_day(db, day_id: str) -> dict:
     return ref.get().to_dict()
 
 
+#days still waiting on a grade that will be tried again
+def _ungraded_days(db) -> list:
+    return [doc for status_value in ("pending", "failed")
+            for doc in db.collection(WORK_DAYS_COLLECTION).where(filter=FieldFilter("gradeStatus", "==", status_value)).stream()
+            if (doc.to_dict().get("gradeAttempts") or 0) < GRADE_MAX_ATTEMPTS]
+
+
 #catches the days the kiosk never asked to grade (it was closed mid-flow) or the AI failed on
 def _grade_pending_days():
     db = firestore.client()
     cutoff = datetime.now(PACIFIC) - timedelta(minutes=3)
-    for status_value in ("pending", "failed"):
-        for doc in db.collection(WORK_DAYS_COLLECTION).where(filter=FieldFilter("gradeStatus", "==", status_value)).stream():
-            day = doc.to_dict()
-            if (day.get("gradeAttempts") or 0) < GRADE_MAX_ATTEMPTS and day.get("updatedAt") and day["updatedAt"] <= cutoff:
-                _grade_work_day(db, doc.id)
+    for doc in _ungraded_days(db):
+        updated_at = doc.to_dict().get("updatedAt")
+        if updated_at and updated_at <= cutoff:
+            _grade_work_day(db, doc.id)
+
+
+#Each project keeps one picture: its newest, which is the "old" for the next person. Today's pictures stay too, along
+#with the last one from before today, because anyone still clocked in compares against those. So does anything a grade
+#still needs. Everything else goes once the day is over.
+def _prune_screenshots():
+    db = firestore.client()
+    today = datetime.now(PACIFIC).date()
+    needed = {m[key] for doc in _ungraded_days(db) for v in doc.to_dict().get("visits") or [] for p in v.get("projects") or []
+              for m in p.get("measures") or [] for key in ("oldScreenshot", "newScreenshot") if m.get(key)}
+    groups = {}
+    for doc in db.collection(WORK_SCREENSHOTS_COLLECTION).stream():
+        shot = doc.to_dict()
+        if shot["uploadedAt"].astimezone(PACIFIC).date() < today:
+            groups.setdefault((shot["projectId"], shot["measureId"]), []).append(shot)
+    for shots in groups.values():
+        for shot in sorted(shots, key=lambda s: s["uploadedAt"])[:-1]:
+            if shot["id"] in needed:
+                continue
+            blob = storage.bucket().blob(shot["path"])
+            if blob.exists():
+                blob.delete()
+            db.collection(WORK_SCREENSHOTS_COLLECTION).document(shot["id"]).delete()
 
 
 def _serialize_work_measure(m: dict) -> dict:
@@ -3159,13 +3193,13 @@ def _screenshot_targets(db) -> list:
 @app.get("/tracking/screenshot-targets")
 def screenshotTargets(user: dict = Depends(get_current_user)):
     db = firestore.client()
-    mine = [s.to_dict() for s in db.collection(WORK_SCREENSHOTS_COLLECTION).where(filter=FieldFilter("uid", "==", user.get("uid"))).stream()]
+    clocked_in = (_users_ref(db).document(user.get("uid")).get().to_dict() or {}).get("lastCheckedIn")
     targets = []
     for project, measure in _screenshot_targets(db):
-        shots = sorted((s for s in mine if s["projectId"] == project["id"] and s["measureId"] == measure["id"]), key=lambda s: s["uploadedAt"])
-        waiting = [s for s in shots if not s.get("used")]
+        latest = (_project_shots(db, project["id"], measure["id"]) or [None])[-1]
         targets.append({"projectId": project["id"], "projectName": project["name"], "measureId": measure["id"], "label": measure.get("label") or "",
-                        "waitingAt": waiting[-1]["uploadedAt"].isoformat() if waiting else None})
+                        "latestId": latest["id"] if latest else None, "latestAt": latest["uploadedAt"].isoformat() if latest else None,
+                        "sentThisVisit": bool(latest and clocked_in and _is_new_since(latest, _to_pacific(clocked_in)))})
     return {"success": True, "targets": targets}
 
 
@@ -3174,6 +3208,7 @@ class ScreenshotUploadRequest(BaseModel):
     measureId: str
     imageBase64: str
     note: str = ""
+    role: str = Field(default="new", pattern="^(old|new)$")  # "old" only sets up a project with no pictures yet
 
 
 @app.post("/tracking/screenshots")
@@ -3205,17 +3240,23 @@ def uploadScreenshot(request_data: ScreenshotUploadRequest, user: dict = Depends
     existing = list(db.collection(WORK_SCREENSHOTS_COLLECTION).where(filter=FieldFilter("uid", "==", uid)).stream())
     if sum(1 for s in existing if s.to_dict()["uploadedAt"].astimezone(PACIFIC).date() == now.date()) >= SCREENSHOTS_MAX_PER_DAY:
         raise HTTPException(status_code=429, detail="That's a lot of screenshots for one day - try again tomorrow.")
+    #a project starts with an old and a new picture, then every picture after that is a new one
+    has_pictures = bool(_project_shots(db, request_data.projectId, request_data.measureId))
+    if request_data.role == "old" and has_pictures:
+        raise HTTPException(status_code=409, detail="Someone already sent the old picture - send your new one.")
+    if request_data.role == "new" and not has_pictures:
+        raise HTTPException(status_code=409, detail="This project needs its old picture first - reload the page.")
     shot_id = secrets.token_hex(12)
     path = f"work_screenshots/{uid}/{shot_id}"
     storage.bucket().blob(path).upload_from_string(image_bytes, content_type=mime_type)
     db.collection(WORK_SCREENSHOTS_COLLECTION).document(shot_id).set({
         "id": shot_id, "uid": uid, "besaName": data.get("besaName"), "projectId": request_data.projectId, "measureId": request_data.measureId,
-        "path": path, "mimeType": mime_type, "note": request_data.note.strip()[:SCREENSHOT_NOTE_MAX_LENGTH], "uploadedAt": now, "used": False,
+        "path": path, "mimeType": mime_type, "note": request_data.note.strip()[:SCREENSHOT_NOTE_MAX_LENGTH], "uploadedAt": now, "role": request_data.role,
     })
     return {"success": True, "id": shot_id, "uploadedAt": now.isoformat()}
 
 
-#Storage stays private, so images come through here: to whoever sent it, the kiosk (their clock-out screen) and leads
+#Storage stays private, so images come through here. Pictures belong to the project, so any member can see them, as can the kiosk.
 @app.get("/tracking/screenshot/{shot_id}")
 def getScreenshot(shot_id: str, user: dict = Depends(get_current_user)):
     db = firestore.client()
@@ -3223,10 +3264,9 @@ def getScreenshot(shot_id: str, user: dict = Depends(get_current_user)):
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Screenshot not found.")
     shot = doc.to_dict()
-    if shot["uid"] != user.get("uid"):
-        viewer = _users_ref(db).document(user.get("uid")).get().to_dict() or {}
-        if viewer.get("accountType") not in ("root", "besaLead"):
-            raise HTTPException(status_code=404, detail="Screenshot not found.")
+    viewer = _users_ref(db).document(user.get("uid")).get().to_dict() or {}
+    if viewer.get("accountType") not in ("root", "besa", "besaLead"):
+        raise HTTPException(status_code=404, detail="Screenshot not found.")
     return Response(content=storage.bucket().blob(shot["path"]).download_as_bytes(), media_type=shot.get("mimeType") or "image/jpeg")
 
 
@@ -3871,3 +3911,4 @@ def break_end_alerts(event: scheduler_fn.ScheduledEvent) -> None:
 )
 def grade_pending_work(event: scheduler_fn.ScheduledEvent) -> None:
     _grade_pending_days()
+    _prune_screenshots()

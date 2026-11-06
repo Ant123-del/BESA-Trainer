@@ -7,6 +7,7 @@ import { FaTrash } from "react-icons/fa"
 import Header from "../Components/Header"
 import { Loading } from "../Components/SectionEditor/Edit"
 import { db, createQuestionSet, deleteQuestionSet, getQuestionSets, saveQuestions } from "../Tools/firestore"
+import { logWorkEvent } from "../Tools/Fetch"
 import type { Question, QuestionSet, User } from "../Tools/types"
 
 //universal (any besa/besaLead, not admin-only) editor for the shared, collaboratively-edited question
@@ -47,6 +48,7 @@ export default function QuestionsEditor() {
         setCreating(true)
         try {
             const newSet = await createQuestionSet(uid, newSetTitle.trim())
+            logWorkEvent("question_set_created", newSet.title)
             setSets(prev => [...(prev || []), newSet])
             setSelectedId(newSet.id)
             setNewSetTitle("")
@@ -60,6 +62,7 @@ export default function QuestionsEditor() {
             return
         }
         await deleteQuestionSet(deletePopup.id)
+        logWorkEvent("question_set_deleted", deletePopup.title)
         setSets(prev => (prev || []).filter(s => s.id !== deletePopup.id))
         if (selectedId === deletePopup.id) {
             setSelectedId(null)
@@ -164,6 +167,10 @@ function SetEditor({set, onSaved}: {set: QuestionSet, onSaved: (questions: Quest
             //empty rows are just editor scratch space, not real questions - don't save them
             const cleaned = questions.filter(q => q.question.trim() || q.answer.trim())
             await saveQuestions(set.id, cleaned)
+            const before = new Map(set.questions.map(q => [q.id, q]))
+            const addedOrEdited = cleaned.filter(q => before.get(q.id)?.question !== q.question || before.get(q.id)?.answer !== q.answer).length
+            const removed = set.questions.filter(q => !cleaned.some(c => c.id === q.id)).length
+            logWorkEvent("question_set_saved", set.title, addedOrEdited + removed)
             setQuestions(cleaned)
             onSaved(cleaned)
         } finally {

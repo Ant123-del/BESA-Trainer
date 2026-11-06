@@ -3,6 +3,7 @@ import { v4 as uuid4 } from "uuid"
 import { useEffect, useState, type ChangeEvent, type Dispatch, type DragEvent, type FormEvent, type JSX, type SetStateAction } from "react"
 import { useSearchParams } from "react-router-dom"
 import { db, deleteDraftFloor, setCurrentFloorDraft } from "../../Tools/firestore"
+import { logWorkEvent } from "../../Tools/Fetch"
 import { collection, doc, getDocs, setDoc } from "firebase/firestore"
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage"
 import type { Floor, FloorCode, Script } from "../../Tools/types"
@@ -158,6 +159,7 @@ function UploadVideo({setUploaded, hasMoreVideos, setOtherVideos, setUploading}:
                 // for video uploading
                 uploadBytes(vidRef, vid).then(async (snapshot) => {
                     setUploaded(true)
+                    logWorkEvent("tour_draft_uploaded", draftName)
                     console.log("Uploaded Video")
                     // This is for database
                     if (f) {

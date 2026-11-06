@@ -132,6 +132,11 @@ export default function Header(): JSX.Element {
                             <FaClipboardList className="border-solid rounded-full border-2 border-be-light-gray w-5 h-5 fill-be-navy p-2 box-content"/>
                             <span>Assign Tasks</span>
                         </NavLink>)}
+                        {userData?.accountType === "besaLead" && (
+                        <NavLink to={"/work-review"} className={"flex justify-start items-center w-5/6 mx-auto my-3 gap-2 box-content p-3 rounded-full border-solid border-2 border-be-navy text-be-navy font-medium hover:bg-be-light-gray/40 bg-white transition-colors"}>
+                            <FaClipboardList className="border-solid rounded-full border-2 border-be-light-gray w-5 h-5 fill-be-navy p-2 box-content"/>
+                            <span>Work Review</span>
+                        </NavLink>)}
                     </div>
                 </div>
             // <button

@@ -12,19 +12,3 @@ export function activityColor(activity: string, order: string[]): string {
     const index = order.indexOf(activity)
     return index >= 0 && index < ACTIVITY_PALETTE.length ? ACTIVITY_PALETTE[index] : OTHER_COLOR
 }
-
-//white or near-black text, whichever clears contrast on a given fill (for labels inside colored segments)
-export function textOn(hex: string): string {
-    const n = parseInt(hex.slice(1), 16)
-    const channel = (v: number) => {
-        const c = v / 255
-        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
-    }
-    const lum = 0.2126 * channel((n >> 16) & 255) + 0.7152 * channel((n >> 8) & 255) + 0.0722 * channel(n & 255)
-    return (lum + 0.05) / 0.05 > 1.05 / (lum + 0.05) ? "#111827" : "#ffffff"
-}
-
-//starting split for the clock-out bar - every picked activity gets an equal share
-export function evenFractions(count: number): number[] {
-    return Array.from({length: count}, () => 1 / count)
-}

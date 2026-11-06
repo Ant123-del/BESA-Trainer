@@ -10,7 +10,7 @@ import { collection, doc, getDoc, getDocs, limit, query, updateDoc, where } from
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
 import { v4 as uuidv4 } from "uuid";
 import { db, removeCustomScript } from "../Tools/firestore";
-import { getScript } from "../Tools/Fetch";
+import { getScript, logWorkEvent } from "../Tools/Fetch";
 import { type CosScript, type User, type Floor, type Marker, type Progress, type PracticeTypes, type FloorCode, type Fill, type Script } from "../Tools/types";
 import { FaArrowRight, FaPause, FaLock } from "react-icons/fa";
 import { FaPlay } from "react-icons/fa";
@@ -1109,6 +1109,7 @@ export async function saveConfidence({confidence, section, floorId, practiceType
 
     const userD = doc(db, "training_data/data_root/users/" + userInfo.uid)
     await updateDoc(userD, {progress: newProgressList})
+    logWorkEvent("tour_checkpoint", `${practiceType}: ${section.markerName}`)
 }
 
 

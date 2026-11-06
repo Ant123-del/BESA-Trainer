@@ -6,6 +6,7 @@ import { MoonLoader } from "react-spinners"
 import { IoMdArrowRoundBack } from "react-icons/io"
 import { Loading } from "../Components/SectionEditor/Edit"
 import { db } from "../Tools/firestore"
+import { logWorkEvent } from "../Tools/Fetch"
 import { toDate } from "./Simulator"
 import { TextAnswerTest } from "../Components/QuestionTests/TextAnswerTest"
 import MicrophoneAnswerTest from "../Components/QuestionTests/MicrophoneAnswerTest"
@@ -37,6 +38,7 @@ export async function saveQuestionConfidence({confidence, questionId, setId, pra
 
     const userD = doc(db, "training_data/data_root/users/" + userInfo.uid)
     await updateDoc(userD, {questionProgress: newProgressList})
+    logWorkEvent("question_checkpoint", practiceType)
 }
 
 function confidenceColor(confidence: number | undefined): string {

@@ -12,8 +12,8 @@ import { mapFirebaseAuthError } from "../Tools/authErrors"
 import { fromDateKey, toDateKey } from "../Tools/dates"
 import type { User as CustomUser, DayHours } from "../Tools/types"
 import {
-    addDayNote, changeRootAdminPasscode, checkAutoClockout, checkTaskNoteItem, deleteDayNote, deleteRootAccount, getActivityTypes, getAllHours,
-    getAllPastHours, getPastHours, getRootAdminToken, rootAdminLogout, setMemberDayHours, type PastPeriod, type TaskNote, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeScheduleDay
+    addDayNote, changeRootAdminPasscode, checkAutoClockout, checkTaskNoteItem, deleteDayNote, deleteRootAccount, getMyWorkDays, getActivityTypes, getAllHours,
+    getAllPastHours, getPastHours, getRootAdminToken, rootAdminLogout, setMemberDayHours, type PastPeriod, type TaskNote, type WorkDay, type ApiDayHours, type ApiOpenSession, type MemberHours, type OfficeScheduleDay
 } from "../Tools/Fetch"
 import { type OpenSession, type WeeklyHoursEntry } from "../Components/WeeklyHoursTable"
 import HoursCarousel from "../Components/HoursCarousel"
@@ -25,6 +25,32 @@ import HoursRequestPanel from "../Components/HoursRequestPanel"
 import HoursRequestsReview from "../Components/HoursRequestsReview"
 import RootHoursEditor from "../Components/RootHoursEditor"
 import TaskNoteCard from "../Components/TaskNoteCard"
+import WorkDayCard from "../Components/WorkDayCard"
+import WorkAccounts from "../Components/WorkAccounts"
+
+//each day's AI grade and what they said they did - a B or C asks for an explanation here if it wasn't given at the kiosk
+function MyWorkDays(): JSX.Element {
+    const [days, setDays] = useState<WorkDay[] | null>(null)
+
+    useEffect(() => {
+        getMyWorkDays().then(result => setDays(result.success ? result.days : []))
+    }, [])
+
+    return (
+        <section className="bg-gray-800 rounded-2xl p-3 sm:p-6">
+            <h2 className="text-2xl tracking-wide mb-4">My Work</h2>
+            {days === null ? <div className="flex justify-center py-4"><MoonLoader color="white" size={24}/></div>
+                : days.length === 0 ? <p className="text-sm text-gray-400 italic">Your days will show up here after you clock out.</p>
+                :
+                <div className="flex flex-col gap-3">
+                    {days.map(day => (
+                        <WorkDayCard key={day.id} day={day} owner onChange={(next) => setDays(all => (all || []).map(d => d.id === next.id ? next : d))}/>
+                    ))}
+                </div>
+            }
+        </section>
+    )
+}
 
 type RawDayHours = DayHours | ApiDayHours
 
@@ -242,6 +268,10 @@ export default function Profile(): JSX.Element {
                                 className="p-2 px-5 rounded-full bg-blue-800 hover:bg-blue-900 text-sm">
                                 Assign Tasks
                             </button>
+                            <button onClick={() => navigate("/work-review")}
+                                className="p-2 px-5 rounded-full bg-blue-800 hover:bg-blue-900 text-sm">
+                                Work Review
+                            </button>
                             <button onClick={() => void handleAdminLogout()}
                                 className="p-2 px-5 rounded-full border-solid border-2 border-gray-400 hover:bg-gray-800 text-sm">
                                 Lock Admin
@@ -341,6 +371,13 @@ export default function Profile(): JSX.Element {
                                         : userData.lastCheckedIn ? {clockIn: toDate(userData.lastCheckedIn), activities: userData.lastCheckedInActivities || [], notes: toNotes(userData.lastCheckedInNotes)}
                                         : null}/>
                             </section>
+                        }
+
+                        {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&
+                            <>
+                                <MyWorkDays/>
+                                <WorkAccounts/>
+                            </>
                         }
 
                         {(userData?.accountType === "besa" || userData?.accountType === "besaLead") &&

@@ -7,13 +7,14 @@ import BreakCriteria from "../Components/BreakCriteria"
 import { formatDuration, useLiveBreak } from "../Tools/breaks"
 import { Loading } from "../Components/SectionEditor/Edit"
 import SessionNotes from "../Components/SessionNotes"
-import ActivitySplitBar from "../Components/ActivitySplitBar"
+import WorkReportForm, { emptyEntries, toWorkReport, withDefaultConfirmed, type WorkEntries } from "../Components/WorkReportForm"
+import WorkGradeResult from "../Components/WorkGradeResult"
+import WorkModeCards from "../Components/WorkModeCards"
 import TaskNoteCard, { TaskNotesGroup } from "../Components/TaskNoteCard"
-import { evenFractions } from "../Tools/activityColors"
 import { FaPlus } from "react-icons/fa"
 import {
-    addActivityType, addSessionNote, canceledTour, checkTaskNoteItem, clockIn, clockOut, clockOutPreview, endBreak, getActivityTypes, getClockInOptions, getCurrentSessions,
-    removeActivityType, startBreak, type KioskSession, type TaskNote
+    addActivityType, addSessionNote, canceledTour, checkTaskNoteItem, clockIn, clockOut, clockOutPreview, collectWork, endBreak, getActivityTypes, getClockInOptions, getCurrentSessions,
+    removeActivityType, saveClockInBaseline, startBreak, type KioskSession, type TaskNote, type WorkMode, type WorkProject
 } from "../Tools/Fetch"
 
 const NOTE_MAX_LENGTH = 500 //same cap as the backend's SESSION_NOTE_MAX_LENGTH
@@ -157,6 +158,7 @@ function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
         const result = await clockIn(studentId.trim(), selected)
         if (result?.success) {
             setMessage({text: `Clocked in ${result.besaName || ""}.`, error: false})
+            saveClockInBaseline(studentId.trim())
             setStudentId("")
             setLookup(null)
             latestId.current = ""
@@ -228,9 +230,10 @@ function ClockInPanel({onClockedIn}: {onClockedIn: () => void}) {
 
 type ClockOutPreview = {besaName: string, intendedActivities: string[], elapsedMinutes: number, creditedHours: number, clockedInAt: Date, leaveEarlySeconds: number}
 
-//two steps: School Id -> Next, then "what did you actually work on?" (pick activities, split the visit
-//between them on the timeline bar) -> Confirm Clock Out. A Current Sessions row's "Leave Early" puts it in
-//leave-early mode: same steps, but they're credited their unused break time as if they'd stayed.
+//School Id -> Next, then a popup: "what did you actually work on?" and which work mode it was -> Next fetches what got done on those projects ->
+//they confirm it, fill in the rest and describe their day -> Confirm Clock Out -> their grade for the day. They're
+//clocked out as soon as they confirm; the grade comes after, so waiting on it can't hold them up. A Current
+//Sessions row's "Leave Early" puts it in leave-early mode: same steps, but they're credited their unused break time.
 function ClockOutPanel({sessions, activityTypes, onChanged}: {
     sessions: KioskSession[] | null, activityTypes: string[] | null, onChanged: () => void
 }) {
@@ -239,7 +242,11 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
     const [message, setMessage] = useState<{text: string, error: boolean} | null>(null)
     const [preview, setPreview] = useState<ClockOutPreview | null>(null)
     const [worked, setWorked] = useState<string[]>([])
-    const [fractions, setFractions] = useState<number[]>([])
+    const [report, setReport] = useState<{projects: WorkProject[], untracked: string[]} | null>(null)
+    const [entries, setEntries] = useState<WorkEntries>(emptyEntries)
+    const [workMode, setWorkMode] = useState<WorkMode | null>(null)
+    const [officePercent, setOfficePercent] = useState(50)
+    const [finished, setFinished] = useState<{workDayId: string | null, besaName: string} | null>(null)
     const [leaveEarlyFor, setLeaveEarlyFor] = useState<KioskSession | null>(null)
     const panelRef = useRef<HTMLElement>(null)
     const idInputRef = useRef<HTMLInputElement>(null)
@@ -264,15 +271,14 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
         return () => { document.body.style.overflow = previous }
     }, [preview])
 
-    function setWorkedOn(next: string[]) {
-        setWorked(next)
-        setFractions(evenFractions(next.length))
-    }
-
     function reset() {
         setPreview(null)
         setWorked([])
-        setFractions([])
+        setReport(null)
+        setEntries(emptyEntries())
+        setWorkMode(null)
+        setOfficePercent(50)
+        setFinished(null)
     }
 
     async function handleNext() {
@@ -291,29 +297,50 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                 clockedInAt: result.clockedInAt ? new Date(result.clockedInAt) : new Date(Date.now() - (result.elapsedMinutes || 0) * 60_000),
             })
             //start from what they said they'd do - easy to change
-            setWorkedOn(result.intendedActivities || [])
+            setWorked(result.intendedActivities || [])
         } else {
             setMessage({text: result.detail || "Something went wrong.", error: true})
         }
     }
 
-    async function handleConfirm() {
-        if (!preview || worked.length === 0) return
+    //first time through and every Re-check
+    async function handleCollect() {
+        if (workMode === "out") {
+            setReport({projects: [], untracked: []})
+            return
+        }
         setBusy(true)
         setMessage(null)
-        const result = await clockOut(studentId.trim(), worked.map((activity, i) => ({activity, fraction: fractions[i]})), !!leaveEarlyFor)
+        const result = await collectWork(studentId.trim(), worked)
+        setBusy(false)
+        if (result.success) {
+            setReport({projects: result.projects, untracked: result.untracked})
+            setEntries(current => withDefaultConfirmed(current, result.projects))
+        } else {
+            setMessage({text: result.detail, error: true})
+        }
+    }
+
+    async function handleConfirm() {
+        if (!preview || !report || !workMode || worked.length === 0) return
+        setBusy(true)
+        setMessage(null)
+        const shares = worked.map(activity => ({activity, fraction: 1 / worked.length}))
+        const result = await clockOut(studentId.trim(), shares, !!leaveEarlyFor, toWorkReport(entries, report.projects, workMode, officePercent))
         setBusy(false)
         if (result?.success) {
             const leftEarly = result.leftEarlySeconds ? ` (left early with ${formatDuration(result.leftEarlySeconds)} of unused break)` : ""
             setMessage({text: `Clocked out ${result.besaName || ""} - ${result.hoursThisSession} hour(s) this session${leftEarly}.`, error: false})
             setStudentId("")
             setLeaveEarlyFor(null)
-            reset()
+            setFinished({workDayId: result.workDayId || null, besaName: result.besaName || ""})
             onChanged()
         } else {
             setMessage({text: result?.detail || "Something went wrong.", error: true})
         }
     }
+
+    const needsDescription = !!report && report.projects.length > 0 && !entries.description.trim()
 
     return (
         <section ref={panelRef} className="bg-be-navy rounded-2xl p-6 scroll-mt-24 border-t-4 border-be-orange shadow-md">
@@ -351,54 +378,82 @@ function ClockOutPanel({sessions, activityTypes, onChanged}: {
                 Next
             </button>
 
-            {/* step 2 is a popup over a dark backdrop, not an in-place swap - in place it looked just like the School
-                Id step, so people kept pressing straight through it. Only Back or Confirm closes it. */}
+            {/* the steps after the School Id are a popup over a dark backdrop, not an in-place swap - in place it looked just
+                like the School Id step, so people kept pressing straight through it. Only the buttons close it. */}
             {preview &&
                 <div role="dialog" aria-modal="true" aria-labelledby="worked-on-title"
-                    onKeyDown={(e) => { if (e.key === "Escape" && !busy) { reset(); setMessage(null) } }}
+                    onKeyDown={(e) => { if (e.key === "Escape" && !busy && !finished) { reset(); setMessage(null) } }}
                     className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6">
-                    {/* the body scrolls on its own and the Back/Confirm row stays pinned to the bottom, so Confirm is
-                        always on screen no matter how many activities are picked */}
+                    {/* the body scrolls on its own and the button row stays pinned to the bottom, so Confirm is
+                        always on screen however much there is to go through */}
                     <div className="bg-gray-900 border-2 border-amber-500 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92dvh] flex flex-col overflow-hidden">
                         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-5 sm:p-7 pb-3 sm:pb-3">
-                            <p className="text-center text-sm text-gray-300 mb-2">
-                                {leaveEarlyFor ? "Leave Early" : "Clock Out"} · <span className="font-semibold text-white">{preview.besaName}</span> · in for {Math.round(preview.elapsedMinutes)} min
-                                {preview.leaveEarlySeconds > 0 &&
-                                    <span className="text-emerald-300"> + {Math.round(preview.leaveEarlySeconds / 60)} min unused break · credited {preview.creditedHours} h</span>
-                                }
-                            </p>
-                            <h3 id="worked-on-title" className="text-2xl sm:text-3xl font-semibold text-amber-400 text-center mb-2">
-                                What did you actually work on?
-                            </h3>
-                            <p className="text-sm text-gray-300 text-center mb-5">
-                                Pick everything you worked on, then drag the dividers so the bar matches how your time was split.
-                            </p>
-                            <div className="flex flex-wrap gap-2 justify-center mb-5">
-                                {choices.map(name => (
-                                    <ActivityChip key={name} label={name} selected={worked.includes(name)}
-                                        onClick={() => setWorkedOn(worked.includes(name) ? worked.filter(a => a !== name) : [...worked, name])}/>
-                                ))}
-                            </div>
-                            {worked.length === 0 ?
-                                <p className="text-sm text-gray-400 text-center mb-2">Pick at least one activity you actually worked on.</p>
+                            {finished ?
+                                <WorkGradeResult workDayId={workMode === "out" ? null : finished.workDayId} besaName={finished.besaName} outMode={workMode === "out"}/>
                                 :
-                                <div className="mb-2">
-                                    <ActivitySplitBar activities={worked} fractions={fractions} onChange={setFractions}
-                                        totalMinutes={preview.elapsedMinutes} colorOrder={choices} startTime={preview.clockedInAt}/>
-                                </div>
+                                <>
+                                    <p className="text-center text-sm text-gray-300 mb-2">
+                                        {leaveEarlyFor ? "Leave Early" : "Clock Out"} · <span className="font-semibold text-white">{preview.besaName}</span> · in for {Math.round(preview.elapsedMinutes)} min
+                                        {preview.leaveEarlySeconds > 0 &&
+                                            <span className="text-emerald-300"> + {Math.round(preview.leaveEarlySeconds / 60)} min unused break · credited {preview.creditedHours} h</span>
+                                        }
+                                    </p>
+                                    <h3 id="worked-on-title" className="text-2xl sm:text-3xl font-semibold text-amber-400 text-center mb-2">
+                                        {report ? "Does this look right?" : "What did you actually work on?"}
+                                    </h3>
+                                    {report ?
+                                        <>
+                                            <p className="text-sm text-gray-300 text-center mb-4">
+                                                {workMode === "out" ? "Out mode, so nothing is measured or graded. Add a note if you'd like."
+                                                    : "This is what we found for the time you were clocked in. Untick anything that wasn't you and fill in the rest."}
+                                            </p>
+                                            <WorkReportForm projects={report.projects} untracked={report.untracked} entries={entries} setEntries={setEntries}
+                                                rechecking={busy} onRecheck={() => void handleCollect()}/>
+                                        </>
+                                        :
+                                        <>
+                                            <p className="text-sm text-gray-300 text-center mb-5">Pick everything you worked on.</p>
+                                            <div className="flex flex-wrap gap-2 justify-center mb-5">
+                                                {choices.map(name => (
+                                                    <ActivityChip key={name} label={name} selected={worked.includes(name)}
+                                                        onClick={() => setWorked(worked.includes(name) ? worked.filter(a => a !== name) : [...worked, name])}/>
+                                                ))}
+                                            </div>
+                                            <WorkModeCards mode={workMode} onMode={setWorkMode} officePercent={officePercent} onOfficePercent={setOfficePercent}
+                                                totalMinutes={preview.elapsedMinutes}/>
+                                            {busy && <p className="text-sm text-gray-300 text-center mt-3">Checking what got done...</p>}
+                                        </>
+                                    }
+                                    {message && <p className={"text-sm text-center mt-2 " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
+                                </>
                             }
-                            {message && <p className={"text-sm text-center " + (message.error ? "text-red-400" : "text-green-400")}>{message.text}</p>}
                         </div>
                         <div className="shrink-0 flex gap-2 px-5 sm:px-7 py-4 border-t border-gray-700 bg-gray-900">
-                            <button onClick={() => { reset(); setMessage(null) }} disabled={busy}
-                                className="flex-1 py-3 rounded-full border-solid border-2 border-gray-400 hover:bg-gray-700 disabled:opacity-40">
-                                Back
-                            </button>
-                            <button onClick={() => void handleConfirm()} disabled={busy || worked.length === 0}
-                                className="flex-[2] py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-                                {busy && <MoonLoader color="white" size={16}/>}
-                                {leaveEarlyFor ? "Confirm Leave Early" : "Confirm Clock Out"}
-                            </button>
+                            {finished ?
+                                <button onClick={() => { reset() }} className="flex-1 py-3 rounded-full bg-blue-800 hover:bg-blue-900">
+                                    Done
+                                </button>
+                                :
+                                <>
+                                    <button onClick={() => { if (report) { setReport(null) } else { reset() } setMessage(null) }} disabled={busy}
+                                        className="flex-1 py-3 rounded-full border-solid border-2 border-gray-400 hover:bg-gray-700 disabled:opacity-40">
+                                        Back
+                                    </button>
+                                    {report ?
+                                        <button onClick={() => void handleConfirm()} disabled={busy || worked.length === 0 || needsDescription}
+                                            className="flex-[2] py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                                            {busy && <MoonLoader color="white" size={16}/>}
+                                            {needsDescription ? "Describe your day to continue" : leaveEarlyFor ? "Confirm Leave Early" : "Confirm Clock Out"}
+                                        </button>
+                                        :
+                                        <button onClick={() => void handleCollect()} disabled={busy || worked.length === 0 || !workMode}
+                                            className="flex-[2] py-3 rounded-full bg-blue-800 hover:bg-blue-900 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                                            {busy && <MoonLoader color="white" size={16}/>}
+                                            {workMode ? "Next" : "Pick a mode to continue"}
+                                        </button>
+                                    }
+                                </>
+                            }
                         </div>
                     </div>
                 </div>

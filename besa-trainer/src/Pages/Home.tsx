@@ -4,6 +4,7 @@ import { onAuthStateChanged, type User as FirebaseUser } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import Header from "../Components/Header";
 import RootDashboard from "./RootDashboard";
+import ScreenshotCard, { SlugworksLink } from "../Components/ScreenshotCard";
 import { getFirebaseAuth } from "../Tools/firebase";
 import { db, getQuestionSets } from "../Tools/firestore";
 import type { User as CustomUser, QuestionSet } from "../Tools/types";
@@ -281,6 +282,8 @@ function BesaDashboard({brandName}: {brandName: string}) {
                     </div>
                 </div>
                 <div className="w-11/12 md:w-4/6 mx-auto md:mx-0 mt-6 md:mt-16">
+                    <ScreenshotCard/>
+                    <SlugworksLink/>
                     <div id="general-tour" className="flex flex-col sm:flex-row justify-between items-start gap-3 scroll-mt-24 mb-4">
                         <div>
                             <h1 className="text-2xl sm:text-3xl font-bold tracking-wider text-white">

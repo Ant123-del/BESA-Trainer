@@ -41,7 +41,7 @@ export type HoursSession = {
     breakSeconds?: number // break time taken during this visit
     canceledTour?: boolean // logged out via Canceled Tour - the whole day was set to 30 minutes
     notes?: {text: string, at: Date | null}[] // notes/comments added from the kiosk during this visit
-    workedOn?: {activity: string, fraction: number, minutes: number, hours: number}[] // actual split, chosen at clock-out
+    workedOn?: {activity: string, fraction: number, minutes: number, hours: number}[] // the activities worked on; an even split since clock-out stopped asking for one
     leftEarlySeconds?: number // unused break they left early with (Leave Early) - credited as time in
     requested?: boolean // added by an approved hours request (Profile's Request Hours), not clocked at the kiosk
     requestReason?: string // why it wasn't clocked - a HOURS_REQUEST_REASONS key on the doc, its label from the backend

@@ -302,7 +302,7 @@ export async function clockOutPreview(studentId: string, leaveEarly = false) {
     }>
 }
 
-export async function clockOut(studentId: string, actualActivities?: WorkedOnShare[], leaveEarly = false): Promise<{success: boolean, besaName?: string, hoursThisSession?: number, leftEarlySeconds?: number, detail?: string} | void> {
+export async function clockOut(studentId: string, actualActivities?: WorkedOnShare[], leaveEarly = false, report?: WorkReportInput): Promise<{success: boolean, besaName?: string, hoursThisSession?: number, leftEarlySeconds?: number, workDayId?: string | null, detail?: string} | void> {
     try {
         const auth = getAuth()
         const user = auth.currentUser
@@ -317,9 +317,9 @@ export async function clockOut(studentId: string, actualActivities?: WorkedOnSha
                 "Content-Type": "application/json",
                 "Authorization": `Bearer ${idToken}`
             },
-            body: JSON.stringify({studentId, actualActivities, leaveEarly})
+            body: JSON.stringify({studentId, actualActivities, leaveEarly, report})
         })
-        const data = await response.json() as {success: boolean, besaName?: string, hoursThisSession?: number, leftEarlySeconds?: number, detail?: string}
+        const data = await response.json() as {success: boolean, besaName?: string, hoursThisSession?: number, leftEarlySeconds?: number, workDayId?: string | null, detail?: string}
         if (!response.ok) {
             return {success: false, detail: data.detail || `Request failed (${response.status})`}
         }
@@ -923,7 +923,7 @@ export type ActivityAnalytics = {
     colorOrder: string[] // the full shared activity-type order - colors key off this so they match the kiosk
     days: {date: string, hours: Record<string, number>}[]
     totals: Record<string, number>
-    estimatedHours: number // from auto clock-outs, which split evenly across the intended activities
+    estimatedHours: number // split evenly across a visit's activities, rather than chosen
     visits: number
 }
 
@@ -975,4 +975,213 @@ export async function getCurrentActivity(): Promise<CurrentActivity | {success: 
         console.error(e)
         return {success: false, detail: "Couldn't reach the server."}
     }
+}
+
+
+// ---- Work tracking: what got done, measured per project at clock-out (see besa-api's Work tracking section) ----
+export type WorkItem = {
+    id: string
+    label: string
+    detail?: string
+    mine?: boolean // starts ticked on the confirm screen
+    confirmed?: boolean
+    category?: string
+    change?: string
+    fields?: {field: string, before: string | null, after: string | null, private: boolean}[]
+}
+
+export type WorkMeasure = {
+    measureId: string
+    type: string
+    label: string
+    unit: string
+    status: "ok" | "none" | "unavailable" | "missing" | "manual"
+    summary: string
+    metrics: Record<string, number>
+    items: WorkItem[]
+    confirmable: boolean
+    quantity?: number
+    checked?: boolean
+    confirmedCount?: number
+    oldScreenshot?: string | null
+    newScreenshot?: string | null
+    screenshotNote?: string
+}
+
+export type WorkProject = {projectId: string, name: string, description?: string, measures: WorkMeasure[]}
+
+export type WorkMode = "office" | "hybrid" | "out"
+
+export type WorkReportInput = {
+    description: string
+    workMode: WorkMode
+    officePercent?: number // hybrid only
+    projects: {projectId: string, measures: {measureId: string, quantity?: number, checked?: boolean, confirmedItems?: string[]}[]}[]
+}
+
+export type WorkGrade = "A" | "B" | "C"
+
+export type WorkDay = {
+    id: string
+    uid: string
+    besaName: string
+    date: string
+    grade: WorkGrade | null
+    aiGrade: WorkGrade | null
+    gradeStatus: "pending" | "graded" | "failed" | "none"
+    gradeReason: string
+    projectGrades: {project: string, grade: WorkGrade, reason: string, differences: string}[]
+    override: {grade: WorkGrade, note: string} | null
+    explanation: string
+    needsExplanation: boolean
+    description: string
+    hours: number
+    visits: {clockIn: string, clockOut: string, hours: number, description: string, untracked: string[], workMode: WorkMode, officePercent: number, projects: WorkProject[]}[]
+}
+
+export type TrackingMeasureConfig = {
+    id?: string
+    type: string
+    label: string
+    unit?: string
+    lookFor?: string
+    repos?: string[]
+    fileIds?: string[]
+    url?: string
+    headerName?: string
+    headerValue?: string
+    hasHeaderValue?: boolean
+}
+
+export type TrackingProject = {id: string, name: string, description: string, activities: string[], measures: TrackingMeasureConfig[]}
+
+export type CourseItem = {id: string, title: string, kind: "page" | "quiz" | "assignment", points?: number, indent: number, required: boolean}
+export type CourseModule = {id: string, title: string, prerequisites: string[], items: CourseItem[]}
+export type Course = {id: string, title: string, modules: CourseModule[]}
+
+export type ScreenshotTarget = {projectId: string, projectName: string, measureId: string, label: string, waitingAt: string | null}
+
+type TrackingResult<T> = ({success: true} & T) | {success: false, detail: string}
+
+async function trackingGet<T>(path: string): Promise<TrackingResult<T>> {
+    try {
+        const user = getAuth().currentUser
+        if (!user) {
+            return {success: false, detail: "Not logged in."}
+        }
+        const idToken = await user.getIdToken()
+        const response = await fetch(url + path, {headers: withRootAdminToken({"Authorization": `Bearer ${idToken}`})})
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+            return {success: false, detail: typeof data.detail === "string" ? data.detail : `Request failed (${response.status})`}
+        }
+        return data
+    } catch (e) {
+        console.error(e)
+        return {success: false, detail: "Couldn't reach the server."}
+    }
+}
+
+function trackingPost<T>(path: string, body: unknown): Promise<TrackingResult<T>> {
+    return kioskPost(path, body) as Promise<TrackingResult<T>>
+}
+
+//fire and forget - copies the sheets, slides and booking data right after a clock-in, for clock-out to compare against
+export function saveClockInBaseline(studentId: string) {
+    void trackingPost("tracking/baseline", {studentId})
+}
+
+export function collectWork(studentId: string, activities: string[]) {
+    return trackingPost<{projects: WorkProject[], untracked: string[]}>("tracking/collect", {studentId, activities})
+}
+
+export function gradeWorkDay(workDayId: string) {
+    return trackingPost<{day: WorkDay}>("tracking/grade", {workDayId})
+}
+
+export function explainGrade(workDayId: string, text: string, atKiosk = false) {
+    return trackingPost<{day: WorkDay}>(atKiosk ? "tracking/explain/kiosk" : "tracking/explain", {workDayId, text})
+}
+
+export function getMyWorkDays() {
+    return trackingGet<{days: WorkDay[]}>("tracking/my-days")
+}
+
+//what the trainer pages report as it happens - a failed one just goes uncounted, so it never gets in the way of practice
+export function logWorkEvent(kind: string, detail = "", count = 1) {
+    if (getAuth().currentUser) void trackingPost("tracking/event", {kind, detail, count})
+}
+
+export function getScreenshotTargets() {
+    return trackingGet<{targets: ScreenshotTarget[]}>("tracking/screenshot-targets")
+}
+
+export async function uploadScreenshot(projectId: string, measureId: string, image: Blob, note: string) {
+    return trackingPost<{id: string, uploadedAt: string}>("tracking/screenshots", {
+        projectId, measureId, note, imageBase64: await blobToBase64(image),
+    })
+}
+
+//screenshots aren't public, so the page gets them with its token and shows a local copy
+export async function getScreenshotUrl(id: string): Promise<string | null> {
+    try {
+        const user = getAuth().currentUser
+        if (!user) return null
+        const response = await fetch(url + "tracking/screenshot/" + id, {headers: {"Authorization": `Bearer ${await user.getIdToken()}`}})
+        return response.ok ? URL.createObjectURL(await response.blob()) : null
+    } catch (e) {
+        console.error(e)
+        return null
+    }
+}
+
+export function getCourse() {
+    return trackingGet<{course: Course, done: Record<string, string>}>("tracking/course")
+}
+
+export function checkCourseItems(itemIds: string[], done: boolean) {
+    return trackingPost<{done: Record<string, string>}>("tracking/course/check", {itemIds, done})
+}
+
+export function getWorkIdentity() {
+    return trackingGet<{emails: string[], githubUsername: string}>("tracking/identity")
+}
+
+export function setWorkIdentity(emails: string[], githubUsername: string) {
+    return trackingPost<{emails: string[], githubUsername: string}>("tracking/identity", {emails, githubUsername})
+}
+
+export function getWorkReview(days = 14) {
+    return trackingGet<{days: WorkDay[]}>(`tracking/review?days=${days}`)
+}
+
+export function overrideGrade(workDayId: string, grade: WorkGrade | null, note: string) {
+    return trackingPost<{day: WorkDay}>("tracking/override", {workDayId, grade, note})
+}
+
+export function regradeDay(workDayId: string) {
+    return trackingPost<{day: WorkDay}>("tracking/regrade", {workDayId})
+}
+
+export function getCertifications() {
+    return trackingGet<{members: {uid: string, besaName: string, certified: string[], finished: number, total: number}[], modules: string[]}>("tracking/certifications")
+}
+
+export function getTrackingProjects() {
+    return trackingGet<{
+        projects: TrackingProject[], calendarIds: string[], activityTypes: string[],
+        connections: {google: boolean, github: boolean, ai: boolean}
+    }>("tracking/projects")
+}
+
+export function saveTrackingProject(project: Omit<TrackingProject, "id"> & {id?: string}) {
+    return trackingPost<{project: TrackingProject}>("tracking/projects/save", project)
+}
+
+export function deleteTrackingProject(id: string) {
+    return trackingPost<object>("tracking/projects/delete", {id})
+}
+
+export function saveTrackingCalendars(calendarIds: string[]) {
+    return trackingPost<{calendarIds: string[]}>("tracking/settings", {calendarIds})
 }

@@ -15,12 +15,12 @@ service cloud.firestore {
     }
 
     // Fields only the backend may change: account tier/admin (root is hand-made and gates the
-    // root admin login; admin is granted via /set-admin-status), roster identity, and kiosk clock/hours/breaks.
+    // root admin login; admin is granted via /set-admin-status), roster identity, kiosk clock/hours/breaks, and the accounts work gets matched to.
     function protectedUserFields() {
       return ['uid', 'accountType', 'admin', 'besaName', 'studentId',
               'biWeeklyHours', 'lastCheckedIn', 'lastCheckedInActivities',
               'breakUsedSeconds', 'breakCarriedSeconds', 'breakStartedAt', 'breakEndsAt',
-              'lastCheckedInNotes', 'breakEndNotified'];
+              'lastCheckedInNotes', 'breakEndNotified', 'trackingEmails', 'githubUsername'];
     }
 
     match /training_data/data_root/users/{userId} {

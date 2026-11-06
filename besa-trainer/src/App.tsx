@@ -18,6 +18,9 @@ import ManageAdmins from './Pages/ManageAdmins'
 import AssignTasks from './Pages/AssignTasks'
 import RequireAccess from './Components/RequireAccess'
 import RequestHours from './Pages/RequestHours'
+import SlugworksCourse from './Pages/SlugworksCourse'
+import WorkReview from './Pages/WorkReview'
+import ManageProjects from './Pages/ManageProjects'
 
 //Router for naviation
 const Player = createPlayer({features: videoFeatures})
@@ -30,6 +33,9 @@ const router = createBrowserRouter(createRoutesFromChildren(
     <Route path='/manage-admins' element={<RequireAccess level="besaLead"><ManageAdmins/></RequireAccess>}/>,
     <Route path='/request-hours' element={<RequireAccess level="root"><RequestHours/></RequireAccess>}/>,
     <Route path='/assign-tasks' element={<RequireAccess level="leadOrRootAdmin"><AssignTasks/></RequireAccess>}/>,
+    <Route path='/work-review' element={<RequireAccess level="leadOrRootAdmin"><WorkReview/></RequireAccess>}/>,
+    <Route path='/manage-projects' element={<RequireAccess level="leadOrRootAdmin"><ManageProjects/></RequireAccess>}/>,
+    <Route path='/slugworks' element={<RequireAccess level="besa"><SlugworksCourse/></RequireAccess>}/>,
     <Route path='/section-editor' element={<RequireAccess level="admin"><SectionEditor/></RequireAccess>}>
       <Route path='getting-started' element={<GettingStarted/>}/>
       <Route path='edit' element={<Edit/>}/>

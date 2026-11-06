@@ -145,8 +145,8 @@ export default function ActivityAnalytics(): JSX.Element {
 
                     {data.estimatedHours > 0 &&
                         <p className="text-xs text-gray-500 mt-3">
-                            {fmtHours(data.estimatedHours)} of these hours are estimated - they come from automatic clock-outs (someone
-                            forgot to clock out), which split evenly across the activities they clocked in for.
+                            {fmtHours(data.estimatedHours)} of these hours are estimated - clock-outs measure tasks now instead of asking for
+                            a time split, so a visit's time is split evenly across the activities it covered.
                         </p>
                     }
                 </>

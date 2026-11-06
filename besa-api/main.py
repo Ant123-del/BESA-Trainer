@@ -1,10 +1,15 @@
 from fastapi import FastAPI, Depends, HTTPException, Header, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from typing import Literal
 import time
 import math
+import json
+import re
+from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
 from datetime import datetime, timedelta, date as date_cls
 from zoneinfo import ZoneInfo
 import os
@@ -23,6 +28,13 @@ from firebase_admin import credentials, storage, auth, firestore
 from google.api_core.exceptions import Conflict
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.oauth2 import service_account as gcp_service_account
+
+from tracking_catalog import DEFAULT_PROJECTS, MEASURE_TYPES, SLUGWORKS_COURSE, course_items
+from tracking_sources import (
+    BOOKING_COLLECTIONS, SourceUnavailable, booking_changes, calendar_changes, clean_google_file_id, clean_repo, custom_api_call, describe_changes,
+    diff_sheet, diff_slides, github_changes, github_connected, gmail_sent, google_connected, google_file_result, grade_day, measure_result, sheet_snapshot,
+    slides_snapshot, strip_private_booking_fields,
+)
 
 from dotenv import load_dotenv
 #named .env.local (not .env) on purpose - Firebase's deploy tooling auto-loads a plain ".env" file in
@@ -186,19 +198,23 @@ def _decode_firestore_value(value: dict):
     return None
 
 
-def _fetch_live_roster() -> list:
-    base = f"https://firestore.googleapis.com/v1/projects/{BESA_APP_PROJECT_ID}/databases/(default)/documents/{BESA_ROSTER_COLLECTION}"
+#every doc in one of besa-app's publicly readable collections, in Firestore REST's raw shape
+def _read_besa_app_collection(collection: str) -> list:
+    base = f"https://firestore.googleapis.com/v1/projects/{BESA_APP_PROJECT_ID}/databases/(default)/documents/{collection}"
     docs, page_token = [], None
     while True:
         params = {"pageSize": 300, **({"pageToken": page_token} if page_token else {})}
         response = requests.get(base, params=params, timeout=10)
         response.raise_for_status()
         body = response.json()
-        for d in body.get("documents") or []:
-            docs.append({k: _decode_firestore_value(v) for k, v in (d.get("fields") or {}).items()})
+        docs += body.get("documents") or []
         page_token = body.get("nextPageToken")
         if not page_token:
             return docs
+
+
+def _fetch_live_roster() -> list:
+    return [{k: _decode_firestore_value(v) for k, v in (d.get("fields") or {}).items()} for d in _read_besa_app_collection(BESA_ROSTER_COLLECTION)]
 
 
 #the roster, live from besa-app (cached per instance for ROSTER_TTL_SECONDS). Each doc is besa-app's own
@@ -1190,6 +1206,31 @@ def clockOutPreview(request_data: ClockOutPreviewRequest, root_user: dict = Depe
     }
 
 
+#what got done on a visit, sent with /clock-out - see Work tracking below
+WORK_DESCRIPTION_MAX_LENGTH = 1000
+
+
+class ReportMeasure(BaseModel):
+    measureId: str
+    quantity: float | None = Field(default=None, ge=0, le=100000)
+    checked: bool | None = None
+    confirmedItems: list[str] | None = None
+
+
+class ReportProject(BaseModel):
+    projectId: str
+    measures: list[ReportMeasure] = []
+
+
+#a lot of the job can't be measured (tours, events), so every clock-out says how much of the visit was office work:
+#office is all of it, out is none of it, and hybrid gives a percentage. Only the office part is graded.
+class WorkReport(BaseModel):
+    description: str = Field(default="", max_length=WORK_DESCRIPTION_MAX_LENGTH)
+    projects: list[ReportProject] = []
+    workMode: Literal["office", "hybrid", "out"] = "office"
+    officePercent: int | None = Field(default=None, ge=1, le=99)  # hybrid only
+
+
 class ClockOutRequest(BaseModel):
     studentId: str
     #what they actually worked on and how the visit splits between them - an even split of the intended
@@ -1197,6 +1238,8 @@ class ClockOutRequest(BaseModel):
     actualActivities: list[WorkedOnShare] | None = None
     #leaving early with today's unused break time (see _leave_early_seconds)
     leaveEarly: bool = False
+    #left out by older kiosk builds
+    report: WorkReport | None = None
 
 
 @app.post("/clock-out")
@@ -1214,6 +1257,15 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
     checked_in_at = _to_pacific(last_checked_in)
     activities = data.get("lastCheckedInActivities") or []
     shares = _validate_shares(request_data.actualActivities) if request_data.actualActivities is not None else _even_shares(activities)
+    report = request_data.report
+    if report is not None:
+        #work is measured per project now, not in time, so the analytics get an even split of what they picked
+        shares = _even_shares([sh["activity"] for sh in shares])
+        if report.workMode == "hybrid" and report.officePercent is None:
+            raise HTTPException(status_code=400, detail="Please say how much of your time was office tasks.")
+        chosen, _ = _projects_for_activities(_tracking_projects(db), [sh["activity"] for sh in shares])
+        if chosen and report.workMode != "out" and not report.description.strip():
+            raise HTTPException(status_code=400, detail="Please describe what you did today.")
     leave_early_seconds = _leave_early_seconds(data, now) if request_data.leaveEarly else 0
     elapsed_minutes = max(0.0, (now - checked_in_at).total_seconds() / 60)
     credited_hours = _credited_hours((now - checked_in_at).total_seconds() + leave_early_seconds)
@@ -1231,9 +1283,13 @@ def clockOut(request_data: ClockOutRequest, root_user: dict = Depends(require_ro
         "lastCheckedInActivities": [],
         **VISIT_FIELDS_RESET,
     })
-    _log_activity(db, target_ref.id, data, checked_in_at, now, worked_on, estimated=request_data.actualActivities is None)
+    _log_activity(db, target_ref.id, data, checked_in_at, now, worked_on, estimated=request_data.actualActivities is None or report is not None)
+    work_day_id = None
+    if report is not None:
+        work_day_id = _record_work_visit(db, target_ref.id, data, checked_in_at, now, credited_hours,
+                                         _visit_break_seconds(data, now) + leave_early_seconds, [w["activity"] for w in worked_on], report)
     return {"success": True, "besaName": data.get("besaName"), "hoursThisSession": elapsed_hours, "workedOn": worked_on,
-            "leftEarlySeconds": leave_early_seconds}
+            "leftEarlySeconds": leave_early_seconds, "workDayId": work_day_id}
 
 
 @app.post("/check-auto-clockout")
@@ -2496,6 +2552,897 @@ def removeActivityType(request_data: ActivityTypeRequest, root_user: dict = Depe
     return {"success": True, "activityTypes": base}
 
 
+# ---- Work tracking: what got done, measured per project at clock-out, and the AI grade for the day ----
+# Replaces the old "split your time" step. The kiosk flow is: pick what you worked on -> /tracking/collect fetches each
+# of those projects' measures for the time they were clocked in (saved as a draft) -> they confirm it, fill in the
+# self-report parts and describe their day -> /clock-out records it on work_days -> /tracking/grade grades the day. That
+# order is on purpose: clock-out only ever depends on Firestore, so an API or the AI being down can't stop someone leaving.
+# Nothing here is matched by firestore.rules, so only this backend can read or write any of it.
+TRACKING_PROJECTS_COLLECTION = "tracking_projects"
+TRACKING_SETTINGS_COLLECTION = "tracking_settings"
+WORK_DAYS_COLLECTION = "work_days"
+WORK_DRAFTS_COLLECTION = "work_drafts"
+WORK_EVENTS_COLLECTION = "work_events"
+WORK_SCREENSHOTS_COLLECTION = "work_screenshots"
+COURSE_PROGRESS_COLLECTION = "course_progress"
+GRADE_EXPLANATION_MAX_LENGTH = 500
+GRADE_MAX_ATTEMPTS = 5
+GRADE_MAX_SCREENSHOT_PAIRS = 4
+BAD_GRADES = ("B", "C")
+#the sources a shared account or database feeds, where only the member knows what was really theirs
+CONFIRMED_MEASURE_TYPES = {"gmail", "google_calendar", "booking_db", "google_sheets", "google_slides"}
+#what the trainer pages report (see logWorkEvent) - tour/question checkpoints are practice, the rest is data input
+PRACTICE_EVENT_KINDS = {"tour_checkpoint", "question_checkpoint"}
+DATA_EVENT_KINDS = {"question_set_created", "question_set_saved", "question_set_deleted", "tour_draft_uploaded"}
+WORK_EVENT_DETAIL_MAX_LENGTH = 120
+WORK_EVENTS_MAX_PER_DAY = 3000
+SCREENSHOT_MAX_BYTES = 8 * 1024 * 1024
+SCREENSHOT_MIME_TYPES = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+SCREENSHOTS_MAX_PER_DAY = 30
+SCREENSHOT_NOTE_MAX_LENGTH = 200
+
+
+def _tracking_settings(db) -> dict:
+    return db.collection(TRACKING_SETTINGS_COLLECTION).document("config").get().to_dict() or {}
+
+
+#every project, seeding the starting set (and any activity names they need) the first time anyone asks. Deleting them
+#all later doesn't bring them back, since "seeded" stays set.
+def _tracking_projects(db) -> list:
+    projects = [d.to_dict() for d in db.collection(TRACKING_PROJECTS_COLLECTION).stream()]
+    if projects or _tracking_settings(db).get("seeded"):
+        return sorted(projects, key=lambda p: (p.get("order", 999), p.get("name", "")))
+    seeded = [{**p, "order": i} for i, p in enumerate(DEFAULT_PROJECTS)]
+    for project in seeded:
+        db.collection(TRACKING_PROJECTS_COLLECTION).document(project["id"]).set(project)
+    current = _activity_types(db)
+    needed = [a for p in seeded for a in p["activities"] if a not in current]
+    if needed:
+        db.collection("training_data").document("data_root").set({"activityTypes": current + needed}, merge=True)
+    db.collection(TRACKING_SETTINGS_COLLECTION).document("config").set({"seeded": True}, merge=True)
+    return seeded
+
+
+def _projects_for_activities(projects: list, activities: list) -> tuple[list, list]:
+    chosen, seen = [], set()
+    for activity in activities:
+        for project in projects:
+            if activity in (project.get("activities") or []) and project["id"] not in seen:
+                seen.add(project["id"])
+                chosen.append(project)
+    covered = {a for p in chosen for a in p.get("activities") or []}
+    return chosen, [a for a in activities if a not in covered]
+
+
+#who they are to outside systems: the emails they sign in with here and on the roster, plus any they added on Profile
+def _work_identity(uid: str, data: dict) -> dict:
+    emails = {e.lower() for e in data.get("trackingEmails") or []}
+    try:
+        emails.add((auth.get_user(uid).email or "").lower())
+    except Exception as e:
+        print(f"No auth email for {uid}: {e}")
+    roster_doc = _roster_doc_for(data.get("besaName"), _get_roster()) or {}
+    emails.add((roster_doc.get("email") or "").lower())
+    return {"emails": sorted(e for e in emails if e), "names": [data.get("besaName") or ""], "username": data.get("githubUsername") or ""}
+
+
+# ---- clock-in copies of the things that don't keep their own history ----
+def _baseline_blob(uid: str, key: str):
+    return storage.bucket().blob(f"work_baselines/{uid}/{key}.json")
+
+
+def _save_baseline(uid: str, key: str, value: dict):
+    _baseline_blob(uid, key).upload_from_string(json.dumps(value), content_type="application/json")
+
+
+def _load_baseline(uid: str, key: str) -> dict | None:
+    blob = _baseline_blob(uid, key)
+    return json.loads(blob.download_as_bytes()) if blob.exists() else None
+
+
+def _fetch_booking_docs() -> dict:
+    docs = {}
+    for collection in BOOKING_COLLECTIONS:
+        for d in _read_besa_app_collection(collection):
+            docs[f"{collection}/{d['name'].rsplit('/', 1)[-1]}"] = {
+                "fields": {k: _decode_firestore_value(v) for k, v in (d.get("fields") or {}).items()},
+                "createTime": d.get("createTime"), "updateTime": d.get("updateTime"),
+            }
+    return strip_private_booking_fields(docs)
+
+
+class BaselineRequest(BaseModel):
+    studentId: str
+
+
+#the kiosk calls this right after a clock-in, without waiting on it. Every project's files get copied, not only the ones
+#picked, because clock-out lets them say they ended up working on something else.
+@app.post("/tracking/baseline")
+def trackingBaseline(request_data: BaselineRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, _ = _find_besa_by_student_id(db, request_data.studentId)
+    if target_ref is None:
+        raise HTTPException(status_code=404, detail="No BESA account found with that School Id.")
+    uid = target_ref.id
+    jobs = {}
+    for project in _tracking_projects(db):
+        for measure in project.get("measures") or []:
+            if measure["type"] == "booking_db":
+                jobs["booking-db"] = _fetch_booking_docs
+            elif google_connected() and measure["type"] == "google_sheets":
+                jobs.update({f"sheet-{f}": (lambda f=f: sheet_snapshot(f)) for f in measure.get("fileIds") or []})
+            elif google_connected() and measure["type"] == "google_slides":
+                jobs.update({f"slides-{f}": (lambda f=f: slides_snapshot(f)) for f in measure.get("fileIds") or []})
+
+    def run(item):
+        key, job = item
+        try:
+            _save_baseline(uid, key, job())
+            return True
+        except Exception as e:
+            print(f"Clock-in copy {key} failed: {e}")
+            return False
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        saved = sum(pool.map(run, jobs.items()))
+    return {"success": True, "saved": saved, "of": len(jobs)}
+
+
+# ---- what the trainer pages report as it happens (see logWorkEvent) ----
+class WorkEventRequest(BaseModel):
+    kind: str
+    detail: str = ""
+    count: int = Field(default=1, ge=0, le=1000)
+
+
+#one doc per member per day, so reading a visit back needs no composite index
+@app.post("/tracking/event")
+def logWorkEvent(request_data: WorkEventRequest, user: dict = Depends(get_current_user)):
+    if request_data.kind not in PRACTICE_EVENT_KINDS | DATA_EVENT_KINDS:
+        raise HTTPException(status_code=400, detail="Unknown event.")
+    uid = user.get("uid")
+    now = datetime.now(PACIFIC)
+    db = firestore.client()
+    ref = db.collection(WORK_EVENTS_COLLECTION).document(f"{uid}_{now.date().isoformat()}")
+    existing = ref.get()
+    if existing.exists and len((existing.to_dict() or {}).get("entries") or []) >= WORK_EVENTS_MAX_PER_DAY:
+        return {"success": True}
+    ref.set({"entries": firestore.ArrayUnion([{
+        "kind": request_data.kind, "detail": request_data.detail[:WORK_EVENT_DETAIL_MAX_LENGTH],
+        "count": request_data.count, "at": now.isoformat(),
+    }])}, merge=True)
+    return {"success": True}
+
+
+def _work_events(db, uid: str, since: datetime, until: datetime) -> list:
+    doc = db.collection(WORK_EVENTS_COLLECTION).document(f"{uid}_{since.date().isoformat()}").get()
+    return [e for e in (doc.to_dict() or {}).get("entries") or [] if since <= datetime.fromisoformat(e["at"]) <= until]
+
+
+# ---- the measures ----
+def _trainer_data_measure(db, uid: str, since: datetime, until: datetime) -> dict:
+    events = [e for e in _work_events(db, uid, since, until) if e["kind"] in DATA_EVENT_KINDS]
+    items = [{"id": str(i), "label": e["detail"] or e["kind"].replace("_", " "), "mine": True} for i, e in enumerate(events)]
+    entries = sum(e.get("count") or 0 for e in events)
+    summary = f"{len(events)} save(s), {entries} entries changed" if events else "No data input on your account while you were clocked in."
+    return measure_result(summary, {"saves": len(events), "entries": entries}, items[-40:])
+
+
+def _trainer_practice_measure(db, uid: str, since: datetime, until: datetime) -> dict:
+    events = [e for e in _work_events(db, uid, since, until) if e["kind"] in PRACTICE_EVENT_KINDS]
+    tours = sum(1 for e in events if e["kind"] == "tour_checkpoint")
+    questions = len(events) - tours
+    summary = f"{tours} tour checkpoint(s), {questions} question(s) practiced" if events else "No practice checkpoints while you were clocked in."
+    return measure_result(summary, {"tourCheckpoints": tours, "questionCheckpoints": questions}, [])
+
+
+def _course_measure(db, uid: str, since: datetime, until: datetime) -> dict:
+    done = (db.collection(COURSE_PROGRESS_COLLECTION).document(uid).get().to_dict() or {}).get("done") or {}
+    catalog = course_items()
+    finished = [item_id for item_id, at in done.items() if item_id in catalog and since <= datetime.fromisoformat(at) <= until]
+    items = [{"id": i, "label": catalog[i]["title"], "detail": catalog[i]["module"], "mine": True} for i in finished]
+    points = sum(catalog[i].get("points") or 0 for i in finished)
+    summary = f"{len(items)} item(s) finished" if items else "Nothing checked off in the Slugworks course while you were clocked in."
+    return measure_result(summary, {"finished": len(items), "points": points}, items)
+
+
+def _google_files_measure(uid: str, measure: dict, identity: dict, since: datetime, until: datetime, prefix: str, snapshot, diff) -> dict:
+    file_ids = measure.get("fileIds") or []
+    if not file_ids:
+        raise SourceUnavailable("No file is set for this yet.")
+    if not google_connected():
+        raise SourceUnavailable("The Google account isn't connected yet.")
+    items, metrics = [], {}
+    for file_id in file_ids:
+        file = google_file_result(file_id, snapshot, diff, _load_baseline(uid, f"{prefix}-{file_id}"), identity["emails"], since, until)
+        for key, value in (file["changes"] or {}).items():
+            if isinstance(value, int):
+                metrics[key] = metrics.get(key, 0) + value
+        editors = file["editors"]
+        who = "" if editors is None else " · your edits show on it" if file["editedByThem"] else " · edited by someone else" if editors else ""
+        items.append({"id": file_id, "label": file["title"], "detail": describe_changes(file["changes"]) + who,
+                      "mine": file["editedByThem"] is not False or not editors})
+    return measure_result(f"{len(items)} file(s) checked", metrics, items)
+
+
+def _screenshot_measure(db, uid: str, project: dict, measure: dict) -> dict:
+    shots = sorted(
+        (s.to_dict() for s in db.collection(WORK_SCREENSHOTS_COLLECTION).where(filter=FieldFilter("uid", "==", uid)).stream()),
+        key=lambda s: s["uploadedAt"])
+    shots = [s for s in shots if s["projectId"] == project["id"] and s["measureId"] == measure["id"]]
+    unused = [s for s in shots if not s.get("used")]
+    if not unused:
+        return {"status": "missing", "summary": "No new screenshot yet - send one from the BESA Trainer home page on your own device.",
+                "metrics": {}, "items": []}
+    newest = unused[-1]
+    previous = shots[shots.index(newest) - 1] if shots.index(newest) > 0 else None
+    return {"status": "ok", "summary": "Old and new screenshots ready." if previous else "First screenshot for this, so there's nothing older to compare with.",
+            "metrics": {}, "items": [], "oldScreenshot": previous["id"] if previous else None, "newScreenshot": newest["id"],
+            "screenshotNote": newest.get("note") or ""}
+
+
+def _run_measure(db, uid: str, project: dict, measure: dict, identity: dict, since: datetime, until: datetime, settings: dict) -> dict:
+    kind = measure["type"]
+    if kind == "github":
+        return github_changes(measure.get("repos") or [], identity["emails"], identity["names"], identity["username"], since, until)
+    if kind == "google_sheets":
+        return _google_files_measure(uid, measure, identity, since, until, "sheet", sheet_snapshot, diff_sheet)
+    if kind == "google_slides":
+        return _google_files_measure(uid, measure, identity, since, until, "slides", slides_snapshot, diff_slides)
+    if kind == "gmail":
+        return gmail_sent(since, until)
+    if kind == "google_calendar":
+        return calendar_changes(settings.get("calendarIds") or [], identity["emails"], since, until)
+    if kind == "booking_db":
+        return booking_changes(_load_baseline(uid, "booking-db"), _fetch_booking_docs(), since, until)
+    if kind == "trainer_data":
+        return _trainer_data_measure(db, uid, since, until)
+    if kind == "trainer_practice":
+        return _trainer_practice_measure(db, uid, since, until)
+    if kind == "course":
+        return _course_measure(db, uid, since, until)
+    if kind == "screenshot":
+        return _screenshot_measure(db, uid, project, measure)
+    if kind == "custom_api":
+        return custom_api_call(measure.get("url") or "", measure.get("headerName") or "", measure.get("headerValue") or "",
+                               (identity["emails"] or [""])[0], identity["names"][0], since, until)
+    raise SourceUnavailable(f"Don't know how to measure {kind}.")
+
+
+def _collect_measure(db, uid: str, project: dict, measure: dict, identity: dict, since: datetime, until: datetime, settings: dict) -> dict:
+    base = {"measureId": measure["id"], "type": measure["type"], "label": measure.get("label") or "", "unit": measure.get("unit") or "",
+            "source": MEASURE_TYPES.get(measure["type"], "auto"), "lookFor": measure.get("lookFor") or "",
+            "confirmable": measure["type"] in CONFIRMED_MEASURE_TYPES}
+    if base["source"] == "self":
+        return {**base, "status": "manual", "summary": "", "metrics": {}, "items": []}
+    try:
+        return {**base, **_run_measure(db, uid, project, measure, identity, since, until, settings)}
+    except SourceUnavailable as e:
+        return {**base, "status": "unavailable", "summary": str(e), "metrics": {}, "items": []}
+    except Exception as e:
+        print(f"Measure {project['id']}/{measure['id']} failed: {e}")
+        return {**base, "status": "unavailable", "summary": "Couldn't reach this right now.", "metrics": {}, "items": []}
+
+
+class TrackingCollectRequest(BaseModel):
+    studentId: str
+    activities: list[str]
+
+
+#step 2 of clock-out: fetches everything they picked, for the time they've been clocked in, and keeps it as a draft
+#for /clock-out to use. Calling it again (Re-check, e.g. after sending a screenshot) replaces the draft.
+@app.post("/tracking/collect")
+def trackingCollect(request_data: TrackingCollectRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    target_ref, data = _find_besa_by_student_id(db, request_data.studentId)
+    if target_ref is None:
+        raise HTTPException(status_code=404, detail="No BESA account found with that School Id.")
+    if not data.get("lastCheckedIn"):
+        raise HTTPException(status_code=409, detail=f"{data.get('besaName')} isn't currently clocked in.")
+    uid = target_ref.id
+    since, until = _to_pacific(data["lastCheckedIn"]), datetime.now(PACIFIC)
+    chosen, untracked = _projects_for_activities(_tracking_projects(db), request_data.activities)
+    identity, settings = _work_identity(uid, data), _tracking_settings(db)
+
+    jobs = [(p, m) for p in chosen for m in p.get("measures") or []]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda job: _collect_measure(db, uid, job[0], job[1], identity, since, until, settings), jobs))
+    by_measure = {(p["id"], m["id"]): r for (p, m), r in zip(jobs, results)}
+    projects = [{"projectId": p["id"], "name": p["name"], "description": p.get("description") or "",
+                 "measures": [by_measure[(p["id"], m["id"])] for m in p.get("measures") or []]} for p in chosen]
+    draft = {"clockIn": since, "projects": projects, "untracked": untracked, "createdAt": until}
+    db.collection(WORK_DRAFTS_COLLECTION).document(uid).set(draft)
+    return {"success": True, "projects": _visible_projects(projects), "untracked": untracked}
+
+
+#the raw body of a custom API stays between us and the grader
+def _visible_projects(projects: list) -> list:
+    return [{**p, "measures": [{k: v for k, v in m.items() if k not in ("raw", "lookFor")} for m in p["measures"]]} for p in projects]
+
+
+#the draft with what they typed and confirmed at the kiosk filled in
+def _apply_report(draft: dict, report: WorkReport) -> list:
+    entered = {(p.projectId, m.measureId): m for p in report.projects for m in p.measures}
+    projects = []
+    for project in draft.get("projects") or []:
+        measures = []
+        for measure in project["measures"]:
+            mine = entered.get((project["projectId"], measure["measureId"]))
+            result = dict(measure)
+            if measure["type"] == "quantity":
+                result["quantity"] = mine.quantity if mine and mine.quantity is not None else 0
+            elif measure["type"] == "checkbox":
+                result["checked"] = bool(mine and mine.checked)
+            if measure.get("confirmable"):
+                confirmed = set((mine.confirmedItems if mine else None) or [])
+                result["items"] = [{**item, "confirmed": item["id"] in confirmed} for item in measure.get("items") or []]
+                result["confirmedCount"] = len(confirmed & {item["id"] for item in measure.get("items") or []})
+            measures.append(result)
+        projects.append({**project, "measures": measures})
+    return projects
+
+
+#Called at clock-out. Never raises: losing the report is much better than failing the clock-out it's attached to.
+def _record_work_visit(db, uid: str, data: dict, checked_in_at: datetime, ended_at: datetime, credited_hours: float,
+                       break_seconds: int, activities: list, report: WorkReport) -> str | None:
+    try:
+        draft_ref = db.collection(WORK_DRAFTS_COLLECTION).document(uid)
+        draft = draft_ref.get().to_dict() or {}
+        drafted_for = draft.get("clockIn")
+        #out mode measures nothing, even if they fetched a draft before going back and choosing it
+        if report.workMode == "out" or not drafted_for or _to_pacific(drafted_for) != checked_in_at:
+            draft = {}
+        projects = _apply_report(draft, report)
+        date = checked_in_at.date().isoformat()
+        day_id = f"{uid}_{date}"
+        day_ref = db.collection(WORK_DAYS_COLLECTION).document(day_id)
+        #an out visit adds nothing to grade, so it leaves a day that's already been graded as it was
+        if report.workMode != "out":
+            grading = {"gradeStatus": "pending", "gradeAttempts": 0}
+        else:
+            grading = {} if day_ref.get().exists else {"gradeStatus": "none"}
+        day_ref.set({
+            "uid": uid, "besaName": data.get("besaName"), "date": date, **grading, "updatedAt": ended_at,
+            "visits": firestore.ArrayUnion([{
+                "clockIn": checked_in_at, "clockOut": ended_at, "creditedHours": credited_hours, "breakSeconds": break_seconds,
+                "activities": activities, "description": report.description.strip(), "projects": projects,
+                "untracked": draft.get("untracked") or [], "workMode": report.workMode,
+                "officePercent": {"office": 100, "out": 0}.get(report.workMode, report.officePercent),
+            }]),
+        }, merge=True)
+        #this visit's screenshots become the "old" for next time
+        compared = {(p["projectId"], m["measureId"]) for p in projects for m in p["measures"] if m.get("newScreenshot")}
+        if compared:
+            for shot in db.collection(WORK_SCREENSHOTS_COLLECTION).where(filter=FieldFilter("uid", "==", uid)).stream():
+                s = shot.to_dict()
+                if (s["projectId"], s["measureId"]) in compared and not s.get("used") and s["uploadedAt"] <= ended_at:
+                    shot.reference.update({"used": True})
+        draft_ref.delete()
+        return day_id
+    except Exception as e:
+        print(f"Couldn't record {data.get('besaName')}'s work report: {e}")
+        return None
+
+
+# ---- the grade ----
+#visits from before work modes were asked count as all office
+def _office_hours(visit: dict) -> float:
+    return round((visit.get("creditedHours") or 0) * visit.get("officePercent", 100) / 100, 2)
+
+
+#no data and nothing self-reported for any measure means there's nothing to hold a grade against
+def _project_gradable(project: dict) -> bool:
+    return any(m.get("status") in ("ok", "none", "manual") for m in project.get("measures") or [])
+
+
+#what the AI sees. Guests' and emailers' details stay out: shared sources go as counts, not their rows.
+def _grade_measure_view(measure: dict) -> dict:
+    view = {"measure": measure.get("label"), "type": measure.get("type"), "source": measure.get("source"),
+            "result": "couldn't check" if measure.get("status") in ("unavailable", "missing") else measure.get("summary") or "self-reported",
+            "numbers": measure.get("metrics") or {}, "gradable": measure.get("status") in ("ok", "none", "manual")}
+    if measure.get("type") == "quantity":
+        view["reported"] = f"{measure.get('quantity') or 0} {measure.get('unit') or ''}".strip()
+    if measure.get("type") == "checkbox":
+        view["reported"] = bool(measure.get("checked"))
+    if measure.get("confirmable"):
+        view["theyConfirmed"] = f"{measure.get('confirmedCount', 0)} of the {len(measure.get('items') or [])} found were their own work"
+    if measure.get("type") in ("github", "course"):
+        view["items"] = [i.get("label") for i in measure.get("items") or []]
+    if measure.get("type") == "screenshot":
+        view["lookFor"] = measure.get("lookFor") or ""
+        view["theirNote"] = measure.get("screenshotNote") or ""
+    if measure.get("raw"):
+        view["apiResponse"] = measure["raw"]
+    return view
+
+
+def _load_screenshot(db, shot_id: str):
+    doc = db.collection(WORK_SCREENSHOTS_COLLECTION).document(shot_id).get()
+    if not doc.exists:
+        return None
+    shot = doc.to_dict()
+    return storage.bucket().blob(shot["path"]).download_as_bytes(), shot.get("mimeType") or "image/jpeg"
+
+
+def _grade_work_day(db, day_id: str) -> dict:
+    ref = db.collection(WORK_DAYS_COLLECTION).document(day_id)
+    day = ref.get().to_dict() or {}
+    visits = day.get("visits") or []
+    office_visits = [v for v in visits if v.get("workMode") != "out"]
+    projects = [p for v in office_visits for p in v.get("projects") or []]
+    gradable = {p["name"] for p in projects if _project_gradable(p)}
+    if not gradable:
+        ref.update({"gradeStatus": "none", "grade": None, "gradeReason": "", "projectGrades": []})
+        return ref.get().to_dict()
+
+    images = []
+    pairs = [(p, m) for p in projects for m in p["measures"] if m.get("newScreenshot")][-GRADE_MAX_SCREENSHOT_PAIRS:]
+    for project, measure in pairs:
+        for label, shot_id in (("OLD", measure.get("oldScreenshot")), ("NEW", measure.get("newScreenshot"))):
+            loaded = _load_screenshot(db, shot_id) if shot_id else None
+            if loaded:
+                images.append((f'{label} screenshot for {project["name"]} / {measure["label"]}:', loaded[0], loaded[1]))
+
+    context = {
+        "officeHoursToGrade": sum(_office_hours(v) for v in visits),
+        "outOfOfficeHoursNotGraded": sum((v.get("creditedHours") or 0) - _office_hours(v) for v in visits),
+        "visits": [{
+            "officeHours": _office_hours(v), "breakMinutes": round((v.get("breakSeconds") or 0) / 60),
+            "theirDescription": v.get("description") or "(none)",
+            "activitiesWithNothingToMeasure": v.get("untracked") or [],
+            "projects": [{"project": p["name"], "gradable": _project_gradable(p),
+                          "measures": [_grade_measure_view(m) for m in p["measures"]]} for p in v.get("projects") or []],
+        } for v in office_visits],
+    }
+    if day.get("explanation"):
+        context["theirExplanationOfAnEarlierGrade"] = day["explanation"]
+    try:
+        answer = grade_day(_get_genai_client(), context, images, {p["name"] for p in projects} - gradable)
+    except Exception as e:
+        print(f"Grading {day_id} failed: {e}")
+        ref.update({"gradeStatus": "failed", "gradeAttempts": firestore.Increment(1)})
+        return ref.get().to_dict()
+    ref.update({"gradeStatus": "graded", "grade": answer["grade"], "gradeReason": answer["reason"],
+                "projectGrades": answer["projects"], "gradedAt": datetime.now(PACIFIC)})
+    return ref.get().to_dict()
+
+
+#catches the days the kiosk never asked to grade (it was closed mid-flow) or the AI failed on
+def _grade_pending_days():
+    db = firestore.client()
+    cutoff = datetime.now(PACIFIC) - timedelta(minutes=3)
+    for status_value in ("pending", "failed"):
+        for doc in db.collection(WORK_DAYS_COLLECTION).where(filter=FieldFilter("gradeStatus", "==", status_value)).stream():
+            day = doc.to_dict()
+            if (day.get("gradeAttempts") or 0) < GRADE_MAX_ATTEMPTS and day.get("updatedAt") and day["updatedAt"] <= cutoff:
+                _grade_work_day(db, doc.id)
+
+
+def _serialize_work_measure(m: dict) -> dict:
+    return {k: m.get(k) for k in ("measureId", "type", "label", "unit", "status", "summary", "metrics", "quantity", "checked", "confirmable",
+                                  "confirmedCount", "oldScreenshot", "newScreenshot", "screenshotNote")} | {"items": m.get("items") or []}
+
+
+def _serialize_work_day(doc_id: str, day: dict) -> dict:
+    override = day.get("override")
+    grade = (override or {}).get("grade") or day.get("grade")
+    return {
+        "id": doc_id, "uid": day.get("uid"), "besaName": day.get("besaName"), "date": day.get("date"),
+        "grade": grade, "aiGrade": day.get("grade"), "gradeStatus": day.get("gradeStatus"), "gradeReason": day.get("gradeReason") or "",
+        "projectGrades": day.get("projectGrades") or [],
+        "override": {"grade": override.get("grade"), "note": override.get("note") or ""} if override else None,
+        "explanation": day.get("explanation") or "",
+        "needsExplanation": grade in BAD_GRADES and not day.get("explanation"),
+        "description": "\n".join(v.get("description") for v in day.get("visits") or [] if v.get("description")),
+        "hours": sum(v.get("creditedHours") or 0 for v in day.get("visits") or []),
+        "visits": [{
+            "clockIn": v["clockIn"].isoformat(), "clockOut": v["clockOut"].isoformat(), "hours": v.get("creditedHours") or 0,
+            "description": v.get("description") or "", "untracked": v.get("untracked") or [],
+            "workMode": v.get("workMode") or "office", "officePercent": v.get("officePercent", 100),
+            "projects": [{"projectId": p["projectId"], "name": p["name"], "measures": [_serialize_work_measure(m) for m in p["measures"]]}
+                         for p in v.get("projects") or []],
+        } for v in day.get("visits") or []],
+    }
+
+
+class GradeRequest(BaseModel):
+    workDayId: str
+
+
+#the kiosk calls this right after /clock-out and shows the result - it's a separate call so the wait for the AI
+#happens after they're already clocked out
+@app.post("/tracking/grade")
+def trackingGrade(request_data: GradeRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    if not db.collection(WORK_DAYS_COLLECTION).document(request_data.workDayId).get().exists:
+        raise HTTPException(status_code=404, detail="That day wasn't found.")
+    return {"success": True, "day": _serialize_work_day(request_data.workDayId, _grade_work_day(db, request_data.workDayId))}
+
+
+#a bad grade's explanation goes on the day and into that day's notes (replacing the last one, if they rewrite it)
+def _save_explanation(db, day_ref, day: dict, text: str) -> dict:
+    text = text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="The explanation is empty.")
+    if len(text) > GRADE_EXPLANATION_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Explanations can be at most {GRADE_EXPLANATION_MAX_LENGTH} characters.")
+    note_id = day.get("explanationNoteId") or secrets.token_hex(6)
+    target_ref = _users_ref(db).document(day["uid"])
+    data = target_ref.get().to_dict() or {}
+    when = date_cls.fromisoformat(day["date"])
+    #an older day that's already moved to the past-logs archive only keeps it on the work day itself
+    if any(e.get("date") and e["date"].astimezone(PACIFIC).date() == when for e in data.get("biWeeklyHours") or []):
+        entry_day = datetime(when.year, when.month, when.day, tzinfo=PACIFIC)
+        note = {"id": note_id, "text": f"Grade explanation: {text}", "at": datetime.now(PACIFIC)}
+        _update_day_notes(target_ref, data, when, entry_day, lambda notes: [n for n in notes if n.get("id") != note_id] + [note])
+    day_ref.update({"explanation": text, "explanationNoteId": note_id, "explainedAt": datetime.now(PACIFIC)})
+    return day_ref.get().to_dict()
+
+
+class ExplainGradeRequest(BaseModel):
+    workDayId: str
+    text: str
+
+
+@app.post("/tracking/explain")
+def explainGrade(request_data: ExplainGradeRequest, user: dict = Depends(get_current_user)):
+    db = firestore.client()
+    day_ref = db.collection(WORK_DAYS_COLLECTION).document(request_data.workDayId)
+    day = day_ref.get().to_dict() or {}
+    if day.get("uid") != user.get("uid"):
+        raise HTTPException(status_code=404, detail="That day wasn't found.")
+    return {"success": True, "day": _serialize_work_day(day_ref.id, _save_explanation(db, day_ref, day, request_data.text))}
+
+
+#from the kiosk's grade screen, right after clocking out
+@app.post("/tracking/explain/kiosk")
+def explainGradeAtKiosk(request_data: ExplainGradeRequest, root_user: dict = Depends(require_root)):
+    db = firestore.client()
+    day_ref = db.collection(WORK_DAYS_COLLECTION).document(request_data.workDayId)
+    day = day_ref.get().to_dict()
+    if not day:
+        raise HTTPException(status_code=404, detail="That day wasn't found.")
+    return {"success": True, "day": _serialize_work_day(day_ref.id, _save_explanation(db, day_ref, day, request_data.text))}
+
+
+@app.get("/tracking/my-days")
+def myWorkDays(user: dict = Depends(get_current_user), limit: int = 30):
+    db = firestore.client()
+    docs = db.collection(WORK_DAYS_COLLECTION).where(filter=FieldFilter("uid", "==", user.get("uid"))).stream()
+    days = sorted((_serialize_work_day(d.id, d.to_dict()) for d in docs), key=lambda d: d["date"], reverse=True)
+    return {"success": True, "days": days[:max(1, min(limit, 120))]}
+
+
+# ---- screenshots, sent from their own device (the card at the top of the BESA home page) ----
+def _screenshot_targets(db) -> list:
+    return [(p, m) for p in _tracking_projects(db) for m in p.get("measures") or [] if m["type"] == "screenshot"]
+
+
+@app.get("/tracking/screenshot-targets")
+def screenshotTargets(user: dict = Depends(get_current_user)):
+    db = firestore.client()
+    mine = [s.to_dict() for s in db.collection(WORK_SCREENSHOTS_COLLECTION).where(filter=FieldFilter("uid", "==", user.get("uid"))).stream()]
+    targets = []
+    for project, measure in _screenshot_targets(db):
+        shots = sorted((s for s in mine if s["projectId"] == project["id"] and s["measureId"] == measure["id"]), key=lambda s: s["uploadedAt"])
+        waiting = [s for s in shots if not s.get("used")]
+        targets.append({"projectId": project["id"], "projectName": project["name"], "measureId": measure["id"], "label": measure.get("label") or "",
+                        "waitingAt": waiting[-1]["uploadedAt"].isoformat() if waiting else None})
+    return {"success": True, "targets": targets}
+
+
+class ScreenshotUploadRequest(BaseModel):
+    projectId: str
+    measureId: str
+    imageBase64: str
+    note: str = ""
+
+
+@app.post("/tracking/screenshots")
+def uploadScreenshot(request_data: ScreenshotUploadRequest, user: dict = Depends(get_current_user)):
+    target_ref, data = _own_besa_doc(user)
+    db = firestore.client()
+    if not any(p["id"] == request_data.projectId and m["id"] == request_data.measureId for p, m in _screenshot_targets(db)):
+        raise HTTPException(status_code=400, detail="That project doesn't take screenshots anymore - reload the page.")
+    try:
+        image_bytes = base64.b64decode(request_data.imageBase64, validate=True)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="That image couldn't be read.")
+    if len(image_bytes) > SCREENSHOT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="That image is too large.")
+    #what's stored has to really be an image - it gets served back and handed to the AI
+    try:
+        from PIL import Image
+        with Image.open(BytesIO(image_bytes)) as image:
+            image_format = image.format
+            image.verify()
+    except Exception:
+        raise HTTPException(status_code=400, detail="That file isn't an image.")
+    mime_type = SCREENSHOT_MIME_TYPES.get(image_format)
+    if not mime_type:
+        raise HTTPException(status_code=400, detail="Please send a JPEG, PNG or WebP image.")
+
+    now = datetime.now(PACIFIC)
+    uid = user.get("uid")
+    existing = list(db.collection(WORK_SCREENSHOTS_COLLECTION).where(filter=FieldFilter("uid", "==", uid)).stream())
+    if sum(1 for s in existing if s.to_dict()["uploadedAt"].astimezone(PACIFIC).date() == now.date()) >= SCREENSHOTS_MAX_PER_DAY:
+        raise HTTPException(status_code=429, detail="That's a lot of screenshots for one day - try again tomorrow.")
+    shot_id = secrets.token_hex(12)
+    path = f"work_screenshots/{uid}/{shot_id}"
+    storage.bucket().blob(path).upload_from_string(image_bytes, content_type=mime_type)
+    db.collection(WORK_SCREENSHOTS_COLLECTION).document(shot_id).set({
+        "id": shot_id, "uid": uid, "besaName": data.get("besaName"), "projectId": request_data.projectId, "measureId": request_data.measureId,
+        "path": path, "mimeType": mime_type, "note": request_data.note.strip()[:SCREENSHOT_NOTE_MAX_LENGTH], "uploadedAt": now, "used": False,
+    })
+    return {"success": True, "id": shot_id, "uploadedAt": now.isoformat()}
+
+
+#Storage stays private, so images come through here: to whoever sent it, the kiosk (their clock-out screen) and leads
+@app.get("/tracking/screenshot/{shot_id}")
+def getScreenshot(shot_id: str, user: dict = Depends(get_current_user)):
+    db = firestore.client()
+    doc = db.collection(WORK_SCREENSHOTS_COLLECTION).document(shot_id).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Screenshot not found.")
+    shot = doc.to_dict()
+    if shot["uid"] != user.get("uid"):
+        viewer = _users_ref(db).document(user.get("uid")).get().to_dict() or {}
+        if viewer.get("accountType") not in ("root", "besaLead"):
+            raise HTTPException(status_code=404, detail="Screenshot not found.")
+    return Response(content=storage.bucket().blob(shot["path"]).download_as_bytes(), media_type=shot.get("mimeType") or "image/jpeg")
+
+
+# ---- the Slugworks course ----
+@app.get("/tracking/course")
+def getCourse(user: dict = Depends(get_current_user)):
+    doc = firestore.client().collection(COURSE_PROGRESS_COLLECTION).document(user.get("uid")).get()
+    return {"success": True, "course": SLUGWORKS_COURSE, "done": (doc.to_dict() or {}).get("done") or {}}
+
+
+class CourseCheckRequest(BaseModel):
+    itemIds: list[str]
+    done: bool
+
+
+#itemIds is several at once when they click a whole module
+@app.post("/tracking/course/check")
+def checkCourseItems(request_data: CourseCheckRequest, user: dict = Depends(get_current_user)):
+    catalog = course_items()
+    unknown = [i for i in request_data.itemIds if i not in catalog or not catalog[i].get("required")]
+    if unknown:
+        raise HTTPException(status_code=400, detail="That item isn't in the course anymore - reload the page.")
+    _own_besa_doc(user)
+    ref = firestore.client().collection(COURSE_PROGRESS_COLLECTION).document(user.get("uid"))
+    done = (ref.get().to_dict() or {}).get("done") or {}
+    now = datetime.now(PACIFIC).isoformat()
+    for item_id in request_data.itemIds:
+        if request_data.done:
+            done.setdefault(item_id, now)
+        else:
+            done.pop(item_id, None)
+    ref.set({"done": done}, merge=False)
+    return {"success": True, "done": done}
+
+
+def _certified_modules(done: dict) -> list:
+    return [m["title"] for m in SLUGWORKS_COURSE["modules"] if all(i["id"] in done for i in m["items"] if i.get("required"))]
+
+
+# ---- their accounts on other systems, so commits and edits can be matched to them ----
+GITHUB_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,39}$")
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+TRACKING_EMAILS_MAX = 5
+
+
+@app.get("/tracking/identity")
+def getWorkIdentity(user: dict = Depends(get_current_user)):
+    _, data = _own_besa_doc(user)
+    return {"success": True, "emails": data.get("trackingEmails") or [], "githubUsername": data.get("githubUsername") or ""}
+
+
+class WorkIdentityRequest(BaseModel):
+    emails: list[str]
+    githubUsername: str = ""
+
+
+@app.post("/tracking/identity")
+def setWorkIdentity(request_data: WorkIdentityRequest, user: dict = Depends(get_current_user)):
+    target_ref, _ = _own_besa_doc(user)
+    emails = [e for e in dict.fromkeys(e.strip().lower() for e in request_data.emails) if e]
+    username = request_data.githubUsername.strip().lstrip("@")
+    if any(not EMAIL_PATTERN.match(e) for e in emails):
+        raise HTTPException(status_code=400, detail="One of those emails doesn't look right.")
+    if len(emails) > TRACKING_EMAILS_MAX:
+        raise HTTPException(status_code=400, detail=f"You can add at most {TRACKING_EMAILS_MAX} emails.")
+    if username and not GITHUB_USERNAME_PATTERN.match(username):
+        raise HTTPException(status_code=400, detail="That doesn't look like a GitHub username.")
+    target_ref.update({"trackingEmails": emails, "githubUsername": username})
+    return {"success": True, "emails": emails, "githubUsername": username}
+
+
+# ---- leads: reviewing grades, and setting up projects ----
+@app.get("/tracking/review")
+def reviewWorkDays(days: int = 14, lead_user: dict = Depends(require_lead_or_root_admin)):
+    start = (datetime.now(PACIFIC) - timedelta(days=max(1, min(days, 120)))).date().isoformat()
+    db = firestore.client()
+    docs = db.collection(WORK_DAYS_COLLECTION).where(filter=FieldFilter("date", ">=", start)).stream()
+    found = sorted((_serialize_work_day(d.id, d.to_dict()) for d in docs), key=lambda d: d["date"], reverse=True)
+    return {"success": True, "days": found}
+
+
+class OverrideGradeRequest(BaseModel):
+    workDayId: str
+    grade: Literal["A", "B", "C"] | None = None  # None clears it and goes back to the AI's grade
+    note: str = Field(default="", max_length=GRADE_EXPLANATION_MAX_LENGTH)
+
+
+#the AI's grade is a prompt for a human look, not the last word
+@app.post("/tracking/override")
+def overrideGrade(request_data: OverrideGradeRequest, lead_user: dict = Depends(require_lead_or_root_admin)):
+    db = firestore.client()
+    ref = db.collection(WORK_DAYS_COLLECTION).document(request_data.workDayId)
+    if not ref.get().exists:
+        raise HTTPException(status_code=404, detail="That day wasn't found.")
+    override = {"grade": request_data.grade, "note": request_data.note.strip(), "by": lead_user.get("uid"),
+                "at": datetime.now(PACIFIC)} if request_data.grade else None
+    ref.update({"override": override})
+    return {"success": True, "day": _serialize_work_day(ref.id, ref.get().to_dict())}
+
+
+@app.post("/tracking/regrade")
+def regradeDay(request_data: GradeRequest, lead_user: dict = Depends(require_lead_or_root_admin)):
+    db = firestore.client()
+    if not db.collection(WORK_DAYS_COLLECTION).document(request_data.workDayId).get().exists:
+        raise HTTPException(status_code=404, detail="That day wasn't found.")
+    return {"success": True, "day": _serialize_work_day(request_data.workDayId, _grade_work_day(db, request_data.workDayId))}
+
+
+@app.get("/tracking/certifications")
+def courseCertifications(lead_user: dict = Depends(require_lead_or_root_admin)):
+    db = firestore.client()
+    progress = {d.id: (d.to_dict() or {}).get("done") or {} for d in db.collection(COURSE_PROGRESS_COLLECTION).stream()}
+    required = [i["id"] for m in SLUGWORKS_COURSE["modules"] for i in m["items"] if i.get("required")]
+    members = []
+    for u in _users_ref(db).stream():
+        data = u.to_dict() or {}
+        if data.get("accountType") not in ("besa", "besaLead"):
+            continue
+        done = progress.get(u.id) or {}
+        members.append({"uid": u.id, "besaName": data.get("besaName"), "certified": _certified_modules(done),
+                        "finished": sum(1 for i in required if i in done), "total": len(required)})
+    return {"success": True, "members": sorted(members, key=lambda m: m["besaName"] or ""), "modules": [m["title"] for m in SLUGWORKS_COURSE["modules"]]}
+
+
+PROJECT_NAME_MAX_LENGTH = TASK_NAME_MAX_LENGTH
+PROJECT_MEASURES_MAX = 12
+
+
+class MeasureConfig(BaseModel):
+    id: str = ""
+    type: str
+    label: str = Field(max_length=60)
+    unit: str = Field(default="", max_length=30)
+    lookFor: str = Field(default="", max_length=1000)
+    repos: list[str] = []
+    fileIds: list[str] = []
+    url: str = Field(default="", max_length=500)
+    headerName: str = Field(default="", max_length=60)
+    headerValue: str = Field(default="", max_length=500)
+
+
+class SaveProjectRequest(BaseModel):
+    id: str = ""  # empty for a new project
+    name: str
+    description: str = Field(default="", max_length=300)
+    activities: list[str] = []
+    measures: list[MeasureConfig]
+
+
+def _clean_measure(raw: MeasureConfig, existing: dict | None) -> dict:
+    if raw.type not in MEASURE_TYPES:
+        raise HTTPException(status_code=400, detail=f'"{raw.type}" isn\'t a kind of measure.')
+    label = raw.label.strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="Every measure needs a name.")
+    measure = {"id": raw.id or secrets.token_hex(4), "type": raw.type, "label": label}
+    if raw.type == "quantity":
+        measure["unit"] = raw.unit.strip()
+    elif raw.type == "screenshot":
+        measure["lookFor"] = raw.lookFor.strip()
+    elif raw.type == "github":
+        repos = [clean_repo(r) for r in raw.repos if r.strip()]
+        if None in repos:
+            raise HTTPException(status_code=400, detail="Repositories look like owner/name or a GitHub link.")
+        measure["repos"] = list(dict.fromkeys(repos))
+    elif raw.type in ("google_sheets", "google_slides"):
+        files = [clean_google_file_id(f) for f in raw.fileIds if f.strip()]
+        if None in files:
+            raise HTTPException(status_code=400, detail="Paste the link to the Google file.")
+        measure["fileIds"] = list(dict.fromkeys(files))
+    elif raw.type == "custom_api":
+        if not raw.url.startswith("https://"):
+            raise HTTPException(status_code=400, detail="Custom API URLs have to be https.")
+        measure.update({"url": raw.url.strip(), "headerName": raw.headerName.strip(),
+                        #the secret is never sent back to the page, so blank means "keep the one saved"
+                        "headerValue": raw.headerValue or (existing or {}).get("headerValue") or ""})
+    return measure
+
+
+#the header value is a credential - the page only learns whether one is saved
+def _serialize_project(project: dict) -> dict:
+    return {**project, "measures": [{**{k: v for k, v in m.items() if k != "headerValue"}, "hasHeaderValue": bool(m.get("headerValue"))}
+                                    for m in project.get("measures") or []]}
+
+
+@app.get("/tracking/projects")
+def getTrackingProjects(lead_user: dict = Depends(require_lead_or_root_admin)):
+    db = firestore.client()
+    settings = _tracking_settings(db)
+    return {
+        "success": True,
+        "projects": [_serialize_project(p) for p in _tracking_projects(db)],
+        "calendarIds": settings.get("calendarIds") or [],
+        "activityTypes": _activity_types(db),
+        "connections": {"google": google_connected(), "github": github_connected(), "ai": bool(os.getenv("GEMINI_API_KEY"))},
+    }
+
+
+@app.post("/tracking/projects/save")
+def saveTrackingProject(request_data: SaveProjectRequest, lead_user: dict = Depends(require_lead_or_root_admin)):
+    name = request_data.name.strip()
+    if not name or len(name) > PROJECT_NAME_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Project names have to be 1 to {PROJECT_NAME_MAX_LENGTH} characters.")
+    if len(request_data.measures) > PROJECT_MEASURES_MAX:
+        raise HTTPException(status_code=400, detail=f"A project can have at most {PROJECT_MEASURES_MAX} measures.")
+    db = firestore.client()
+    projects = _tracking_projects(db)
+    existing = next((p for p in projects if p["id"] == request_data.id), None)
+    if request_data.id and existing is None:
+        raise HTTPException(status_code=404, detail="That project isn't there anymore - reload the page.")
+    if any(p["name"].casefold() == name.casefold() and p["id"] != request_data.id for p in projects):
+        raise HTTPException(status_code=409, detail="There's already a project with that name.")
+    old_measures = {m["id"]: m for m in (existing or {}).get("measures") or []}
+    measures = [_clean_measure(m, old_measures.get(m.id)) for m in request_data.measures]
+    activities = [a for a in dict.fromkeys(a.strip() for a in request_data.activities) if a] or [name]
+    taken = {a: p["name"] for p in projects if p["id"] != request_data.id for a in p.get("activities") or []}
+    clash = next((a for a in activities if a in taken), None)
+    if clash:
+        raise HTTPException(status_code=409, detail=f'"{clash}" is already measured by {taken[clash]}.')
+    project_id = request_data.id or secrets.token_hex(6)
+    project = {"id": project_id, "name": name, "description": request_data.description.strip(), "activities": activities,
+               "measures": measures, "order": (existing or {}).get("order", len(projects))}
+    db.collection(TRACKING_PROJECTS_COLLECTION).document(project_id).set(project)
+    #so a new project is right there on the kiosk's list
+    current = _activity_types(db)
+    missing = [a for a in activities if a not in current]
+    if missing:
+        db.collection("training_data").document("data_root").set({"activityTypes": current + missing}, merge=True)
+    return {"success": True, "project": _serialize_project(project)}
+
+
+class DeleteProjectRequest(BaseModel):
+    id: str
+
+
+#past days keep their reports, and the activity stays on the kiosk's list until it's removed there
+@app.post("/tracking/projects/delete")
+def deleteTrackingProject(request_data: DeleteProjectRequest, lead_user: dict = Depends(require_lead_or_root_admin)):
+    firestore.client().collection(TRACKING_PROJECTS_COLLECTION).document(request_data.id).delete()
+    return {"success": True}
+
+
+class TrackingSettingsRequest(BaseModel):
+    calendarIds: list[str]
+
+
+#the one place calendar ids live - every calendar measure reads this list
+@app.post("/tracking/settings")
+def saveTrackingSettings(request_data: TrackingSettingsRequest, lead_user: dict = Depends(require_lead_or_root_admin)):
+    calendar_ids = [c for c in dict.fromkeys(c.strip() for c in request_data.calendarIds) if c]
+    firestore.client().collection(TRACKING_SETTINGS_COLLECTION).document("config").set({"calendarIds": calendar_ids}, merge=True)
+    return {"success": True, "calendarIds": calendar_ids}
+
+
 #comma-separated in prod (e.g. "https://besa-trainer.vercel.app,https://besa-trainer-git-main.vercel.app") -
 #defaults to local dev only so a deploy without this set fails closed rather than open.
 ALLOWED_ORIGINS = [
@@ -2813,7 +3760,8 @@ def _get_wsgi_app():
     cpu=1,
     concurrency=20,
     timeout_sec=900,
-    secrets=["GEMINI_API_KEY", "ALLOWED_ORIGINS", "BREAK_ALERT_GMAIL_ADDRESS", "BREAK_ALERT_GMAIL_APP_PASSWORD"],
+    secrets=["GEMINI_API_KEY", "ALLOWED_ORIGINS", "BREAK_ALERT_GMAIL_ADDRESS", "BREAK_ALERT_GMAIL_APP_PASSWORD",
+             "GITHUB_TRACKING_TOKEN", "GOOGLE_TRACKING_CLIENT_ID", "GOOGLE_TRACKING_CLIENT_SECRET", "GOOGLE_TRACKING_REFRESH_TOKEN"],
     invoker="public",
 )
 def api(req: https_fn.Request) -> https_fn.Response:
@@ -2839,3 +3787,14 @@ def break_end_alerts(event: scheduler_fn.ScheduledEvent) -> None:
             requests.get(API_PING_URL, timeout=10)
         except Exception as e:
             print(f"api warm-up ping failed: {e}")
+
+
+#grades anything the kiosk didn't get to (closed mid-flow) and retries days the AI failed on
+@scheduler_fn.on_schedule(
+    schedule="every 15 minutes",
+    timezone="America/Los_Angeles",
+    memory=options.MemoryOption.MB_512,
+    secrets=["GEMINI_API_KEY"],
+)
+def grade_pending_work(event: scheduler_fn.ScheduledEvent) -> None:
+    _grade_pending_days()

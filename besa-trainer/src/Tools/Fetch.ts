@@ -1170,7 +1170,7 @@ export function getCertifications() {
 export function getTrackingProjects() {
     return trackingGet<{
         projects: TrackingProject[], calendarIds: string[], activityTypes: string[],
-        connections: {google: boolean, github: boolean, ai: boolean}
+        connections: {google: boolean, github: "none" | "ok" | "rejected", ai: boolean}
     }>("tracking/projects")
 }
 

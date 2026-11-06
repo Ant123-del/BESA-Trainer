@@ -32,7 +32,7 @@ from google.oauth2 import service_account as gcp_service_account
 from tracking_catalog import DEFAULT_PROJECTS, MEASURE_TYPES, SLUGWORKS_COURSE, course_items
 from tracking_sources import (
     BOOKING_COLLECTIONS, SourceUnavailable, booking_changes, calendar_changes, clean_google_file_id, clean_repo, custom_api_call, describe_changes,
-    diff_sheet, diff_slides, github_changes, github_connected, gmail_sent, google_connected, google_file_result, grade_day, measure_result, sheet_snapshot,
+    diff_sheet, diff_slides, github_changes, github_token_status, gmail_sent, google_connected, google_file_result, grade_day, measure_result, sheet_snapshot,
     slides_snapshot, strip_private_booking_fields,
 )
 
@@ -3383,7 +3383,7 @@ def getTrackingProjects(lead_user: dict = Depends(require_lead_or_root_admin)):
         "projects": [_serialize_project(p) for p in _tracking_projects(db)],
         "calendarIds": settings.get("calendarIds") or [],
         "activityTypes": _activity_types(db),
-        "connections": {"google": google_connected(), "github": github_connected(), "ai": bool(os.getenv("GEMINI_API_KEY"))},
+        "connections": {"google": google_connected(), "github": github_token_status(), "ai": bool(os.getenv("GEMINI_API_KEY"))},
     }
 
 

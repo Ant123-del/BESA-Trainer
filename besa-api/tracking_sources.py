@@ -58,18 +58,31 @@ GITHUB_MAX_BRANCHES = 30
 GITHUB_MAX_COMMITS = 40
 
 
-def github_connected() -> bool:
-    return bool(_secret("GITHUB_TRACKING_TOKEN"))
+#for Manage Projects: "none", "ok", or "rejected" when GitHub won't accept the token we have
+def github_token_status() -> str:
+    token = _secret("GITHUB_TRACKING_TOKEN")
+    if not token:
+        return "none"
+    try:
+        response = requests.get(f"{GITHUB_API}/rate_limit", headers={"Authorization": f"Bearer {token}"}, timeout=REQUEST_TIMEOUT)
+    except requests.RequestException:
+        return "ok"
+    return "rejected" if response.status_code == 401 else "ok"
 
 
 def _github_get(path: str, params: dict | None = None):
     headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
     token = _secret("GITHUB_TRACKING_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    response = requests.get(f"{GITHUB_API}/{path}", headers=headers, params=params, timeout=REQUEST_TIMEOUT)
-    if response.status_code in (401, 403, 404, 429):
-        raise SourceUnavailable(f"GitHub said {response.status_code} for {path.split('/commits')[0]}.")
+    auth = {"Authorization": f"Bearer {token}"} if token else {}
+    response = requests.get(f"{GITHUB_API}/{path}", headers={**headers, **auth}, params=params, timeout=REQUEST_TIMEOUT)
+    #public repos don't need the token, so a bad one shouldn't cost us them
+    if response.status_code == 401 and token:
+        print("GitHub rejected GITHUB_TRACKING_TOKEN, retrying without it")
+        response = requests.get(f"{GITHUB_API}/{path}", headers=headers, params=params, timeout=REQUEST_TIMEOUT)
+    if response.status_code in (403, 429):
+        raise SourceUnavailable("GitHub's lookup limit ran out, so this couldn't be checked.")
+    if response.status_code in (401, 404):
+        raise SourceUnavailable("GitHub couldn't open this repository.")
     response.raise_for_status()
     return response.json()
 
@@ -98,36 +111,45 @@ def github_changes(repos: list, emails: list, names: list, username: str, since:
     window = {"since": since.isoformat(), "until": until.isoformat(), "per_page": 100}
 
     items, additions, deletions, files = [], 0, 0, 0
+    failed = []
     for repo in repos:
-        branches = [b["name"] for b in _github_get(f"repos/{repo}/branches", {"per_page": 100})][:GITHUB_MAX_BRANCHES]
-        seen = set()
-        for branch in branches:
-            for commit in _github_get(f"repos/{repo}/commits", {**window, "sha": branch}):
-                sha = commit.get("sha")
-                if sha in seen:
-                    continue
-                seen.add(sha)
-                #a merge commit restates work that's already counted on its branch
-                if len(commit.get("parents") or []) > 1:
-                    continue
-                matched_by = _commit_match(commit, emails, names, username)
-                if not matched_by or len(items) >= GITHUB_MAX_COMMITS:
-                    continue
-                detail = _github_get(f"repos/{repo}/commits/{sha}")
-                stats = detail.get("stats") or {}
-                additions += stats.get("additions") or 0
-                deletions += stats.get("deletions") or 0
-                files += len(detail.get("files") or [])
-                message = ((commit.get("commit") or {}).get("message") or "").split("\n")[0][:120]
-                items.append({
-                    "id": f"{repo}@{sha[:10]}", "label": message or sha[:10], "mine": True,
-                    "detail": f"{repo.split('/')[-1]} · +{stats.get('additions') or 0} / -{stats.get('deletions') or 0}"
-                              + (" · matched by name" if matched_by == "name" else ""),
-                })
+        #one repository that can't be read shouldn't lose what the others found
+        try:
+            branches = [b["name"] for b in _github_get(f"repos/{repo}/branches", {"per_page": 100})][:GITHUB_MAX_BRANCHES]
+            seen = set()
+            for branch in branches:
+                for commit in _github_get(f"repos/{repo}/commits", {**window, "sha": branch}):
+                    sha = commit.get("sha")
+                    if sha in seen:
+                        continue
+                    seen.add(sha)
+                    #a merge commit restates work that's already counted on its branch
+                    if len(commit.get("parents") or []) > 1:
+                        continue
+                    matched_by = _commit_match(commit, emails, names, username)
+                    if not matched_by or len(items) >= GITHUB_MAX_COMMITS:
+                        continue
+                    detail = _github_get(f"repos/{repo}/commits/{sha}")
+                    stats = detail.get("stats") or {}
+                    additions += stats.get("additions") or 0
+                    deletions += stats.get("deletions") or 0
+                    files += len(detail.get("files") or [])
+                    message = ((commit.get("commit") or {}).get("message") or "").split("\n")[0][:120]
+                    items.append({
+                        "id": f"{repo}@{sha[:10]}", "label": message or sha[:10], "mine": True,
+                        "detail": f"{repo.split('/')[-1]} · +{stats.get('additions') or 0} / -{stats.get('deletions') or 0}"
+                                  + (" · matched by name" if matched_by == "name" else ""),
+                    })
+        except (SourceUnavailable, requests.RequestException) as e:
+            print(f"GitHub lookup failed for {repo}: {e}")
+            failed.append(repo)
+    if len(failed) == len(repos) and not items:
+        raise SourceUnavailable("Couldn't reach GitHub to check this.")
+    missed = f" (couldn't check {', '.join(r.split('/')[-1] for r in failed)})" if failed else ""
     metrics = {"commits": len(items), "additions": additions, "deletions": deletions, "files": files}
     if not items:
-        return measure_result("No commits found while you were clocked in. Pushed yet?", metrics)
-    return measure_result(f"{_plural(len(items), 'commit')}, +{additions} / -{deletions} lines", metrics, items)
+        return measure_result(f"No commits found while you were clocked in. Pushed yet?{missed}", metrics)
+    return measure_result(f"{_plural(len(items), 'commit')}, +{additions} / -{deletions} lines{missed}", metrics, items)
 
 
 # ---- Google (everything goes through the one connected account, ucscbesa@ucsc.edu - see README) ----

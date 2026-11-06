@@ -174,7 +174,7 @@ function ProjectEditor({initial, activityTypes, onSaved, onDeleted, onCancel}: {
 }
 
 //what's still missing before a project can actually fetch anything
-function setupNotes(project: TrackingProject, connections: {google: boolean, github: boolean}, calendars: string[]): string[] {
+function setupNotes(project: TrackingProject, connections: {google: boolean}, calendars: string[]): string[] {
     const notes: string[] = []
     for (const m of project.measures) {
         if (m.type === "github" && !(m.repos || []).length) notes.push(`${m.label}: needs a repository`)
@@ -240,7 +240,10 @@ export default function ManageProjects(): JSX.Element {
                 <h2 className="text-2xl tracking-wide mb-3">Connections</h2>
                 <ul className="text-sm flex flex-col gap-1">
                     <li>{connections.google ? "Connected" : "Not connected"}: Google (Gmail, Calendar, Sheets, Slides)</li>
-                    <li>{connections.github ? "Connected" : "No token, so limited to a few lookups an hour"}: GitHub</li>
+                    <li>
+                        {connections.github === "ok" ? "Connected" : connections.github === "rejected" ? "Token rejected, so replace it. Public repos still work, a few lookups an hour"
+                            : "No token, so limited to a few lookups an hour"}: GitHub
+                    </li>
                     <li>{connections.ai ? "Connected" : "Not connected"}: AI grading</li>
                 </ul>
             </section>
